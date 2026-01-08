@@ -101,6 +101,7 @@ elif current_platform.is_xpu():
     from vllm._ipex_ops import ipex_ops as ops
 
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
+from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 logger = init_logger(__name__)
 
 
@@ -636,7 +637,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         x = x.flatten(2).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = F.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
-        pre, post, comb = hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
+        pre, post, comb = hc_split_sinkhorn_ref(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
         #pre=(b,s,c)   post=(b,s,c)  comb=(b,s,c,c)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
         return y.to(dtype), post, comb
