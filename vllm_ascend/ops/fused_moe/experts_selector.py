@@ -69,6 +69,7 @@ def select_experts(hidden_states: torch.Tensor,
         scoring_func=scoring_func,
         custom_routing_function=custom_routing_function)
 
+    is_support_npu_moe_gating_top_k = False
     if is_support_npu_moe_gating_top_k:
         topk_weights, topk_ids = _select_experts_with_fusion_ops(
             hidden_states=hidden_states,
@@ -246,7 +247,10 @@ def _native_select_experts(
     custom_routing_function: Optional[Callable] = None,
     scoring_func: str = "softmax",
     e_score_correction_bias: Optional[torch.Tensor] = None,
-    global_num_experts: Optional[torch.Tensor] = None
+    global_num_experts: Optional[torch.Tensor] = None,
+    use_hash: bool = False,
+    tid2eid = None,
+    input_ids = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Select top-k experts based on router logits.
@@ -275,6 +279,8 @@ def _native_select_experts(
         topk_weights = router_logits.softmax(dim=-1)
     elif scoring_func == "sigmoid":
         topk_weights = router_logits.sigmoid()
+    elif scoring_func == "softplus":
+        topk_weights = F.softplus(topk_weights).sqrt()
     else:
         raise ValueError(f"Unsupported scoring function: {scoring_func}")
 
@@ -287,6 +293,10 @@ def _native_select_experts(
             num_expert_group=num_expert_group,
             e_score_correction_bias=e_score_correction_bias)
 
+    if e_score_correction_bias is not None:
+        topk_weights = topk_weights + self.bias
+    if use_hash:
+        topk_weights = tid2eid[input_ids]
     if custom_routing_function is not None:
         topk_weights, topk_ids = custom_routing_function(
             hidden_states=hidden_states,

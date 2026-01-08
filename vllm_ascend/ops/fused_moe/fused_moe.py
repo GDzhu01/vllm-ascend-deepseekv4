@@ -151,10 +151,15 @@ class AscendFusedMoE(FusedMoE):
     gate_stream: Optional[torch.npu.Stream] = None
 
     def __init__(self, *args, **kwargs):
+        use_hash=kwargs["hash"]
+        tid2eid=kwargs['tid2eid']
+        kwargs.pop('hash')
+        kwargs.pop('tid2eid')
         super().__init__(*args, **kwargs)
 
         num_experts = kwargs["num_experts"]
         intermediate_size = kwargs["intermediate_size"]
+
 
         AscendFusedMoE.moe_counter += 1
         self.moe_instance_id = AscendFusedMoE.moe_counter
@@ -391,7 +396,8 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         **kwargs,
     ):
         AscendFusedMoE.__init__(self, **kwargs)
-
+        use_hash=kwargs["hash"]
+        tid2eid=kwargs['tid2eid']
         self._shared_experts = shared_experts
         self.use_overlapped = use_overlapped
         self.shared_expert_stream = None
@@ -404,6 +410,10 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
             )
 
         self._gate = gate
+        if use_hash:
+            self.tid2eid = tid2eid
+        else:
+            self.tid2eid = None
 
     @property
     def gate(self) -> Optional[torch.nn.Module]:

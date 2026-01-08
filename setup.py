@@ -526,7 +526,8 @@ setup(
         "vllm.general_plugins": [
             "ascend_kv_connector = vllm_ascend:register_connector",
             "ascend_model_loader = vllm_ascend:register_model_loader",
-            "ascend_service_profiling = vllm_ascend:register_service_profiling"
+            "ascend_service_profiling = vllm_ascend:register_service_profiling",
+            "ascend_0day_model = vllm_ascend:register_model"
         ],
     },
 )
