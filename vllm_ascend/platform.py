@@ -363,14 +363,16 @@ class NPUPlatform(Platform):
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):
         backend_map = {
-            (True, False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
-            (False, False):
+            (True, False,False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
+            (False, False,False):
             "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
-            (True, True): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True, True,False): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (False,True,True): "vllm_ascend.attention.dsa_v1.AscendDSABackend",
         }
 
         return backend_map[(attn_selector_config.use_mla,
-                            attn_selector_config.use_sparse)]
+                            attn_selector_config.use_sparse,
+                            attn_selector_config.use_compress)]
 
     @classmethod
     def get_punica_wrapper(cls) -> str:
