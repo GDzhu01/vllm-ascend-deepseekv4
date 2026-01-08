@@ -24,7 +24,7 @@ from typing import Optional
 import torch
 from torch import nn
 from vllm.attention.backends.abstract import AttentionMetadata
-from vllm.attention.layer import MLAAttention
+from vllm.attention.layer import DSAAttention
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.forward_context import ForwardContext, get_forward_context
@@ -43,7 +43,8 @@ from vllm.attention.layer import MLAAttention
 from vllm.config import CacheConfig
 from vllm.model_executor.custom_op import CustomOp
 from vllm.model_executor.layers.quantization import QuantizationConfig
-
+from vllm.model_executor.layers.mla import (MLAModules,
+                                            MultiHeadLatentAttentionWrapper)
 
 @dataclass
 class DSAModules:
@@ -61,58 +62,9 @@ class DSAModules:
     topk_indices_buffer: torch.Tensor | None
     indexer_rotary_emb: torch.nn.Module | None = None
 
-@CustomOp.register("deepseek_sparse_attention")
-class DeepseekSparseAttentionWrapper(CustomOp):
-    """MLA layer registered as CustomOp to allow OOT backends to add
-    custom implementations of the outer MLA layer (including rope & o_proj).
-    Note that currently MLA ignores the enable/disable mechanism of CustomOp
-    because there is only one in-tree implementation in forward_native.
-    TODO: implement this with a new PluggableLayer mechanism.
 
-    This class takes positions and hidden_states as input.
-    The input tensors can either contain prefill tokens or decode tokens.
-    The class does the following:
 
-    1. MLA Preprocess.
-    2. Perform multi-head attention to prefill tokens and
-       multi-query attention to decode tokens separately.
-    3. Return the output tensor.
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        n_heads: int,
-        scale: float,
-        n_local_heads: int,
-        o_lora_rank: int,
-        head_dim: int,
-        rope_head_dim: int | None,
-        nope_head_dim: int,
-        n_groups: int,
-        n_local_groups: int,
-        window_size: int,
-        compress_ratio: int,
-        dsa_modules: DSAModules,
-        cache_config: CacheConfig | None = None,
-        quant_config: QuantizationConfig | None = None,
-        prefix: str = "",
-    ) -> None:
-        super().__init__()
-
-    def forward_native(
-        self,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        llama_4_scaling: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        return hidden_states
-    
-    def forward_cuda(self, *args, **kwargs):
-        return self.forward_native(*args, **kwargs)
-    
-
-class AscendDeepseekSparseAttention(DeepseekSparseAttentionWrapper):
+class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
 
     def __init__(
         self,
@@ -142,38 +94,41 @@ class AscendDeepseekSparseAttention(DeepseekSparseAttentionWrapper):
         self.head_dim=head_dim 
         self.rope_head_dim=rope_head_dim
         self.nope_head_dim=nope_head_dim
-        self.n_group=n_group
+        self.n_groups=n_groups
         self.n_local_groups=n_local_groups
         self.window_size = window_size
         self.compress_ratio=compress_ratio
         
-        self.wq_a = dsa_module.wq_a
-        self.q_norm = dsa_module.q_norm
-        self.wq_b = dsa_module.wq_b
-        self.wkv = dsa_module.wkv
-        self.kv_norm = dsa_module.kv_norm
-        self.wo_a = dsa_module.wo_a
-        self.wo_b = dsa_module.wo_b
-        self.indexer = dsa_module.indexer
-        self.compressor = dsa_module.compressor
-        self.topk_indices_buffer = dsa_module.topk_indices_buffer
-        self.indexer_rotary_emb = dsa_module.indexer_rotary_emb
+        self.wq_a = dsa_modules.wq_a
+        self.q_norm = dsa_modules.q_norm
+        self.wq_b = dsa_modules.wq_b
+        self.wkv = dsa_modules.wkv
+        self.kv_norm = dsa_modules.kv_norm
+        self.wo_a = dsa_modules.wo_a
+        self.wo_b = dsa_modules.wo_b
+        self.indexer = dsa_modules.indexer
+        self.compressor = dsa_modules.compressor
+        self.topk_indices_buffer = dsa_modules.topk_indices_buffer
+        self.indexer_rotary_emb = dsa_modules.indexer_rotary_emb
 
 
-        self.dsa_attn = DSAAttention(
-            num_heads=self.num_heads,
-            scale=scale,
-            qk_nope_head_dim=self.qk_nope_head_dim,
-            qk_rope_head_dim=self.qk_rope_head_dim,
-            v_head_dim=self.v_head_dim,
-            q_lora_rank=self.q_lora_rank,
-            kv_lora_rank=self.kv_lora_rank,
+        self.dsa_attn = DSAAttention(            
+            dim=self.dim,
+            n_heads=self.n_heads,
+            scale=self.scale,
+            n_local_heads=self.n_local_heads,
+            o_lora_rank=self.o_lora_rank,
+            head_dim=self.head_dim,
+            rope_head_dim=self.rope_head_dim,
+            nope_head_dim=self.nope_head_dim,
+            n_groups=self.n_groups,
+            n_local_groups=self.n_local_groups,
+            window_size=self.window_size,
+            compress_ratio=self.compress_ratio,
+            dsa_modules=dsa_modules,
             cache_config=cache_config,
             quant_config=quant_config,
             prefix=f"{prefix}.attn",
-            kv_b_proj=self.kv_b_proj,
-            use_sparse=self.is_sparse,
-            indexer=self.indexer,
         )
 
         self.prefix = prefix

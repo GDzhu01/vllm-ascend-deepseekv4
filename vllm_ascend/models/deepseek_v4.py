@@ -100,7 +100,7 @@ if current_platform.is_cuda_alike():
 elif current_platform.is_xpu():
     from vllm._ipex_ops import ipex_ops as ops
 
-from vllm_ascend.ops.dsa import DSAModules,DeepseekSparseAttentionWrapper
+from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 logger = init_logger(__name__)
 
 
@@ -189,13 +189,6 @@ class DeepseekV4MoE(nn.Module):
             prefix=f"{prefix}.gate",
         )
         
-        # if getattr(config, "topk_method", None) == "noaux_tc":
-        #     self.gate.e_score_correction_bias = nn.Parameter(
-        #         torch.empty(config.n_routed_experts, dtype=torch.float32)
-        #     )
-        # else:
-        #     self.gate.e_score_correction_bias = None
-
         # Load balancing settings.
         eplb_config = parallel_config.eplb_config
         self.enable_eplb = parallel_config.enable_eplb
@@ -546,7 +539,7 @@ class DeepseekV4Attention(nn.Module):
             topk_indices_buffer=topk_indices_buffer,
         )
 
-        self.dsa_attn = DeepseekSparseAttentionWrapper(
+        self.dsa_attn = AscendDeepseekSparseAttention(
             dim=self.dim,
             n_heads=self.n_heads,
             scale=self.scale,
