@@ -488,19 +488,21 @@ class AscendDSAImpl(DSAAttentionImpl):
 
     def __init__(
         self,
-        num_heads: int,
-        head_size: int,
+        dim: int,
+        n_heads: int,
         scale: float,
-        num_kv_heads: int,
-        alibi_slopes: Optional[list[float]],
-        sliding_window: Optional[int],
-        kv_cache_dtype: str,
-        logits_soft_cap: Optional[float],
-        attn_type: str,
-        kv_sharing_target_layer_name: Optional[str],
+        n_local_heads: int,
+        o_lora_rank: int,
+        head_dim: int,
+        rope_head_dim: int | None,
+        nope_head_dim: int,
+        n_groups: int,
+        n_local_groups: int,
+        window_size: int,
+        compress_ratio: int,
         **kwargs,
     ):
-        self.num_heads=num_heads
+        self.num_heads=n_heads
         
 
     def forward(
