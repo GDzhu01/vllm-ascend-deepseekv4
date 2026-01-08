@@ -24,7 +24,26 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     ABSOLUTE_CATLASS_PATH=$(cd "${CATLASS_PATH}" && pwd)
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
-    CUSTOM_OPS="grouped_matmul_swiglu_quant_weight_nz_tensor_list;lightning_indexer;sparse_flash_attention;matmul_allreduce_add_rmsnorm;moe_init_routing_custom;moe_gating_top_k;add_rms_norm_bias;"
+    CUSTOM_OPS_ARRAY=(
+        "sparse_flash_attention"
+        "lightning_indexer"
+        # TODO(maoqi): This is not used anymore
+        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+
+        "moe_init_routing_custom"
+        "moe_gating_top_k"
+        "moe_gating_top_k_hash"
+
+        "compressor"
+        "quant_lightning_indexer"
+        "lightning_indexer_quant_metadata"
+        "sparse_attn_sharedkv"
+        "sparse_attn_sharedkv_metadata"
+
+    )
+
+
+    CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910b"
 elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     # ASCEND910C (A3) series
@@ -48,7 +67,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     yes | cp "${HCCL_STRUCT_FILE_PATH}" "${ROOT_DIR}/csrc/utils/inc/kernel"
     # for dispatch_ffn_combine
     SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-    TARGET_DIR="$SCRIPT_DIR/dispatch_ffn_combine/op_kernel/utils/"
+    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine/op_kernel/utils/"
     TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
 
     echo "*************************************"
@@ -59,19 +78,48 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
     sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
 
+    # for dispatch_normal and combine_normal
+    TARGET_DIR="$SCRIPT_DIR/mc2/moe_dispatch_normal/op_kernel/utils/"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+
+    TARGET_DIR="$SCRIPT_DIR/mc2/moe_combine_normal/op_kernel/utils/"
+    echo "$TARGET_DIR"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+    # CUSTOM_OPS_ARRAY=(
+    #     "dispatch_ffn_combine"
+    #     "dispatch_gmm_combine_decode"
+    #     "moe_combine_normal"
+    #     "moe_dispatch_normal"
+    #     "dispatch_layout"
+    #     "notify_dispatch"
+    # )
+
     CUSTOM_OPS_ARRAY=(
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
-        "lightning_indexer"
-        "sparse_flash_attention"
+        "notify_dispatch"
         "dispatch_ffn_combine"
         "dispatch_gmm_combine_decode"
         "moe_combine_normal"
         "moe_dispatch_normal"
         "dispatch_layout"
-        "notify_dispatch"
+
+        "sparse_flash_attention"
+        "lightning_indexer"
+        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+
         "moe_init_routing_custom"
         "moe_gating_top_k"
+<<<<<<< HEAD
         "add_rms_norm_bias"
+=======
+        "moe_gating_top_k_hash"
+
+        "compressor"
+        "quant_lightning_indexer"
+        "lightning_indexer_quant_metadata"
+        "sparse_attn_sharedkv"
+        "sparse_attn_sharedkv_metadata"
+
+>>>>>>> a2a2e2dd... init model and dsa
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
@@ -86,7 +134,7 @@ fi
 cd csrc
 rm -rf build output
 echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"
-bash build.sh -n "$CUSTOM_OPS" -c "$SOC_ARG"
+bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
 
 # install custom ops to vllm_ascend/_cann_ops_custom
-./output/CANN-custom_ops*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
+./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom

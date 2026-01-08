@@ -27,6 +27,7 @@ from enum import Enum
 from functools import lru_cache
 from threading import Lock
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+import numpy as np
 
 import torch
 import torch_npu  # noqa: F401
@@ -1221,3 +1222,53 @@ def parse_layer_idx(prefix: str) -> Optional[int]:
         layer_idx = None
 
     return layer_idx
+
+
+def get_compressed_pos_and_indices( 
+        num_computed_tokens: np.ndarray,
+        num_scheduled_tokens: np.ndarray,
+        arrange_np: np.ndarray,
+        use_compress: bool
+ ) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+    """
+    Batch generate compressed position ids for multi-requests on DSv4.
+    Calculate compressed position ids independently for each single request.
+ 
+    Args:
+        num_computed_tokens: Historical processed token counts of multiple requests, shape=[num_reqs,]
+        num_scheduled_tokens: New scheduled token counts of multiple requests in current step, shape=[num_reqs,]
+ 
+    Returns:
+        tuple(np.ndarray, np.ndarray):
+            1. Flattened compressed position id array for all requests
+            2. Length of compressed position ids for each individual request
+    """
+    if not use_compress:
+        return None, None, None
+    # Assert input validity
+    assert num_computed_tokens.shape == num_scheduled_tokens.shape, "num_computed_tokens and num_scheduled_tokens must have the same shape"
+    assert np.all(num_computed_tokens >= 0) and np.all(
+        num_scheduled_tokens >= 0), "Token count cannot be negative value"
+ 
+    positions_compressed_list = []
+    req_indices_compressed_list = []
+    num_scheduled_tokens_compressed_list = []
+    compress_ratios = [4, 128]
+    for compress_ratio in compress_ratios:
+        # Calculate compressed length of historical & total tokens
+        compressed_historical_len = num_computed_tokens // compress_ratio
+        compressed_total_len = (num_computed_tokens + num_scheduled_tokens) // compress_ratio
+        # The number of new compressed position ids for each request
+        num_new_compressed_pos = compressed_total_len - compressed_historical_len
+ 
+        # Core vectorized calculation (no for-loop)
+        pos_starts = compressed_historical_len
+        prefix_offsets = np.concatenate([[0], np.cumsum(num_new_compressed_pos[:-1])])
+        compressed_pos_ids = np.arange(np.sum(num_new_compressed_pos)) + np.repeat(pos_starts - prefix_offsets,
+                                                                                   num_new_compressed_pos)
+ 
+        req_indices_compressed = np.repeat(arrange_np, num_new_compressed_pos)
+        req_indices_compressed_list.append(req_indices_compressed)
+        positions_compressed_list.append(compressed_pos_ids)
+        num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+    return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list
