@@ -33,7 +33,10 @@ def select_experts(hidden_states: torch.Tensor,
                    routed_scaling_factor=1.0,
                    e_score_correction_bias: Optional[torch.Tensor] = None,
                    indices_type: Optional[torch.dtype] = None,
-                   global_num_experts: int = -1):
+                   global_num_experts: int = -1,
+                   input_ids: Optional[torch.Tensor] = None,
+                   tid2eid: Optional[torch.Tensor] = None,
+                   ):
     """
     Fused experts with select experts.
 
@@ -82,7 +85,10 @@ def select_experts(hidden_states: torch.Tensor,
             num_expert_group=num_expert_group,
             scoring_func=scoring_func,
             routed_scaling_factor=routed_scaling_factor,
-            global_num_experts=global_num_experts)
+            global_num_experts=global_num_experts,
+            tid2eid = None,
+            input_ids = None,
+        )
     else:
         topk_weights, topk_ids = _native_select_experts(
             hidden_states=hidden_states,
@@ -96,6 +102,8 @@ def select_experts(hidden_states: torch.Tensor,
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
+            tid2eid = None,
+            input_ids = None,
         )
     return topk_weights, topk_ids
 
@@ -209,12 +217,20 @@ def _select_experts_with_fusion_ops(
         num_expert_group: Optional[int],
         scoring_func: str = "softmax",
         routed_scaling_factor=1.0,
-        global_num_experts: int = -1):
+        global_num_experts: int = -1,
+        tid2eid = None,
+        input_ids = None
+    ):
 
     topk_group = topk_group if topk_group is not None else 1
     num_expert_group = num_expert_group if num_expert_group is not None else 1
     renorm = int(renormalize)
-    norm_type = 0 if scoring_func == "softmax" else 1
+    if scoring_func == "softplus":
+        norm_type = 2
+    elif scoring_func == "softmax":
+        norm_type = 0
+    else:
+        norm_type = 1
     if e_score_correction_bias is not None and \
         e_score_correction_bias.dtype != router_logits.dtype:
         e_score_correction_bias = e_score_correction_bias.to(
@@ -224,14 +240,18 @@ def _select_experts_with_fusion_ops(
         k=top_k,
         k_group=topk_group,
         group_count=num_expert_group,
-        group_select_mode=1,
         renorm=renorm,
         norm_type=norm_type,  # 0: softmax; 1: sigmoid
         out_flag=False,
         routed_scaling_factor=routed_scaling_factor,
         eps=float(1e-20),
         bias_opt=e_score_correction_bias,
-    )
+
+        group_select_mode=1,  # 0: the maximum in the group; 1: topk2.sum(fix)
+        input_ids=input_ids,
+        tid2eid=tid2eid)
+    if scoring_func == "softmax":
+        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
 
     return topk_weights, topk_ids
 

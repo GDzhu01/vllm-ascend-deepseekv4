@@ -166,6 +166,11 @@ class AscendFusedMoE(FusedMoE):
 
         self._expert_map = None
         self.log2phy = None
+        
+        if use_hash:
+            self.tid2eid = tid2eid
+        else:
+            self.tid2eid = None
 
         if self.quant_config is None:
             self.quant_method = AscendUnquantizedFusedMoEMethod(
@@ -315,7 +320,10 @@ class AscendFusedMoE(FusedMoE):
                     scoring_func=self.scoring_func,
                     routed_scaling_factor=self.routed_scaling_factor,
                     e_score_correction_bias=self.e_score_correction_bias,
-                    global_num_experts=self.global_num_experts)
+                    global_num_experts=self.global_num_experts,
+                    input_ids=None if self.tid2eid is None else forward_context.input_ids,  # Note: get ids from forward context
+                    tid2eid=self.tid2eid, # 
+                    )
 
                 if isinstance(forward_context.moe_comm_method,
                               AllGatherCommImpl):
