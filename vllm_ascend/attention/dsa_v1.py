@@ -190,7 +190,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 dtype=self.model_config.dtype,
                 device=device,
             )
-        self.rope_dim = self.model_config.hf_text_config.qk_rope_head_dim
+        self.rope_dim = self.model_config.hf_text_config.rope_head_dim
         self.cos_cache = None
         self.sin_cache = None
 
@@ -259,75 +259,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # better way of doing this
         return modified_batch
 
-    def pad_actual_seq_len_q_mtp_enable_pad(self, num_reqs_pad_size, num_reqs,
-                                            actual_seq_lengths_q,
-                                            common_attn_metadata):
-        """
-        Pads actual_seq_lengths_q evenly to not exceed 16 tokens per request
-        in order to meet the requirement of npu_fused_infer_attention_score.
-
-        In Torchair scenario, the lengths of the queries must be padded to the same length.
-        And npu_fused_infer_attention_score constraint requires the last element must equal to batch_size(num_tokens).
-
-        For example:
-        batch_size=36, num_reqs_pad_size=2, num_reqs=16
-        By default, each request should have inference 2 token, which means actual_seq_lengths_q should be
-        [2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36].
-
-        However, mtp torchair + PD scenario, the actual_seq_lengths_q may be
-        [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16] before padding, since the first decode request only has 1 token.
-        In order to meet the requirement of npu_fused_infer_attention_score, we need to pad actual_seq_lengths_q evenly to not exceed 16 tokens per request.
-        after padding actual_seq_lengths_q should be similar to [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,32,36]
-        """
-        FIA_SEQ_LEN_LIMIT = 16
-        need_padding = num_reqs_pad_size != 0 and \
-                       len(common_attn_metadata.actual_seq_lengths_q) > num_reqs and \
-                       common_attn_metadata.actual_seq_lengths_q[num_reqs] - actual_seq_lengths_q[
-                           -1] > FIA_SEQ_LEN_LIMIT
-        if need_padding:
-            padding_seq_len_q = common_attn_metadata.actual_seq_lengths_q[
-                num_reqs:num_reqs + num_reqs_pad_size]
-            start_val = actual_seq_lengths_q[-1]
-            end_val = padding_seq_len_q[-1]
-
-            num_step = len(padding_seq_len_q)
-            interpolated = np.round(
-                np.linspace(start_val, end_val,
-                            num_step + 1)[1:]).astype(int).tolist()
-            assert interpolated[-1] == end_val
-            assert len(interpolated) == len(padding_seq_len_q)
-            actual_seq_lengths_q = actual_seq_lengths_q + interpolated
-        else:
-            actual_seq_lengths_q = actual_seq_lengths_q + common_attn_metadata.actual_seq_lengths_q[
-                num_reqs:num_reqs + num_reqs_pad_size]
-
-        return actual_seq_lengths_q
-
-    def pad_actual_seq_len_q_mtp_disable_pad(self, num_reqs_pad_size, num_reqs,
-                                             actual_seq_lengths_q):
-        """
-        Only use for acl full graph mode.
-        Pad the last element of the actual_seq_lengths_q equal to the TND(T) and
-        the num of dimensions equal to the batch_size of main model.
-
-        For example:
-        batch_size = 8, num_reqs = 4, num_speculative_tokens = 1
-        input actual_seq_lengths_q = [1, 2, 4, 5]  (the 3rd req was accept a token)
-        After padding the actual_seq_lengths_q will be similar to [1, 2, 4, 5, 6, 6, 7, 8]
-        """
-        need_padding = num_reqs_pad_size > 0
-        if need_padding:
-            start_val = actual_seq_lengths_q[-1]
-            end_val = num_reqs + num_reqs_pad_size
-            num_step = num_reqs_pad_size
-            interpolated = np.round(
-                np.linspace(start_val, end_val,
-                            num_step + 1)[1:]).astype(int).tolist()
-            assert interpolated[-1] == end_val
-            assert len(interpolated) == num_reqs_pad_size
-            actual_seq_lengths_q = actual_seq_lengths_q + interpolated
-        return actual_seq_lengths_q
-
     def set_num_actual_tokens(
         self,
         common_attn_metadata: AscendCommonAttentionMetadata,
@@ -387,56 +318,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             query_start_loc=query_start_loc,
             block_tables=self.block_table,
             seq_lens=self.seq_lens,
-        )
-
-    def build_chunked_metadata(
-        self,
-        common_prefix_len: int,
-        common_attn_metadata: AscendCommonAttentionMetadata,
-    ):
-        if not self.chunked_prefill_enabled:
-            return None
-        num_reqs = common_attn_metadata.num_reqs
-
-        num_computed_tokens_cpu = (self.seq_lens - self.query_lens)
-        reqs_start = self.num_decodes  # prefill_start
-
-        self.context_lens_cpu = num_computed_tokens_cpu[reqs_start:num_reqs]
-        max_context_len_cpu = self.context_lens_cpu.max().item()
-        if not max_context_len_cpu > 0:
-            return None
-        num_prefills_with_context_cpu = (self.context_lens_cpu
-                                         > 0).sum().item()
-        self.max_context_chunk = (self.chunked_prefill_workspace_size //
-                                  num_prefills_with_context_cpu)
-        self.max_context_chunk = round_down(self.max_context_chunk,
-                                            self.block_size)
-
-        assert self.max_context_chunk > 0
-        self.num_chunks = cdiv(max_context_len_cpu, self.max_context_chunk)
-        chunk_starts = torch.arange(self.num_chunks, dtype=torch.int32) \
-                           .unsqueeze(1).expand(-1, self.num_prefills) * self.max_context_chunk
-        chunk_ends = torch.min(self.context_lens_cpu.unsqueeze(0),
-                               chunk_starts + self.max_context_chunk)
-        self.chunk_seq_lens = (chunk_ends - chunk_starts).clamp(min=0)
-        self.cu_seq_lens_cpu = torch.zeros(self.num_chunks,
-                                           self.num_prefills + 1,
-                                           dtype=torch.int32,
-                                           pin_memory=True)
-        torch.cumsum(self.chunk_seq_lens,
-                     dim=1,
-                     out=self.cu_seq_lens_cpu[:, 1:],
-                     dtype=torch.int32)
-        return ChunkedContextMetadata(
-            cu_seq_lens=self.cu_seq_lens_cpu.pin_memory().to(
-                self.device, non_blocking=True),
-            starts=chunk_starts.pin_memory().to(self.device,
-                                                non_blocking=True),
-            seq_tot=self.chunk_seq_lens.sum(dim=1).tolist(),
-            max_seq_lens=self.chunk_seq_lens.max(dim=1).values.tolist(),
-            chunk_seq_lens=self.chunk_seq_lens,
-            chunk_seq_lens_npu=self.chunk_seq_lens.npu(),
-            workspace=self.chunked_prefill_workspace,
         )
 
     def set_prefill_block_table(
@@ -606,60 +487,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         return x
 
 
-    # def exec_kv(
-    #     self,
-    #     kv_no_split: torch.Tensor,
-    #     cos: torch.Tensor,
-    #     sin: torch.Tensor,
-    #     kv_cache: Tuple,
-    #     slots: torch.Tensor,
-    #     slots_cp: Optional[torch.Tensor],
-    # ):
-    #     B = kv_no_split.shape[0]
-    #     N = self.num_kv_heads
-    #     S = 1
-    #     # npu_kv_rmsnorm_rope_cache needs [B, N, S, D]
-    #     kv_no_split = kv_no_split.view(
-    #         B, N, S, self.kv_lora_rank + self.qk_rope_head_dim)
-    #     cache_mode = "PA"
-
-    #     if self.enable_sfa_cp:
-    #         assert slots_cp is not None
-    #         _, _, k_pe, k_nope = torch_npu.npu_kv_rmsnorm_rope_cache(
-    #             kv_no_split,
-    #             self.kv_a_layernorm.weight,
-    #             cos,
-    #             sin,
-    #             slots_cp.to(torch.int64),
-    #             kv_cache[1],
-    #             kv_cache[0],
-    #             epsilon=self.kv_a_layernorm.variance_epsilon,
-    #             cache_mode=cache_mode,
-    #             is_output_kv=True,
-    #         )
-    #         #TODO: Temporarily adapt SFA-CP and replace it later with PCP. --clrs97
-    #         k_pe = get_tp_group().all_gather(k_pe, 0)
-    #         k_nope = get_tp_group().all_gather(k_nope, 0)
-
-    #         if kv_cache is not None:
-    #             torch_npu.npu_scatter_nd_update_(
-    #                 kv_cache[0].view(-1, k_nope.shape[-1]), slots.view(-1, 1),
-    #                 k_nope.view(-1, k_nope.shape[-1]))
-    #             torch_npu.npu_scatter_nd_update_(
-    #                 kv_cache[1].view(-1, k_pe.shape[-1]), slots.view(-1, 1),
-    #                 k_pe.view(-1, k_pe.shape[-1]))
-    #     else:
-    #         torch_npu.npu_kv_rmsnorm_rope_cache(
-    #             kv_no_split,
-    #             self.kv_a_layernorm.weight,
-    #             cos,
-    #             sin,
-    #             slots.to(torch.int64),
-    #             kv_cache[1],
-    #             kv_cache[0],
-    #             epsilon=self.kv_a_layernorm.variance_epsilon,
-    #             cache_mode=cache_mode,
-    #         )
 
     def rope_single(
         self,
@@ -703,14 +530,14 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr = q = self.wq_a(hidden_states) # bs
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
-        q_nope, q_pe = q.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         q_pe = self.rope_single(q_pe, cos, sin)
         q = torch.cat([q_nope, q_pe], dim=-1)
 
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
-        kv_nope, kv_pe = kv.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         kv_pe = self.rope_single(kv_pe, cos, sin)
         kv = torch.cat([kv_nope, kv_pe], dim=-1)
 
@@ -777,24 +604,15 @@ class AscendDSAImpl(DSAAttentionImpl):
         k = self.k_norm(k_proj).unsqueeze(1)
         k = k.view(-1, 1, self.head_dim)
 
-        # if HAS_TRITON:
-        #     cos = cos.view(-1, self.qk_rope_head_dim)
-        #     sin = sin.view(-1, self.qk_rope_head_dim)
-        #     q, k = rope_forward_triton(q,
-        #                                k,
-        #                                cos,
-        #                                sin,
-        #                                rope_dim=self.qk_rope_head_dim,
-        #                                is_neox_style=True)
-
+        
         ## rope
         cos_q, sin_q = cos, sin
-        cos = cos.view(-1, 1, 1, self.qk_rope_head_dim)
-        sin = sin.view(-1, 1, 1, self.qk_rope_head_dim)
+        cos = cos.view(-1, 1, 1, self.rope_head_dim)
+        sin = sin.view(-1, 1, 1, self.rope_head_dim)
 
         q_pe, q_nope = torch.split(
             q,
-            [self.qk_rope_head_dim, self.head_dim - self.qk_rope_head_dim],
+            [self.rope_head_dim, self.head_dim - self.rope_head_dim],
             dim=-1)  # [b,s,64,64+64]
 
         q_pe = q_pe.unsqueeze(2)

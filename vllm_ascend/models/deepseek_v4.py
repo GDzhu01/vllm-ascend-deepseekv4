@@ -558,7 +558,8 @@ class DeepseekV4Attention(nn.Module):
             dsa_modules=dsa_modules,
             cache_config=cache_config,
             quant_config=quant_config,
-            prefix=prefix,
+            # prefix=f'{prefix}.attn',
+            prefix=f'{prefix}',
         )
 
     def forward(
@@ -567,7 +568,7 @@ class DeepseekV4Attention(nn.Module):
         hidden_states: torch.Tensor,
         llama_4_scaling: torch.Tensor | None,
     ) -> torch.Tensor:
-        return self.mla_attn(positions, hidden_states, llama_4_scaling)
+        return self.dsa_attn(positions, hidden_states, llama_4_scaling)
         # return hidden_states
 
 
@@ -637,17 +638,17 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float() #(b,s,c*h)
+        x = x.flatten(1).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
         pre, post, comb = hc_split_sinkhorn_ref(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
         #pre=(b,s,c)   post=(b,s,c)  comb=(b,s,c,c)
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
+        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
         return y.to(dtype), post, comb
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
         #x=(b,s,h)  residual=(b,s,c, h), post=(b,s,c), comb=(b,s,c,c)
-        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)
+        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
         #y = (b,s,c,1)*(b,s,1,h) + torch.sum((b,s,c,c,1)*(b,s,c,1,h), dim=2)
         #y = (b,s,c,h) + (bs,s,c,h)=(b,s,c,h)
         return y.type_as(x)
@@ -665,6 +666,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         attn_kwargs = {
             "positions": positions,
             "hidden_states": hidden_states,
+            "llama_4_scaling": llama_4_scaling
         }
         hidden_states = self.self_attn(**attn_kwargs)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
@@ -746,11 +748,11 @@ class DeepseekV4Model(nn.Module):
 
     def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
+        x = x.flatten(1).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt
+        mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt
         pre = torch.sigmoid(mixes * hc_scale + hc_base) + self.hc_eps
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
+        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1)
         return y.to(dtype)
 
 
@@ -786,7 +788,7 @@ class DeepseekV4Model(nn.Module):
         else:
             llama_4_scaling = None
 
-        hidden_states = hidden_states.unsqueeze(2).repeat(1, 1, self.hc_mult, 1) #(b,s, c, h)
+        hidden_states = hidden_states.unsqueeze(1).repeat( 1, self.hc_mult, 1) #(b,s, c, h)
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual = layer(
                 positions, hidden_states, residual, llama_4_scaling
@@ -797,7 +799,7 @@ class DeepseekV4Model(nn.Module):
                 {"hidden_states": hidden_states, "residual": residual}
             )
 
-        hidden_states, _ = self.norm(hidden_states, residual)
+        hidden_states = self.norm(hidden_states)
         return hidden_states
 
 
