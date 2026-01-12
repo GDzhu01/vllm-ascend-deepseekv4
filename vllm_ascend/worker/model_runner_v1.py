@@ -31,7 +31,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from vllm.attention.backends.abstract import AttentionBackend, AttentionType
-from vllm.attention.layer import Attention, MLAAttention
+from vllm.attention.layer import Attention, MLAAttention, DSAAttention
 from vllm.attention.selector import get_attn_backend
 from vllm.config import (CompilationMode, CUDAGraphMode, VllmConfig,
                          get_layers_from_vllm_config)
@@ -2928,6 +2928,13 @@ class NPUModelRunner(GPUModelRunner):
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype)
+            elif isinstance(attn_module, DSAAttention):
+                kv_cache_spec[layer_name] = FullAttentionSpec(
+                        block_size=block_size,
+                        num_kv_heads=1,
+                        head_size=attn_module.head_size,
+                        dtype=self.kv_cache_dtype)
+
 
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
         if len(mamba_layers) > 0:

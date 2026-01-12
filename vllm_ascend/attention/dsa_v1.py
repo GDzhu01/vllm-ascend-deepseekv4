@@ -488,10 +488,10 @@ class AscendDSAImpl(DSAAttentionImpl):
 
     def __init__(
         self,
-        dim: int,
         n_heads: int,
         scale: float,
         n_local_heads: int,
+        q_lora_rank: int,
         o_lora_rank: int,
         head_dim: int,
         rope_head_dim: int | None,
@@ -502,17 +502,321 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_ratio: int,
         **kwargs,
     ):
-        self.num_heads=n_heads
+        self.num_heads = n_heads
+        self.n_local_heads = n_local_heads
+        self.scale = scale
+        self.o_lora_rank = o_lora_rank
+        self.nope_head_dim = nope_head_dim
+        self.rope_head_dim = rope_head_dim
+        self.head_dim = head_dim
+        self.n_group = n_groups
+        self.n_local_groups = n_local_groups
+        self.window_size = window_size
+        self.q_lora_rank = q_lora_rank
+        self.compress_ratio = compress_ratio
+
+
+        # MLA Args
+        self.wq_a = kwargs['wq_a']
+        self.wq_b = kwargs['wq_b']
+        self.wkv = kwargs['wkv']
+        self.q_norm = kwargs['q_norm']
+        self.kv_norm = kwargs['kv_norm']
+
+        self.indexer = kwargs.get('indexer', None)
+        self.compressor =  kwargs.get('compressor', None)
+
+        self.wo_a = kwargs['wo_a']
+        self.wo_b = kwargs['wo_b']
+
+        # ascend_config = get_ascend_config()
+        # self.enable_shared_expert_dp = ascend_config.enable_shared_expert_dp
+        # self.enable_prefetch = ascend_config.weight_prefetch_config.enabled
+        # self.enable_mlapo = envs.VLLM_ASCEND_ENABLE_MLAPO
+
+        self.vllm_config = get_current_vllm_config()
+
+        # indexer param
+        if self.indexer is not None:
+            self.indexer_heads: int = self.indexer.n_heads  # 32
+            self.inderxer_dim: int = self.indexer.head_dim  # 128
+            self.inderxer_wq_b = self.indexer.wq_b    # (1024, 32*128)    
+            self.weights_proj = self.indexer.weights_proj   # (4096, 32)
+            self.softmax_scale = self.inderxer_dim ** -0.5
+
+            self.indexer_compress = self.indexer.compressor
+
+        # compress param
+        if self.compressor is not None:
+            self.compressor_head_dim = self.compressor.head_dim
+            self.overlap = self.compressor.overlap
+            self.rotate = self.compressor.rotate
+
+            self.ape = self.compressor.ape
+            self.wkv = self.compressor.wkv
+            self.wgate = self.compressor.wgate
+            self.compress_norm = self.compressor.norm
+
         
+    def compress_forward(self,
+            x: torch.Tensor,
+            kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            wkx,
+            wgate,
+            norm_weight,
+            sin,
+            cos,
+            attentionmeatdata,
+            rope_head_dim,
+            compress_ratio,
+            rotary_mode
+    ):
+        kv = self.kernel_compress(x)# self.wkv, self.wgate, self.kv_state, self.score_state
+        return kv
+
+    def kernel_compreess(self,
+                         x):
+        return None
+
+    def process_weights_after_loading(self, act_dtype: torch.dtype):
+        pass
+
+    def _v_up_proj(self, x, has_prefill: bool):
+        if x.dtype in [torch.float16, torch.bfloat16] \
+                and hasattr(torch.ops._C_ascend, "batch_matmul_transpose") \
+                and not self.enable_sfa_cp \
+                and not has_prefill:
+            x = x.view(-1, self.num_heads, self.kv_lora_rank)
+            b, _, _ = x.shape
+            res = torch.empty((b, self.num_heads, self.v_head_dim),
+                              dtype=x.dtype,
+                              device=x.device)
+            torch.ops._C_ascend.batch_matmul_transpose(x, self.W_UV, res)
+            x = res.reshape(-1, self.num_heads * self.v_head_dim)
+        else:
+            # Convert from (B, N, L) to (N, B, L)
+            x = x.view(-1, self.local_num_heads,
+                       self.kv_lora_rank).transpose(0, 1)
+            # # Multiply (N, B, L) x (N, L, V) -> (N, B, V)
+            x = torch.bmm(x, self.W_UV)
+            # # Convert from (N, B, V) to (B, N * V)
+            x = x.transpose(0,
+                            1).reshape(-1,
+                                       self.local_num_heads * self.v_head_dim)
+        return x
+
+
+    # def exec_kv(
+    #     self,
+    #     kv_no_split: torch.Tensor,
+    #     cos: torch.Tensor,
+    #     sin: torch.Tensor,
+    #     kv_cache: Tuple,
+    #     slots: torch.Tensor,
+    #     slots_cp: Optional[torch.Tensor],
+    # ):
+    #     B = kv_no_split.shape[0]
+    #     N = self.num_kv_heads
+    #     S = 1
+    #     # npu_kv_rmsnorm_rope_cache needs [B, N, S, D]
+    #     kv_no_split = kv_no_split.view(
+    #         B, N, S, self.kv_lora_rank + self.qk_rope_head_dim)
+    #     cache_mode = "PA"
+
+    #     if self.enable_sfa_cp:
+    #         assert slots_cp is not None
+    #         _, _, k_pe, k_nope = torch_npu.npu_kv_rmsnorm_rope_cache(
+    #             kv_no_split,
+    #             self.kv_a_layernorm.weight,
+    #             cos,
+    #             sin,
+    #             slots_cp.to(torch.int64),
+    #             kv_cache[1],
+    #             kv_cache[0],
+    #             epsilon=self.kv_a_layernorm.variance_epsilon,
+    #             cache_mode=cache_mode,
+    #             is_output_kv=True,
+    #         )
+    #         #TODO: Temporarily adapt SFA-CP and replace it later with PCP. --clrs97
+    #         k_pe = get_tp_group().all_gather(k_pe, 0)
+    #         k_nope = get_tp_group().all_gather(k_nope, 0)
+
+    #         if kv_cache is not None:
+    #             torch_npu.npu_scatter_nd_update_(
+    #                 kv_cache[0].view(-1, k_nope.shape[-1]), slots.view(-1, 1),
+    #                 k_nope.view(-1, k_nope.shape[-1]))
+    #             torch_npu.npu_scatter_nd_update_(
+    #                 kv_cache[1].view(-1, k_pe.shape[-1]), slots.view(-1, 1),
+    #                 k_pe.view(-1, k_pe.shape[-1]))
+    #     else:
+    #         torch_npu.npu_kv_rmsnorm_rope_cache(
+    #             kv_no_split,
+    #             self.kv_a_layernorm.weight,
+    #             cos,
+    #             sin,
+    #             slots.to(torch.int64),
+    #             kv_cache[1],
+    #             kv_cache[0],
+    #             epsilon=self.kv_a_layernorm.variance_epsilon,
+    #             cache_mode=cache_mode,
+    #         )
+
+    def rope_single(
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        inverse: bool = False,
+    ) -> torch.Tensor:
+        if inverse:
+            sin = sin * -1
+        B, N, D = x.shape
+        S = 1
+        x = x.view(B, N, S, D)
+        x = torch_npu.npu_interleave_rope(x, cos, sin)
+        return x.view(B, N, D)
 
     def forward(
         self,
         layer_name,
         hidden_states: torch.Tensor,  # query in unified attn
-        kv_cache: Tuple[torch.Tensor],
+        kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         attn_metadata: M,
         need_gather_q_kv: bool = False,
         output: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        
-        return hidden_states
+        assert output is not None, "Output tensor must be provided."
+        # forward_context = get_forward_context()
+        if attn_metadata is None:
+            # Profiling run.
+            return output.fill_(0)
+        has_prefill = attn_metadata.has_prefill
+        cos = attn_metadata.cos
+        sin = attn_metadata.sin
+        actual_seq_lengths_query = attn_metadata.cum_query_lens
+        actual_seq_lengths_key = attn_metadata.seq_lens
+        output_padded = output
+
+        # q
+        qr = q = self.wq_a(hidden_states) # bs
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q_nope, q_pe = q.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        # win kv & tok_dis
+        kv = self.wkv(hidden_states)
+        kv = self.kv_norm(kv)
+        kv_nope, kv_pe = kv.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
+
+        # topk_idxs = self.get_window_topk_idxs(self.win, bsz, seqlen, start_pos) # ignorn
+
+        if self.compress_ration > 1:
+            if self.compress_ratio == 4:
+                compress_topk_idxs = self.indexer_select(x=hidden_states,
+                                                    qr=qr,
+                                                    kv_cache=kv_cache,
+                                                    attn_metadata=attn_metadata,
+                                                    cos=cos,
+                                                    sin=sin,
+                                                    actual_seq_lengths_query=actual_seq_lengths_query,
+                                                    actual_seq_lengths_key=actual_seq_lengths_key)
+            elif self.compress_ration == 128:
+                compress_topk_idxs = self.get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset)
+            topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
+        topk_idxs = topk_idxs.int()
+
+        attn_output = torch.ops._C_ascend.npu_sparse_flash_attention(
+            query=ql_nope,
+            key=kv_cache[0],
+            value=kv_cache[0],
+            sparse_indices=topk_indices,
+            scale_value=self.scale,
+            sparse_block_size=1,
+            block_table=attn_metadata.block_tables,
+            actual_seq_lengths_query=actual_seq_lengths_query,
+            actual_seq_lengths_kv=actual_seq_lengths_key,
+            query_rope=q_pe,
+            key_rope=kv_cache[1],
+            layout_query="TND",
+            layout_kv="PA_BSND",
+            sparse_mode=3,
+        )
+        attn_output = self._v_up_proj(attn_output, has_prefill)
+        maybe_npu_prefetch(inputs=self.o_proj.weight,
+                           dependency=attn_output,
+                           max_size=MAX_O_PROJ_PREFETCH_SIZE,
+                           enabled=self.enable_prefetch)
+        output[...] = self.o_proj(attn_output)[0]
+        return output_padded
+
+    def indexer_select(
+        self,
+        x: torch.Tensor,
+        qr: torch.Tensor,
+        kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        attn_metadata: M,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        actual_seq_lengths_query: torch.Tensor,
+        actual_seq_lengths_key: torch.Tensor,
+        need_gather_q_kv: bool = False,
+    ):
+        # q process in new stream
+        q, _ = self.wq_b(qr)  # [b,s,1536] @ [1536,64*128] = [b,s,64*128]
+        q = q.view(-1, self.n_head, self.head_dim)  # [n_toks,64,128]
+
+        k_proj, _ = self.wk(x)  # [b,s,7168] @ [7168,128] = [b,s,128]
+        k_proj = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+            k_proj, need_gather_q_kv)
+        k = self.k_norm(k_proj).unsqueeze(1)
+        k = k.view(-1, 1, self.head_dim)
+
+        # if HAS_TRITON:
+        #     cos = cos.view(-1, self.qk_rope_head_dim)
+        #     sin = sin.view(-1, self.qk_rope_head_dim)
+        #     q, k = rope_forward_triton(q,
+        #                                k,
+        #                                cos,
+        #                                sin,
+        #                                rope_dim=self.qk_rope_head_dim,
+        #                                is_neox_style=True)
+
+        ## rope
+        cos_q, sin_q = cos, sin
+        cos = cos.view(-1, 1, 1, self.qk_rope_head_dim)
+        sin = sin.view(-1, 1, 1, self.qk_rope_head_dim)
+
+        q_pe, q_nope = torch.split(
+            q,
+            [self.qk_rope_head_dim, self.head_dim - self.qk_rope_head_dim],
+            dim=-1)  # [b,s,64,64+64]
+
+        q_pe = q_pe.unsqueeze(2)
+        q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
+        q_pe = q_pe.squeeze(2)
+        q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
+        ## rope
+
+        self.compress_forward(x, kv_cache)
+
+        weights, _ = self.weights_proj(x)
+
+        block_table = attn_metadata.block_tables
+
+        topk_indices = torch.ops._C_ascend.npu_lightning_indexer(
+            query=q,
+            key=kv_cache[2],          # kv cache ?
+            weights=weights,
+            actual_seq_lengths_query=actual_seq_lengths_query,
+            actual_seq_lengths_key=actual_seq_lengths_key,
+            block_table=block_table,
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=512,
+            sparse_mode=3)
+        return topk_indices
+    
