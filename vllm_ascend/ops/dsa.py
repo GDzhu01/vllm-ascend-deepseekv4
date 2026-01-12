@@ -72,6 +72,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         n_heads: int,
         scale: float,
         n_local_heads: int,
+        q_lora_rank: int,
         o_lora_rank: int,
         head_dim: int,
         rope_head_dim: int | None,
@@ -90,6 +91,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.n_heads=n_heads
         self.scale=scale
         self.n_local_heads=n_local_heads
+        self.q_lora_rank=q_lora_rank
         self.o_lora_rank=o_lora_rank
         self.head_dim=head_dim 
         self.rope_head_dim=rope_head_dim
@@ -117,6 +119,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             n_heads=self.n_heads,
             scale=self.scale,
             n_local_heads=self.n_local_heads,
+            q_lora_rank=self.q_lora_rank,
             o_lora_rank=self.o_lora_rank,
             head_dim=self.head_dim,
             rope_head_dim=self.rope_head_dim,
@@ -125,10 +128,20 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             n_local_groups=self.n_local_groups,
             window_size=self.window_size,
             compress_ratio=self.compress_ratio,
-            dsa_modules=dsa_modules,
             cache_config=cache_config,
             quant_config=quant_config,
             prefix=f"{prefix}.attn",
+
+            #extra
+            wq_a=self.wq_a,
+            wq_b=self.wq_b,
+            wkv=self.wkv,
+            q_norm=self.q_norm,
+            kv_norm=self.kv_norm,
+            indexer=self.indexer,
+            compressor=self.compressor,
+            wo_a=self.wo_a,
+            wo_b=self.wo_b
         )
 
         self.prefix = prefix

@@ -545,6 +545,7 @@ class DeepseekV4Attention(nn.Module):
             n_heads=self.n_heads,
             scale=self.scale,
             n_local_heads=self.n_local_heads,
+            q_lora_rank=self.q_lora_rank,
             o_lora_rank=self.o_lora_rank,
             head_dim=self.head_dim,
             rope_head_dim=self.rope_head_dim,
