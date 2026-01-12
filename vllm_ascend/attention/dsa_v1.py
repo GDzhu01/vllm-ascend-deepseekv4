@@ -685,6 +685,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         need_gather_q_kv: bool = False,
         output: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if True:
+            return hidden_states
         assert output is not None, "Output tensor must be provided."
         # forward_context = get_forward_context()
         if attn_metadata is None:

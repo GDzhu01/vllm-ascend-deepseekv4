@@ -502,6 +502,7 @@ class DeepseekV4Attention(nn.Module):
             rope_parameters=config.rope_parameters,
             is_neox_style=False,
         )
+        self.scaling = self.head_dim**-0.5
 
         if (
             config.rope_parameters["rope_type"] != "default"
@@ -594,6 +595,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         # with the layer's index.
         layer_idx = int(prefix.split(sep=".")[-1])
         self.layer_idx = layer_idx
+        self.norm_eps = config.rms_norm_eps
 
 
 
@@ -615,9 +617,9 @@ class DeepseekV2DecoderLayer(nn.Module):
                 quant_config=quant_config,
                 prefix=f"{prefix}.mlp",
             )
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=self.norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=self.norm_eps
         )
         self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
         self.hc_mult = hc_mult = config.hc_mult
@@ -637,7 +639,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(2).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
+        mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
         pre, post, comb = hc_split_sinkhorn_ref(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
         #pre=(b,s,c)   post=(b,s,c)  comb=(b,s,c,c)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
@@ -668,7 +670,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
 
         # Fully Connected
-        residual = x.clone()
+        residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)

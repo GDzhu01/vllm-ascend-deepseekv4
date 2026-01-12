@@ -393,7 +393,7 @@ class NPUPlatform(Platform):
             (False, False,False):
             "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
             (True, True,False): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
-            (False,True,True): "vllm_ascend.attention.dsa_v1.AscendDSABackend",
+            (True,True,True): "vllm_ascend.attention.dsa_v1.AscendDSABackend",
         }
 
         return backend_map[(attn_selector_config.use_mla,
