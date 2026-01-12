@@ -112,7 +112,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.compressor = dsa_modules.compressor
         self.topk_indices_buffer = dsa_modules.topk_indices_buffer
         self.indexer_rotary_emb = dsa_modules.indexer_rotary_emb
-
+        self.prefix= prefix
 
         self.dsa_attn = DSAAttention(            
             dim=self.dim,
@@ -144,7 +144,10 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             wo_b=self.wo_b
         )
 
-        self.prefix = prefix
+        compilation_config = get_current_vllm_config().compilation_config
+        if prefix in compilation_config.static_forward_context:
+            raise ValueError(f"Duplicate layer name: {prefix}")
+        compilation_config.static_forward_context[prefix] = self
 
     def forward(
             self,
@@ -171,6 +174,8 @@ def dsa_forward(
     layer_name: str,
 ) -> None:
     forward_context: ForwardContext = get_forward_context()
+    print(f'??????????????: {layer_name}')
+    print(f'xxxxxxxxxxxxxxxxxx: {forward_context.no_compile_layers.keys()}')
     self = forward_context.no_compile_layers[layer_name]
     if forward_context.attn_metadata:
         attn_metadata = forward_context.attn_metadata[self.dsa_attn.layer_name]
