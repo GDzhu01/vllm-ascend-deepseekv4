@@ -36,7 +36,8 @@ def set_ascend_forward_context(
         aclgraph_runtime_mode: CUDAGraphMode = CUDAGraphMode.NONE,
         batch_descriptor: Optional[BatchDescriptor] = None,
         model_instance: torch.nn.Module = None,
-        is_draft_model=False):
+        is_draft_model=False,
+        input_ids=None):
     """A context manager that stores the current forward context,
     can be attention metadata, etc.
     We add some additional param into forward_context.
@@ -51,6 +52,8 @@ def set_ascend_forward_context(
             batch_descriptor=batch_descriptor,
     ):
         forward_context = get_forward_context()
+
+        forward_context.input_ids = input_ids
 
         from vllm_ascend.ops.fused_moe.moe_comm_method import \
             get_moe_comm_method
