@@ -18,10 +18,11 @@ class BlockTable:
                  device: torch.device,
                  kernel_sizes: Union[list[int], None] = None,
                  cp_kv_cache_interleave_size: int = 1,
-                 num_speculative_tokens: int = 0):
+                 num_speculative_tokens: int = 0,
+                 compress_ratio: int = 1):
         self.max_num_reqs = max_num_reqs
         self.max_num_blocks_per_req = max_num_blocks_per_req
-        self.max_num_batched_tokens = max_num_batched_tokens
+        self.max_num_batched_tokens = max_num_batched_tokens // compress_ratio
         self.pin_memory = pin_memory
         self.device = device
         self.physical_block_size = block_size
@@ -67,6 +68,8 @@ class BlockTable:
                 self.use_hybrid_blocks = True
             else:
                 self.use_hybrid_blocks = False
+
+        self.block_size = self.block_size // compress_ratio
 
         if self.use_hybrid_blocks:
             logical_table_size = (max_num_blocks_per_req *
@@ -222,9 +225,9 @@ class BlockTable:
 
         return np.array(logical_blocks, dtype=np.int32)
 
-    def get_device_tensor(self) -> torch.Tensor:
+    def get_device_tensor(self, num_reqs: int) -> torch.Tensor:
         """Returns the device tensor of the block table."""
-        return self.block_table.gpu
+        return self.block_table.gpu[:num_reqs]
 
     def get_cpu_tensor(self) -> torch.Tensor:
         """Returns the CPU tensor of the block table."""
@@ -254,6 +257,7 @@ class MultiGroupBlockTable:
                  block_sizes: list[int],
                  num_speculative_tokens: int = 0,
                  kernel_sizes: Optional[list[list[int]]] = None,
+                 compress_ratios:list[int]=[1],
                  cp_kv_cache_interleave_size: int = 1) -> None:
         # Note(hc): each dcp rank only store
         # (max_model_len//dcp_world_size) tokens in kvcache,
@@ -286,8 +290,8 @@ class MultiGroupBlockTable:
                          block_size * dcp_world_size * pcp_world_size),
                     1 + num_speculative_tokens), max_num_batched_tokens,
                 pin_memory, device, kernel_size_list,
-                cp_kv_cache_interleave_size, num_speculative_tokens)
-            for block_size, kernel_size_list in zip(block_sizes, kernel_sizes)
+                cp_kv_cache_interleave_size, num_speculative_tokens, compress_ratio)
+            for block_size, kernel_size_list, compress_ratio in zip(block_sizes * len(compress_ratios), kernel_sizes * len(compress_ratios), compress_ratios)
         ]
 
     def append_row(self, block_ids: tuple[list[int], ...],
