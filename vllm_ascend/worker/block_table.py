@@ -70,6 +70,7 @@ class BlockTable:
                 self.use_hybrid_blocks = False
 
         self.block_size = self.block_size // compress_ratio
+        self.compress_ratio = compress_ratio
 
         if self.use_hybrid_blocks:
             logical_table_size = (max_num_blocks_per_req *
@@ -96,10 +97,13 @@ class BlockTable:
         self,
         block_ids,
         row_idx: int,
+        num_tokens: int
     ) -> None:
         if not block_ids:
             return
         block_ids = np.array(block_ids)
+        if num_tokens % self.compress_ratio != 0:
+            block_ids = block_ids[:-1]
         if self.use_hybrid_blocks:
             block_ids = self._convert_physical_to_logical_blocks(block_ids)
 
@@ -109,9 +113,9 @@ class BlockTable:
         self.block_table.np[row_idx, start:start + num_blocks] = block_ids
         self.num_blocks_per_row[row_idx] += num_blocks
 
-    def add_row(self, block_ids: list[int], row_idx: int) -> None:
+    def add_row(self, block_ids: list[int], row_idx: int, num_tokens: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
-        self.append_row(block_ids, row_idx)
+        self.append_row(block_ids, row_idx, num_tokens)
 
     def move_row(self, src: int, tgt: int) -> None:
         num_blocks = self.num_blocks_per_row[src]
@@ -175,26 +179,26 @@ class BlockTable:
             self.slot_mapping.np[:req_indices.shape[0]] = np.where(
                 mask, slot_mapping, -1)
         else:
-            assert self.kernel_sizes is not None
-            if self.block_size == self.kernel_sizes[0]:
-                # IMPORTANT: In hybrid mode, positions are in logical block space,
-                # but we need to map them to the correct logical block table indices
-                logical_block_idx = positions // self.block_size
+            block_table_indices = (
+                    req_indices * self.max_num_blocks_per_req + positions // self.block_size
+            )
+            # block_table_indices: [[0]+[0,0,0,0, 1,1,1,1]]
 
-                # Account for the expanded logical table
-                # (always needed with unified tensor)
-                # Each physical block is split into multiple logical blocks
-                # The logical table has been expanded to accommodate this
-                block_table_indices = (
-                    req_indices * self.max_num_blocks_per_req *
-                    self.blocks_per_phys_block + logical_block_idx)
+            block_numbers = self.block_table.np.ravel()[block_table_indices]
+            # block_numbers: [2,2,2,2, 5,5,5,5]
 
-                block_numbers = self.block_table.np.ravel(
-                )[block_table_indices]
-                block_offsets = positions % self.block_size
-                np.add(block_numbers * self.block_size,
-                       block_offsets,
-                       out=self.slot_mapping.np[:req_indices.shape[0]])
+            block_offsets = positions % self.block_size
+            # block_offsets: [0,0, 1,1, 0,0, 1,1]
+            # 压缩完后的 slot mapping 要去重
+            # TODO(cmq): 把这边的逻辑都搬到 vllm-ascend 的 blocktable 去
+            # 1. 不满压缩比的时候，给 state_manager 放
+            # 2. state_manager 那边放满的时候，给 compress kv 放
+            # 3. overlap 要考虑
+            np.add(
+                block_numbers * self.block_size,  # [4,4,4,4, 10,10,10,10]
+                block_offsets,  # [4,4,5,5, 10,10,11,11]
+                out=self.slot_mapping.np[: req_indices.shape[0]],
+            )
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)
@@ -295,13 +299,13 @@ class MultiGroupBlockTable:
         ]
 
     def append_row(self, block_ids: tuple[list[int], ...],
-                   row_idx: int) -> None:
+                   row_idx: int, num_tokens: int) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.append_row(block_ids[i], row_idx)
+            block_table.append_row(block_ids[i], row_idx, num_tokens)
 
-    def add_row(self, block_ids: tuple[list[int], ...], row_idx: int) -> None:
+    def add_row(self, block_ids: tuple[list[int], ...], row_idx: int, num_tokens: int) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.add_row(block_ids[i], row_idx)
+            block_table.add_row(block_ids[i], row_idx, num_tokens)
 
     def move_row(self, src: int, tgt: int) -> None:
         for block_table in self.block_tables:
