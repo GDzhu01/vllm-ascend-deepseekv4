@@ -60,6 +60,8 @@ from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (AttentionSpec, CrossAttentionSpec,
                                         EncoderOnlyAttentionSpec,
                                         CompressAttentionSpec,
+                                        Compress4AttentionSpec,
+                                        Compress128AttentionSpec,
                                         FullAttentionSpec, KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
@@ -536,8 +538,19 @@ class NPUModelRunner(GPUModelRunner):
                arange,
                out=positions_np)
 
+        positions_compress = []
+        compress_ratios = [4, 128]
+        for compress_ratio in compress_ratios:
+            positions_compress.append(
+                self.batch_get_compressed_pos(
+                    self.input_batch.num_computed_tokens_cpu[:num_reqs],
+                    num_scheduled_tokens[:num_reqs],
+                    compress_ratio
+                )
+            )
+
         self.input_batch.block_table.compute_slot_mapping(
-            req_indices, positions_np)
+            req_indices, positions_np, positions_compress)
         self.input_batch.block_table.commit_slot_mapping(
             total_num_scheduled_tokens)
         # for pcp, prefill mtp should use origin scheduleroutput ,
@@ -2564,10 +2577,6 @@ class NPUModelRunner(GPUModelRunner):
                                     kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
                                 elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
                                     kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
-                                if "c4" in layer_name_inner:
-                                    kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
-                                elif "c128" in layer_name_inner:
-                                    kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
                             kv_cache_raw_tensors[layer_name_inner] = (k_tensor, v_tensor) if \
                                 not self.use_sparse else (k_tensor, v_tensor, dsa_k_cache_tensor)
 
@@ -2714,36 +2723,29 @@ class NPUModelRunner(GPUModelRunner):
                         start_idx = target_idx
                         state_tensors.append(tensor)
                     kv_caches[layer_name] = state_tensors
-                elif isinstance(kv_cache_spec, CompressAttentionSpec):
-                    # c4_kv_tensor = torch.zeros(
-                    #     kv_cache_tensor.size*4//5
-                    # )
-                    # indexer_k_tensor = torch.zeros(
-                    #     kv_cache_tensor.size//5
-                    # )
+                elif isinstance(kv_cache_spec, Compress4AttentionSpec):
                     dtype = kv_cache_spec.dtype
-                    if "c4" in layer_name:
-                        c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
-                        c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-                            num_blocks, kv_cache_spec.block_size // 4,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.head_size)
-                        indexer_k_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
-                            num_blocks, kv_cache_spec.block_size // 4,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.indexer_head_size)
-                        c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
-                        indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
-                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
-                    elif "c128" in layer_name:
-                        c128_kv_tensor = kv_cache_raw_tensors[layer_name]
-                        # TODO: now the block size of c128 layer is 16. Adapt me later
-                        c128_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-                            num_blocks, kv_cache_spec.block_size // 8,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.head_size)
-                        c128_kv_cache = c128_kv_tensor.view(dtype).view(c128_kv_cache_shape)
-                        kv_caches[layer_name] = c128_kv_cache
+                    c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
+                    c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks // 4, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    indexer_k_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
+                        num_blocks // 4, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.indexer_head_size)
+                    c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
+                    indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
+                    kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
+                elif isinstance(kv_cache_spec, Compress128AttentionSpec):
+                    c128_kv_tensor = kv_cache_raw_tensors[layer_name]
+                    # TODO: now the block size of c128 layer is 16. Adapt me later
+                    c128_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks // 128, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    c128_kv_cache = c128_kv_tensor.view(dtype).view(c128_kv_cache_shape)
+                    kv_caches[layer_name] = c128_kv_cache
                 else:
                     raise ValueError("Unknown KV cache spec type.")
 
@@ -3019,7 +3021,7 @@ class NPUModelRunner(GPUModelRunner):
                         dtype=torch.bfloat16,
                     )
                 elif current_layer_id % 2 == 1:
-                   kv_cache_spec = CompressAttentionSpec(
+                   kv_cache_spec = Compress4AttentionSpec(
                        block_size=block_size,
                        num_kv_heads=1,
                        head_size=512,
@@ -3028,7 +3030,7 @@ class NPUModelRunner(GPUModelRunner):
                        indexer_head_size=128
                    )
                 else:
-                    kv_cache_spec = CompressAttentionSpec(
+                    kv_cache_spec = Compress128AttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=512,
@@ -3386,6 +3388,30 @@ class NPUModelRunner(GPUModelRunner):
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
 
+    def batch_get_compressed_pos(
+        self,
+        old: np.ndarray,
+        new: np.ndarray,
+        ratio: int
+    ) -> list[np.ndarray]:
+        """
+        多请求批量版：old/new都是np数组，为每个请求独立计算压缩pos
+        :param old: 多请求历史token数，shape=[num_reqs,]
+        :param new: 多请求本次调度token数，shape=[num_reqs,]
+        :param ratio: 压缩比
+        :return: 每个请求对应的压缩position_id列表
+        """
+        assert old.shape == new.shape, "old和new必须同shape"
+        assert ratio >= 1 and isinstance(ratio, int), "压缩比必须是≥1的整数"
+        assert np.all(old >= 0) and np.all(new >= 0), "token数不能为负"
+
+        len_old = old // ratio
+        len_new = (old + new) // ratio
+        l_diff = len_new - len_old
+        res = []
+        for i, l in enumerate(l_diff):
+            res.append(np.arange(len_old[i], len_old[i] + l, dtype=np.int32))
+        return res
 
 @contextmanager
 def _torch_cuda_wrapper():

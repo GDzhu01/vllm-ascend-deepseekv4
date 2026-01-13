@@ -69,7 +69,6 @@ class BlockTable:
             else:
                 self.use_hybrid_blocks = False
 
-        self.block_size = self.block_size // compress_ratio
         self.compress_ratio = compress_ratio
 
         if self.use_hybrid_blocks:
@@ -102,8 +101,7 @@ class BlockTable:
         if not block_ids:
             return
         block_ids = np.array(block_ids)
-        if num_tokens % self.compress_ratio != 0:
-            block_ids = block_ids[:-1]
+
         if self.use_hybrid_blocks:
             block_ids = self._convert_physical_to_logical_blocks(block_ids)
 
@@ -132,7 +130,7 @@ class BlockTable:
         self.block_table.np[[src, tgt]] = self.block_table.np[[tgt, src]]
 
     def compute_slot_mapping(self, req_indices: np.ndarray,
-                             positions: np.ndarray) -> None:
+                             positions: np.ndarray, positions_compress: np.ndarray = None) -> None:
         # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
         # -> [0, 0, K, K, K + 1, K + 1, K + 2, 2 * K, 2 * K, 2 * K + 1]
         # where K is the max_num_blocks_per_req and the block size is 2.
@@ -315,10 +313,14 @@ class MultiGroupBlockTable:
         for block_table in self.block_tables:
             block_table.swap_row(src, tgt)
 
-    def compute_slot_mapping(self, req_indices: np.ndarray,
-                             positions: np.ndarray) -> None:
-        for block_table in self.block_tables:
-            block_table.compute_slot_mapping(req_indices, positions)
+    def compute_slot_mapping(
+        self,
+        req_indices: np.ndarray,
+        positions: np.ndarray,
+        positions_compress: list[np.ndarray] = None,
+    ) -> None:
+        for i, block_table in enumerate(self.block_tables):
+            block_table.compute_slot_mapping(req_indices, positions, positions_compress[i])
 
     def commit_block_table(self, num_reqs: int) -> None:
         for block_table in self.block_tables:
