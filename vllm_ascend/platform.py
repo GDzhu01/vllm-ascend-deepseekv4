@@ -361,8 +361,6 @@ class NPUPlatform(Platform):
                 f"and block_size({cache_config.block_size}) "
                 "needs to be equal if use pcp or dcp > 1 in P/D disaggregate and kv pool scenario."
             )
-        # NOTE simple kv route, set block_size = 128*128, C4 actual block_size = 128*32, C128 actual block_size = 128
-        cache_config.block_size = 128 * 128
 
         if is_vl_model(vllm_config):
             if bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM", '0'))) or \
