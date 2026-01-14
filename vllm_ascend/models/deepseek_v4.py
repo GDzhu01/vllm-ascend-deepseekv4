@@ -640,9 +640,9 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
-        if (use_pypto := 1):
-            y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
-            return y.to(dtype), post, comb
+        # if (use_pypto := 1):
+        #     y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
+        #     return y.to(dtype), post, comb
         x = x.flatten(1).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
@@ -995,12 +995,27 @@ class AscendDeepseekV4ForCausalLM(
 
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
+        
+        tp_rank = get_tensor_model_parallel_rank()
+        tp_size = get_tensor_model_parallel_world_size()
+
+        # Attention heads per rank
+        heads_per_rank = self.config.num_attention_heads // tp_size
+        head_start = tp_rank * heads_per_rank
+
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
                 continue
-            if "gate.bias" in name:
+            if ".gate.bias" in name:
                 name=name.replace('.gate.bias','.gate.e_score_correction_bias')
-                print(f'ohhhhhhhhhhhhhhhhhh: {name}')
+
+            if "sink" in name:
+                # Handle attention sinks (distributed across ranks)
+                param = params_dict[name]
+                narrow_weight = loaded_weight.narrow(0, head_start, heads_per_rank)
+                param.data.copy_(narrow_weight)
+                loaded_params.add(name)
+                continue
 
             spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
             if spec_layer is not None:
