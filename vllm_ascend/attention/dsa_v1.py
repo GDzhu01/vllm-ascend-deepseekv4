@@ -39,6 +39,7 @@ from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
+from vllm_ascend.ops.pypto.attention_post_impl import npu_attention_post_v4
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -860,12 +861,16 @@ class AscendDSAImpl(DSAAttentionImpl):
             layout_kv="PA_BSND",
             sparse_mode=3,
         )
-        attn_output = self._v_up_proj(attn_output, has_prefill)
-        maybe_npu_prefetch(inputs=self.o_proj.weight,
-                           dependency=attn_output,
-                           max_size=MAX_O_PROJ_PREFETCH_SIZE,
-                           enabled=self.enable_prefetch)
-        output[...] = self.o_proj(attn_output)[0]
+        
+        if (use_pypto := 1):
+            output[...] = npu_attention_post_v4(attn_output, cos, sin, self.W_UV, self.o_proj.weight)
+        else:
+            attn_output = self._v_up_proj(attn_output, has_prefill)
+            maybe_npu_prefetch(inputs=self.o_proj.weight,
+                               dependency=attn_output,
+                               max_size=MAX_O_PROJ_PREFETCH_SIZE,
+                               enabled=self.enable_prefetch)
+            output[...] = self.o_proj(attn_output)[0]
         return output_padded
 
     def indexer_select(
