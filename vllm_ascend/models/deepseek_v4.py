@@ -549,6 +549,7 @@ class DeepseekV4Attention(nn.Module):
             kv_norm = self.kv_norm,
             wo_a = self.wo_a,
             wo_b = self.wo_b,
+            attn_sink = self.attn_sink,
             indexer = self.indexer,
             compressor = self.compressor,
             topk_indices_buffer=topk_indices_buffer,

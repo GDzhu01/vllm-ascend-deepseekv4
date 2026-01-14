@@ -57,6 +57,7 @@ class DSAModules:
     kv_norm: torch.nn.Module
     wo_a: torch.nn.Module
     wo_b: torch.nn.Module
+    attn_sink: torch.nn.Module
     indexer: torch.nn.Module | None
     compressor: torch.nn.Module | None
     topk_indices_buffer: torch.Tensor | None
@@ -108,6 +109,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.kv_norm = dsa_modules.kv_norm
         self.wo_a = dsa_modules.wo_a
         self.wo_b = dsa_modules.wo_b
+        self.attn_sink = dsa_modules.attn_sink
         self.indexer = dsa_modules.indexer
         self.compressor = dsa_modules.compressor
         self.topk_indices_buffer = dsa_modules.topk_indices_buffer
@@ -141,7 +143,8 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             indexer=self.indexer,
             compressor=self.compressor,
             wo_a=self.wo_a,
-            wo_b=self.wo_b
+            wo_b=self.wo_b,
+            attn_sink=self.attn_sink,
         )
 
         compilation_config = get_current_vllm_config().compilation_config
