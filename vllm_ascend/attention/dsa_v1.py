@@ -152,8 +152,6 @@ class AscendDSAMetadata:
     attn_mask: torch.Tensor = None
     # chunked prefill by default if no attn_states passed
     attn_state: AscendAttentionState = AscendAttentionState.ChunkedPrefill
-    prefill: int | None = None
-    decode: int | None = None
     state_ids: torch.Tensor = None
 
     decode: Optional[AscendDSADecodeMetadata] = None
