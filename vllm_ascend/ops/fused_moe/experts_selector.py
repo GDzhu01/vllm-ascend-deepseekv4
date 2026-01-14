@@ -19,6 +19,7 @@ from typing import Callable, Optional
 import torch
 
 from vllm_ascend.utils import get_weight_prefetch_method
+import custom_ops
 
 
 def select_experts(hidden_states: torch.Tensor,
@@ -225,7 +226,26 @@ def _select_experts_with_fusion_ops(
     num_expert_group = num_expert_group if num_expert_group is not None else 1
     renorm = int(renormalize)
     if scoring_func == "sqrtsoftplus":
-        norm_type = 2
+        if input_ids is not None:
+            input_ids=input_ids.to(torch.int64)
+        tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
+        topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
+            x=router_logits,                        # 输入张量
+            k=top_k,                        # 选取的专家数量
+            bias=e_score_correction_bias,                # 偏置张量（可选）
+            input_ids=input_ids,      # 输入词表（可选）
+            tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
+            k_group=topk_group,           # 选取的组数量（可选）
+            group_count=num_expert_group,   # 总组数（可选）
+            routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
+            eps=float(1e-20),                  # 数值稳定性参数（可选）
+            group_select_mode=1,  # 组选择模式（可选）
+            renorm=0,            # 重归一化标志（可选）
+            norm_type=2,       # 归一化类型（可选）
+            out_flag=False          # 是否输出归一化结果（可选）
+        )
+        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+        return topk_weights, topk_ids
     elif scoring_func == "softmax":
         norm_type = 0
     else:
@@ -249,7 +269,7 @@ def _select_experts_with_fusion_ops(
         group_select_mode=1,  # 0: the maximum in the group; 1: topk2.sum(fix)
         input_ids=input_ids,
         tid2eid=tid2eid)
-    if scoring_func == "softmax":
+    if scoring_func == "softmax" or scoring_func == "sqrtsoftplus":
         topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
 
     return topk_weights, topk_ids

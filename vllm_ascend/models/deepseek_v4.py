@@ -270,60 +270,60 @@ class DeepseekV4MoE(nn.Module):
         )
         
 
-    # def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-    #     num_tokens, hidden_dim = hidden_states.shape
-    #     hidden_states = hidden_states.view(-1, hidden_dim)
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        num_tokens, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
 
-    #     # Chunk the hidden states so they aren't replicated across TP ranks.
-    #     # This avoids duplicate computation in self.experts.
-    #     # TODO: We can replace the all_reduce at the end of attn with a
-    #     # reduce_scatter instead of chunking here.
-    #     if self.is_sequence_parallel:
-    #         hidden_states = sequence_parallel_chunk(hidden_states)
+        # Chunk the hidden states so they aren't replicated across TP ranks.
+        # This avoids duplicate computation in self.experts.
+        # TODO: We can replace the all_reduce at the end of attn with a
+        # reduce_scatter instead of chunking here.
+        if self.is_sequence_parallel:
+            hidden_states = sequence_parallel_chunk(hidden_states)
 
-    #     if self.experts.is_internal_router:
-    #         # In this case, the gate/router runs inside the FusedMoE class
-    #         fused_moe_out = self.experts(
-    #             hidden_states=hidden_states, router_logits=hidden_states
-    #         )
-    #     else:
-    #         # router_logits: (num_tokens, n_experts)
-    #         router_logits, _ = self.gate(hidden_states)
-    #         fused_moe_out = self.experts(
-    #             hidden_states=hidden_states, router_logits=router_logits
-    #         )
+        if self.experts.is_internal_router:
+            # In this case, the gate/router runs inside the FusedMoE class
+            fused_moe_out = self.experts(
+                hidden_states=hidden_states, router_logits=hidden_states
+            )
+        else:
+            # router_logits: (num_tokens, n_experts)
+            router_logits, _ = self.gate(hidden_states)
+            fused_moe_out = self.experts(
+                hidden_states=hidden_states, router_logits=router_logits
+            )
 
-    #     shared_output, final_hidden_states = fused_moe_out
-    #     if self.shared_experts is None:
-    #         assert shared_output is None
+        shared_output, final_hidden_states = fused_moe_out
+        if self.shared_experts is None:
+            assert shared_output is None
 
-    #     # Fix FP16 overflow
-    #     # See DeepseekV2DecoderLayer for more details.
-    #     if hidden_states.dtype != torch.float16:
-    #         if not self.is_rocm_aiter_moe_enabled:
-    #             final_hidden_states *= self.routed_scaling_factor
-    #     elif self.shared_experts is not None:
-    #         assert shared_output is not None
-    #         shared_output *= 1.0 / self.routed_scaling_factor
+        # Fix FP16 overflow
+        # See DeepseekV2DecoderLayer for more details.
+        if hidden_states.dtype != torch.float16:
+            if not self.is_rocm_aiter_moe_enabled:
+                final_hidden_states *= self.routed_scaling_factor
+        elif self.shared_experts is not None:
+            assert shared_output is not None
+            shared_output *= 1.0 / self.routed_scaling_factor
 
-    #     if self.shared_experts is not None:
-    #         assert shared_output is not None
-    #         final_hidden_states += shared_output
+        if self.shared_experts is not None:
+            assert shared_output is not None
+            final_hidden_states += shared_output
 
-    #     if self.is_sequence_parallel:
-    #         final_hidden_states = tensor_model_parallel_all_gather(
-    #             final_hidden_states, 0
-    #         )
-    #         final_hidden_states = final_hidden_states[:num_tokens]
-    #     elif self.tp_size > 1:
-    #         final_hidden_states = self.experts.maybe_all_reduce_tensor_model_parallel(
-    #             final_hidden_states
-    #         )
+        if self.is_sequence_parallel:
+            final_hidden_states = tensor_model_parallel_all_gather(
+                final_hidden_states, 0
+            )
+            final_hidden_states = final_hidden_states[:num_tokens]
+        elif self.tp_size > 1:
+            final_hidden_states = self.experts.maybe_all_reduce_tensor_model_parallel(
+                final_hidden_states
+            )
 
-    #     return final_hidden_states.view(num_tokens, hidden_dim)
+        return final_hidden_states.view(num_tokens, hidden_dim)
 
-    def forward(self, hidden_states):
-        return hidden_states
+    # def forward(self, hidden_states):
+    #     return hidden_states
 
 def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
     import math

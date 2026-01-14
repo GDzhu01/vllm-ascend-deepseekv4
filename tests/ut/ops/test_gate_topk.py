@@ -57,14 +57,15 @@ class TestMoeGatingTopk(TestBase):
         self.norm_type_int = 2 # 0-Softmax，1-Sigmoid，2-Softplus
 
     def test_cumsum_group_list_with_type_0(self):
-        scores = torch.randn((self.input_size,), dtype=torch.float32).npu()
+        torch.npu.set_device(0)
+        scores = torch.randn((self.input_size,self.n_routed_experts), dtype=torch.bfloat16).npu()
         scores_ref = scores.clone()
-        input_ids = torch.randint(0, self.vocab_size, (self.input_size,)).npu()
+        input_ids = torch.randint(0, self.vocab_size, (self.input_size,),dtype=torch.int64).npu()
         if self.use_hash:
             tid2eid = torch.empty(self.vocab_size, self.n_activated_experts, dtype=torch.int32).npu()
             bias = None
         else:
-            bias = torch.empty(self.n_routed_experts, dtype=torch.float32).npu()
+            bias = torch.empty(self.n_routed_experts, dtype=torch.bfloat16).npu()
 
         weights, indices, _ = torch.ops.custom.npu_moe_gating_top_k(
             x=scores, 
