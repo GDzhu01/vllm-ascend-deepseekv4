@@ -1022,13 +1022,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q process in new stream
         q, _ = self.wq_b(qr)  # [b,s,1536] @ [1536,64*128] = [b,s,64*128]
         q = q.view(-1, self.n_head, self.head_dim)  # [n_toks,64,128]
-
-        k_proj, _ = self.wk(x)  # [b,s,7168] @ [7168,128] = [b,s,128]
-        k_proj = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-            k_proj, need_gather_q_kv)
-        k = self.k_norm(k_proj).unsqueeze(1)
-        k = k.view(-1, 1, self.head_dim)
-
         
         ## rope
         cos_q, sin_q = cos, sin
@@ -1046,22 +1039,40 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
         ## rope
 
-        self.compress_forward(x, kv_cache)
+        k = self.compress_forward(x, kv_cache)
 
         weights, _ = self.weights_proj(x)
 
         block_table = attn_metadata.block_tables
 
-        topk_indices = torch.ops._C_ascend.npu_lightning_indexer(
-            query=q,
-            key=kv_cache[2],          # kv cache ?
+        torch.ops._C_ascend.indexer_compress_epilog(k, attn_metadata.slot_mapping, kv_cache[1], kv_cache[2])
+
+        soc_version = get_ascend_device_type()
+        dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
+
+        q_shape = q.shape
+
+        q, q_scale = torch_npu.npu_dynamic_quant(q.view(-1, self.head_dim), dst_type=dst_type)
+
+        if soc_version not in {AscendDeviceType.A5}:
+            q_scale = q_scale.to(torch.float16)
+
+        sparse_indices, _ = torch.ops._C_ascend.npu_lightning_indexer(
+            query=q.view(q_shape),
+            key=kv_cache[1],
             weights=weights,
+            query_dequant_scale=q_scale.view(q_shape[:-1]),
+            key_dequant_scale=kv_cache[2],
             actual_seq_lengths_query=actual_seq_lengths_query,
             actual_seq_lengths_key=actual_seq_lengths_key,
             block_table=block_table,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            sparse_count=512,
+            sparse_mode=3,
+            cmp_ratio=4,
             layout_query="TND",
             layout_key="PA_BSND",
-            sparse_count=512,
-            sparse_mode=3)
-        return topk_indices
+        )
+        return sparse_indices
     

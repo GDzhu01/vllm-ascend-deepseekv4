@@ -132,7 +132,7 @@ class DeepseekV2MLP(nn.Module):
             quant_config=quant_config,
             disable_tp=is_sequence_parallel,
             prefix=f"{prefix}.gate_up_proj",
-            return_bias=False,
+            # return_bias=False,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -142,7 +142,7 @@ class DeepseekV2MLP(nn.Module):
             reduce_results=reduce_results,
             disable_tp=is_sequence_parallel,
             prefix=f"{prefix}.down_proj",
-            return_bias=False,
+            # return_bias=False,
         )
         if hidden_act != "silu":
             raise ValueError(
@@ -192,7 +192,7 @@ class DeepseekV4MoE(nn.Module):
             bias=False,
             quant_config=None,
             prefix=f"{prefix}.gate",
-            return_bias=False,
+            # return_bias=False,
         )
         
         # Load balancing settings.
@@ -582,8 +582,9 @@ class DeepseekV4Attention(nn.Module):
         hidden_states: torch.Tensor,
         llama_4_scaling: torch.Tensor | None,
     ) -> torch.Tensor:
-        return self.dsa_attn(positions, hidden_states, llama_4_scaling)
-        # return hidden_states
+        # return self.dsa_attn(positions, hidden_states, llama_4_scaling)
+        
+        return hidden_states
 
 
 class DeepseekV2DecoderLayer(nn.Module):
@@ -652,9 +653,9 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
-        # if (use_pypto := 1):
-        #     y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
-        #     return y.to(dtype), post, comb
+        if (use_pypto := 1):
+            y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
+            return y.to(dtype), post, comb
         x = x.flatten(1).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
@@ -664,13 +665,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         return y.to(dtype), post, comb
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        # if (use_pypto := 1):
-        #     print("================================== x shape is ", x.shape)
-        #     print("================================== residual shape is ", residual.shape)
-        #     print("================================== post shape is ", post.shape)
-        #     print("================================== comb shape is ", comb.shape)
-        #     y = npu_hc_post(x, residual.float(), post, comb)
-        #     return y.type_as(x)
+        if (use_pypto := 1):
+            print("================================== x shape is ", x.shape)
+            print("================================== residual shape is ", residual.shape)
+            print("================================== post shape is ", post.shape)
+            print("================================== comb shape is ", comb.shape)
+            y = npu_hc_post(x, residual.float(), post, comb)
+            return y.type_as(x)
         #x=(b,s,h)  residual=(b,s,c, h), post=(b,s,c), comb=(b,s,c,c)
         y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
         #y = (b,s,c,1)*(b,s,1,h) + torch.sum((b,s,c,c,1)*(b,s,c,1,h), dim=2)

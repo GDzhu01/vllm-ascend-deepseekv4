@@ -72,7 +72,6 @@ def select_experts(hidden_states: torch.Tensor,
         scoring_func=scoring_func,
         custom_routing_function=custom_routing_function)
 
-    is_support_npu_moe_gating_top_k = False
     if is_support_npu_moe_gating_top_k:
         topk_weights, topk_ids = _select_experts_with_fusion_ops(
             hidden_states=hidden_states,
@@ -120,7 +119,7 @@ def check_npu_moe_gating_top_k(
         return False
     if custom_routing_function is not None:
         return False
-    if scoring_func != "softmax" and scoring_func != "sigmoid":
+    if scoring_func != "softmax" and scoring_func != "sigmoid" and scoring_func != 'sqrtsoftplus':
         return False
     topk_group = topk_group if topk_group is not None else 1
     num_expert_group = num_expert_group if num_expert_group is not None else 1
@@ -225,7 +224,7 @@ def _select_experts_with_fusion_ops(
     topk_group = topk_group if topk_group is not None else 1
     num_expert_group = num_expert_group if num_expert_group is not None else 1
     renorm = int(renormalize)
-    if scoring_func == "softplus":
+    if scoring_func == "sqrtsoftplus":
         norm_type = 2
     elif scoring_func == "softmax":
         norm_type = 0

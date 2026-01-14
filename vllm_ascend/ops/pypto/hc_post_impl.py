@@ -86,9 +86,9 @@ def check_input_output_shape_dtype(x: torch.tensor, residual: torch.tensor, post
 
 @pypto.jit(
     host_options={"only_codegen": True},
-    runtime_options={
-        "stitch_cfgcache_size": 2500000
-    }
+    # runtime_options={
+    #     "stitch_cfgcache_size": 2500000
+    # }
 )
 def hc_post_kernel(
     x: pypto.tensor,
