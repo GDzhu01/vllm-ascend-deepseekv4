@@ -48,6 +48,7 @@ from vllm.logger import logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
 from vllm.model_executor.model_loader import get_model
+from vllm.model_executor.models.utils import extract_layer_index
 from vllm.sequence import IntermediateTensors
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
@@ -943,6 +944,13 @@ class NPUModelRunner(GPUModelRunner):
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
 
+            # get kv_state id
+            state_ids = torch.tensor(
+                [self.requests[req_id].state_id for req_id in req_ids],
+                dtype=torch.int32,
+                device=self.device,
+            )
+
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
             # `num_reqs`, we'll take `query_start_loc` as an example:
@@ -990,6 +998,7 @@ class NPUModelRunner(GPUModelRunner):
                 # TODO: change this to the right block table for linear attn
                 block_table_tensor=blk_table_tensor[:num_reqs],
                 slot_mapping=slot_mapping,
+                state_ids=state_ids,
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
@@ -2358,10 +2367,97 @@ class NPUModelRunner(GPUModelRunner):
         ])
 
         self.may_reinitialize_input_batch(kv_cache_config)
-        kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
+        # kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
+        kv_states = self.initialize_kv_state()
 
         if has_kv_transfer_group():
-            get_kv_transfer_group().register_kv_caches(kv_caches)
+            get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
+
+    def initialize_kv_state(self):
+        if 0: # model_config is not dsk_v4
+            return
+        kv_states: Dict[str, tuple[torch.Tensor]] = {}
+        # TODO get this from config file
+        c1_layers = [0, 1]
+        c4_layers = list(range(2, 43, 2))
+        c128_layers = list(range(3, 43, 2))
+        window_size = 128
+        head_dim = 512
+        indexer_head_dim = 128
+
+        def _get_aligned_tensor(size: torch.Size, dtype: torch.dtype, alignment: int = 1):
+            tensor_size = size.numel() * dtype.itemsize
+            original_tensor = torch.zeros(
+                tensor_size + alignment,
+                dtype=torch.int8,
+                device=self.device
+            )
+            aligned_tensor = self._align_memory(
+                original_tensor,
+                alignment
+            )[:tensor_size]
+            return aligned_tensor.view(dtype).view(size)
+
+        # initialize kv cache tensors
+        # prefill disaggregation need the addr of cache tensor be aligned with 2M
+        alignment = 2 * 1024 * 1024
+        for group in self._kv_cache_spec_attn_group_iterator():
+            for layer_name in group.layer_names:
+                layer_index = extract_layer_index(layer_name)
+                sliding_window = _get_aligned_tensor(
+                    torch.Size([self.max_num_reqs, window_size, head_dim]),
+                    torch.float32,
+                    alignment,
+                )
+                if layer_index in c4_layers:
+                    coff = 2
+                    compress_ratio = 4
+                    c4_kv_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    c4_score_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    c4_indexer_kv_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    c4_indexer_score_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    kv_states[layer_name] = (sliding_window, c4_kv_state, c4_score_state, c4_indexer_kv_state, c4_indexer_score_state)
+                elif layer_index in c128_layers:
+                    coff = 1
+                    compress_ratio = 128
+                    c128_kv_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    c128_score_state = _get_aligned_tensor(
+                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.float32,
+                        alignment,
+                    )
+                    kv_states[layer_name] = (sliding_window, c128_kv_state, c128_score_state)
+                else:
+                    assert layer_index in c1_layers, "layer_index out of range"
+                    kv_states[layer_name] = (sliding_window)
+
+        # bind kv cache to layers
+        # TODO maybe move this to bind_kv_states in utils
+        forward_context = self.compilation_config.static_forward_context
+        for layer_name, kv_state in kv_states.items():
+            self.kv_states.append(kv_states[layer_name])
+            forward_context[layer_name].kv_state = [kv_state]
+        return kv_states
 
     def _align_memory(self, tensor: torch.Tensor,
                       alignment: int) -> torch.Tensor:

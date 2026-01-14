@@ -152,6 +152,9 @@ class AscendDSAMetadata:
     attn_mask: torch.Tensor = None
     # chunked prefill by default if no attn_states passed
     attn_state: AscendAttentionState = AscendAttentionState.ChunkedPrefill
+    prefill: int | None = None
+    decode: int | None = None
+    state_ids: torch.Tensor = None
 
     decode: Optional[AscendDSADecodeMetadata] = None
     prefill: Optional[AscendDSAPrefillMetadata] = None
@@ -381,6 +384,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         input_positions = common_attn_metadata.positions[:
                                                          num_input_tokens].long(
                                                          )
+        state_ids = common_attn_metadata.state_ids[:num_reqs]
         if self.num_prefills:
             cos, sin = get_cos_and_sin_mla(input_positions)
         else:
@@ -437,6 +441,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens,
             cos=cos,
             sin=sin,
+            state_ids=state_ids,
         )
     
     def build_prefill_metadata(
@@ -768,9 +773,30 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: M,
         need_gather_q_kv: bool = False,
         output: Optional[torch.Tensor] = None,
+        kv_state: Tuple[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # if True:
-        #     return hidden_states
+        if attn_metadata is None:
+            # profile run
+            return hidden_states
+        def is_c1():
+            return False
+        
+        def is_c4():
+            return False
+        
+        def is_c128():
+            return False
+
+        if is_c1():
+            (sliding_window) = kv_state
+        elif is_c4():
+            (sliding_window, c4_kv_state, c4_score_state, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
+        elif is_c128():
+            (sliding_window, c128_kv_state, c128_score_state) = kv_state
+        # states shape: [max_num_reqs, xxx]
+        state_ids = attn_metadata.state_ids # size: [num_reqs]
+        # if torch.distributed.get_rank() == 0 and '.0' in layer_name:
+        #     logger.info(f'>>>>> mla fwd, layer_name={layer_name}, hidden_states={hidden_states.shape}, state_ids={state_ids}, kv_state={kv_state.shape}')
         assert output is not None, "Output tensor must be provided."
         # forward_context = get_forward_context()
         if attn_metadata is None:
