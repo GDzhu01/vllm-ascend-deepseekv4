@@ -132,6 +132,7 @@ class DeepseekV2MLP(nn.Module):
             quant_config=quant_config,
             disable_tp=is_sequence_parallel,
             prefix=f"{prefix}.gate_up_proj",
+            return_bias=False,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -141,6 +142,7 @@ class DeepseekV2MLP(nn.Module):
             reduce_results=reduce_results,
             disable_tp=is_sequence_parallel,
             prefix=f"{prefix}.down_proj",
+            return_bias=False,
         )
         if hidden_act != "silu":
             raise ValueError(
@@ -190,6 +192,7 @@ class DeepseekV4MoE(nn.Module):
             bias=False,
             quant_config=None,
             prefix=f"{prefix}.gate",
+            return_bias=False,
         )
         
         # Load balancing settings.
@@ -369,10 +372,11 @@ class Indexer(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wq_b",
+            return_bias=False,
         )
 
         self.weights_proj = ReplicatedLinear(
-            config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj"
+            config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
         )
         self.compressor = Compressor(vllm_config,config, compress_ratio, self.head_dim, True,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor") #Compressor(4, 128)
 
@@ -408,10 +412,12 @@ class Compressor(nn.Module):
         self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32))
         self.wkv = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.wkv",)
+            prefix=f"{prefix}.wkv",
+            return_bias=False,)
         self.wgate = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.wgate",)
+            prefix=f"{prefix}.wgate",
+            return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
 
 
@@ -458,6 +464,7 @@ class DeepseekV4Attention(nn.Module):
                 bias=False,
                 quant_config=quant_config,
                 prefix=f"{prefix}.wq_a",
+                return_bias=False,
         )
         self.q_norm = RMSNorm(self.q_lora_rank, eps=config.norm_eps)
         self.wq_b = ColumnParallelLinear(
@@ -466,6 +473,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wq_b",
+            return_bias=False,
         )
         
         self.wkv = ReplicatedLinear(
@@ -474,6 +482,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wkv",
+            return_bias=False,
         )
         self.kv_norm = RMSNorm(self.head_dim, self.norm_eps)
         self.wo_a = ColumnParallelLinear(
@@ -482,6 +491,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wo_a",
+            return_bias=False,
         )        
         self.wo_b = RowParallelLinear(
             self.n_groups * config.o_lora_rank,
@@ -489,6 +499,7 @@ class DeepseekV4Attention(nn.Module):
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.wo_b",
+            return_bias=False,
         )
         
         if config.rope_parameters["rope_type"] != "default":
