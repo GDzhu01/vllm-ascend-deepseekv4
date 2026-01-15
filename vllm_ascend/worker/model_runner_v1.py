@@ -2574,12 +2574,12 @@ class NPUModelRunner(GPUModelRunner):
                     current_layer_id = layer_id + 1
                     if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
                         c4_kv_tensor = torch.zeros(
-                            kv_cache_tensor.size * 4 // 5,
+                            kv_cache_tensor.size * 9 // 10,
                             dtype=torch.int8,
                             device=self.device,
                         )
                         indexer_k_tensor = torch.zeros(
-                            kv_cache_tensor.size // 5,
+                            kv_cache_tensor.size // 10,
                             dtype=torch.int8,
                             device=self.device,
                         )
