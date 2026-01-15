@@ -420,12 +420,57 @@ class Compressor(nn.Module):
             return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
 
+        self.kv_cache = None
 
+    def overlap_transform(self, tensor: torch.Tensor, value=0):
+        # tensor: [b,s,r,2d]
+        b, s, _, _ = tensor.size()
+        ratio, d = self.compress_ratio, self.head_dim
+        new_tensor = tensor.new_full((b, s, 2 * ratio, d), value)
+        new_tensor[:, :, ratio:] = tensor[:, :, :, d:]
+        new_tensor[:, 1:, :ratio] = tensor[:, :-1, :, :d]
+        return new_tensor
 
     def forward(
-        self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor
-    ) -> torch.Tensor:
-        return 
+            self,
+            x: torch.Tensor,
+            start_pos: int,
+            cos: torch.Tensor,
+            sin: torch.Tensor
+        )-> torch.Tensor:
+        assert self.kv_cache is not None
+        bsz, seqlen, _ = x.size()
+        ratio, overlap, d = self.compress_ratio, self.overlap, self.head_dim
+        dtype = x.dtype
+        x = x.float()
+        kv = self.wkv(x)
+        score = self.wgate(x)
+        if start_pos == 0:
+            should_compress = seqlen >= ratio
+            remainder = seqlen % ratio
+            cutoff = seqlen - remainder
+            freqs_cis = freqs_cis[:cutoff:ratio]
+            offset = ratio if overlap else 0
+            if remainder > 0:
+                kv, _ = kv.split([cutoff, remainder], dim=1)
+                self.score_state[:bsz, offset : offset+remainder] = score[:, cutoff:] + self.ape[:remainder]
+                score = score[:, :cutoff]
+            kv = kv.unflatten(1, (-1, ratio))
+            score = score.unflatten(1, (-1, ratio)) + self.ape
+            if overlap:
+                kv = self.overlap_transform(kv, 0)
+                score = self.overlap_transform(score, float("-inf"))
+            kv = (kv * score.softmax(dim=2)).sum(dim=2)
+        # if self.rotate:
+        #     kv = rotate_activation(kv)
+        if not should_compress:
+            return
+        kv = self.norm(kv.to(dtype))
+        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        return kv
 
 class DeepseekV4Attention(nn.Module):
     def __init__(

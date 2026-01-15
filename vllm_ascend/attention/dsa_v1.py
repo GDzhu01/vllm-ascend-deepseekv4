@@ -5,6 +5,7 @@ from typing import (TYPE_CHECKING, ClassVar, NamedTuple, Optional, Tuple, Type,
 import numpy as np
 import torch
 import torch_npu
+import torch.nn.functional as F
 import vllm.envs as envs_vllm
 from vllm.attention.backends.abstract import AttentionBackend, DSAAttentionImpl
 from vllm.attention.backends.utils import PAD_SLOT_ID
@@ -47,6 +48,142 @@ if TYPE_CHECKING:
 MAX_O_PROJ_PREFETCH_SIZE = 16 * 1024 * 1024
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
+
+
+def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int):
+    def _get_window_topk_idxs():
+        if start_pos >= window_size - 1:
+            return torch.arange(window_size)
+        elif start_pos > 0:
+            return F.pad(torch.arange(start_pos + 1), (0, window_size - start_pos - 1), value=-1)
+        else:
+            base = torch.arange(seqlen).unsqueeze(1)
+            matrix = (base - window_size + 1).clamp(0) + torch.arange(min(seqlen, window_size))
+            matrix = torch.where(matrix > base, -1, matrix)
+            return matrix
+    return _get_window_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
+
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
+    """
+    Applies rotary positional embeddings to the input tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor with positional embeddings to be applied.
+        freqs_cis (torch.Tensor): Precomputed complex exponential values for positional embeddings.
+
+    Returns:
+        torch.Tensor: Tensor with rotary embeddings applied.
+    """
+    y = x
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
+    if inverse:
+        freqs_cis = freqs_cis.conj()
+    if x.ndim == 3:
+        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
+    else:
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    x = torch.view_as_real(x * freqs_cis).flatten(-2)
+    y.copy_(x)
+    return y
+
+
+def rotate_activation(x: torch.Tensor) -> torch.Tensor:
+    assert x.dtype == torch.bfloat16
+    from fast_hadamard_transform import hadamard_transform
+    return hadamard_transform(x, scale=x.size(-1) ** -0.5)
+
+
+def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
+    """
+    Precomputes frequency-based complex exponential values for rotary positional embeddings.
+
+    Args:
+        args (ModelArgs): Model arguments containing positional embedding parameters.
+
+    Returns:
+        torch.Tensor: Precomputed complex exponential values for positional embeddings.
+    """
+
+    def find_correction_dim(num_rotations, dim, base, max_seq_len):
+        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
+
+    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
+        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
+        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
+        return max(low, 0), min(high, dim-1)
+
+    def linear_ramp_factor(min, max, dim):
+        if min == max:
+            max += 0.001
+        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
+        ramp_func = torch.clamp(linear_func, 0, 1)
+        return ramp_func
+
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    if original_seq_len > 0:
+        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
+        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
+        freqs = freqs / factor * (1 - smooth) + freqs * smooth
+
+    t = torch.arange(seqlen)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, offset: int):
+    def _get_compress_topk_idxs():
+        if start_pos > 0:
+            return torch.arange(0, start_pos // ratio) + offset
+        else:
+            matrix = torch.arange(seqlen // ratio).repeat(seqlen, 1)
+            mask = matrix >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
+            matrix = torch.where(mask, -1, matrix + offset)
+            return matrix
+    return _get_compress_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
+
+def sparse_attn_torch(
+    q: torch.Tensor, 
+    kv: torch.Tensor, 
+    attn_sink: torch.Tensor, 
+    topk_idxs: torch.Tensor, 
+    softmax_scale: float
+) -> torch.Tensor:
+    b, m, h, d = q.shape
+    
+    # Prepare indices: clamp -1 to 0 for gathering, but keep mask
+    mask = (topk_idxs == -1)
+    safe_idxs = topk_idxs.clone()
+    safe_idxs[mask] = 0
+    
+    # Gather KV: (b, m, topk, d)
+    batch_indices = torch.arange(b, device=kv.device).view(b, 1, 1)
+    kv_gathered = kv[batch_indices, safe_idxs, :]
+    
+    # Compute Scores (FP32)
+    q_f32 = q.float()
+    kv_f32 = kv_gathered.float()
+    
+    # (b, m, h, 1, d) @ (b, m, 1, topk, d)^T -> (b, m, h, topk)
+    scores = torch.matmul(q_f32.unsqueeze(3), kv_f32.unsqueeze(2).transpose(-1, -2)).squeeze(3)
+    scores = scores * softmax_scale
+    scores = scores.masked_fill(mask.unsqueeze(2), float("-inf"))
+    
+    # Softmax logic with Sink
+    scores_max = torch.max(scores, dim=-1).values # (b, m, h)
+    exp_scores = torch.exp(scores - scores_max.unsqueeze(-1))
+    exp_scores = exp_scores.masked_fill(mask.unsqueeze(2), 0.0)
+    
+    sum_exp = exp_scores.sum(dim=-1)
+    sink_term = torch.exp(attn_sink.float().view(1, 1, h) - scores_max)
+    total_denominator = sum_exp + sink_term
+    
+    # Weighted Sum
+    numerator = torch.matmul(exp_scores.unsqueeze(3), kv_f32.unsqueeze(2)).squeeze(3)
+    output = numerator / total_denominator.unsqueeze(-1)
+    
+    return output.to(q.dtype)
+
 
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
@@ -790,11 +927,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         output: Optional[torch.Tensor] = None,
         kv_state: Tuple[torch.Tensor] = None,
     ) -> torch.Tensor:
-        
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
             # Profiling run.
             return output.fill_(0)
+        return self._forward_single_op(
+            hidden_states,
+            kv_cache,
+            attn_metadata,
+            kv_state,
+        )
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
@@ -1008,6 +1150,74 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
         return attn_output
 
+    def _forward_single_op(
+        self,
+        hidden_states,
+        kv_cache,
+        attn_metadata,
+        kv_state,
+    ):        
+        cos = attn_metadata.prefill.cos
+        sin = attn_metadata.prefill.sin
+        seqlen, _ = hidden_states.size()
+        bsz = 1
+        start_pos = 0
+        win = self.window_size
+        ratio = self.compress_ratio
+        rd = self.rope_head_dim
+        if self.compress_ratio > 1 and self.compressor.kv_cache is None:
+            self.compressor.kv_cache = kv_cache[0][:, win:]
+        # q
+        qr = q = self.q_norm(self.wq_a(x))
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        # win kv & topk_idxs
+        kv = self.wkv(x)
+        kv = self.kv_norm(kv)
+        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+        if self.compress_ratio > 1:
+            offset = kv.size(1) if start_pos == 0 else win
+            if self.indexer is not None:
+                compress_topk_idxs = self.indexer_select_single_op(x, qr, start_pos, cos, sin, offset)
+            else:
+                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset)
+            topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
+        topk_idxs = topk_idxs.int()
+
+        # compress kv & attn
+        if start_pos == 0:
+            self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
+            if self.compress_ratio > 1:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin)) is not None:
+                    kv = torch.cat([kv, kv_compress], dim=1)
+            # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
+            o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+        # else:
+        #     self.kv_cache[:bsz, start_pos % win] = kv.squeeze(1)
+        #     if self.compress_ratio > 1:
+        #         self.compressor(x, start_pos, cos, sin)
+        #     o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
+        # TODO: O inverse is True
+        o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        o_pe = self.rope_single(o_pe, cos, sin, True)
+        o = torch.cat([o_nope, o_pe], dim=-1)
+        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+
+        # o
+        o = o.view(bsz, seqlen, self.n_local_groups, -1)
+        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+        o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
+        x = self.wo_b(o.flatten(2))
+        return x
+
     def indexer_select(
         self,
         x: torch.Tensor,
@@ -1077,3 +1287,52 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
         return sparse_indices
     
+    def indexer_select_single_op(
+        self,
+        x: torch.Tensor,
+        qr: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        offset = 0, # (wy): start_pos=0
+    ):
+        start_pos = 0 # (wy): start_pos=0
+        seqlen, _ = x.size()
+        bsz = 1
+        ratio = self.compress_ratio
+        rd = self.rope_head_dim
+        end_pos = start_pos + seqlen
+        if self.indexer.compressor.kv_cache is None:
+            self.indexer.compressor.kv_cache = self.indexer.kv_cache
+        q = self.wq_b(qr)
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        ## rope
+        cos_q, sin_q = cos, sin
+        cos = cos.view(-1, 1, 1, self.rope_head_dim)
+        sin = sin.view(-1, 1, 1, self.rope_head_dim)
+
+        q_pe, q_nope = torch.split(
+            q,
+            [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+            dim=-1)  # [b,s,64,64+64]
+
+        q_pe = q_pe.unsqueeze(2)
+        q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
+        q_pe = q_pe.squeeze(2)
+        q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
+
+        # q = rotate_activation(q)
+        self.indexer.compressor(x, start_pos, cos, sin)
+        weights = self.weights_proj(x) * (self.softmax_scale * self.n_heads ** -0.5)
+        # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
+        index_score = torch.einsum("bshd,btd->bsht", q, self.kv_cache[:bsz, :end_pos // ratio])
+        index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
+        if start_pos == 0:
+            mask = torch.arange(seqlen // ratio).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
+            index_score += torch.where(mask, float("-inf"), 0)
+        topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
+        if start_pos == 0:
+            mask = topk_idxs >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
+            topk_idxs = torch.where(mask, -1, topk_idxs + offset)
+        else:
+            topk_idxs += offset
+        return topk_idxs
