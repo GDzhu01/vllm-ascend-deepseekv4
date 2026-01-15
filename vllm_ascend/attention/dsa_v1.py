@@ -68,6 +68,11 @@ class AscendDSABackend(AttentionBackend):
         return num_blocks, block_size, num_kv_heads, head_size
 
     @staticmethod
+    def get_indexer_k_cache_shape(num_blocks: int, block_size: int, num_kv_heads: int,
+                           head_size: int) -> tuple[int, ...]:
+        return num_blocks, block_size, num_kv_heads, head_size
+
+    @staticmethod
     def get_impl_cls() -> Type["DSAAttentionImpl"]:
         return AscendDSAImpl
 
@@ -93,6 +98,7 @@ class AscendDSAPrefillMetadata:
     input_positions: torch.Tensor
     query_start_loc: torch.Tensor
     block_table: torch.Tensor
+    block_table_list: list[torch.Tensor]
     max_query_len: int
     max_seq_lens: int
     state_ids: torch.Tensor
@@ -106,6 +112,7 @@ class AscendDSADecodeMetadata:
     # position embeddings are applied inside the attention backend
     input_positions: torch.Tensor
     block_table: torch.Tensor
+    block_table_list: list[torch.Tensor]
     seq_lens: torch.Tensor
     max_seq_lens: int
     seq_lens_list: list[int]
@@ -134,11 +141,13 @@ class AscendDSAMetadata:
 
     num_actual_tokens: int  # Number of tokens excluding padding.
     slot_mapping: torch.Tensor
+    slot_mapping_list: list[torch.Tensor]
     query_start_loc: torch.Tensor
     seq_lens: torch.Tensor
     block_tables: torch.Tensor
     sin: torch.Tensor
     cos: torch.Tensor
+    block_table_list: list[torch.Tensor]
 
     # New for MLA (compared to FlashAttention)
     # For handling prefill decode split
@@ -253,7 +262,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.context_lens_cpu: torch.Tensor = None
         self.num_actual_tokens: Optional[int] = None
         self.block_table: torch.Tensor = None
+        self.block_table_list: list[torch.Tensor] = []
         self.slot_mapping: torch.Tensor = None
+        self.slot_mapping_list: list[torch.Tensor] = []
         self.graph_pad_size = 0
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
@@ -393,7 +404,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
-        self.slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
+        # self.slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
+        self.slot_mapping_list = []
+        for slot_mapping in common_attn_metadata.slot_mapping_list:
+            self.slot_mapping_list.append(slot_mapping[:num_input_tokens])
 
         query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
         query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
@@ -409,8 +423,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.graph_pad_size = common_attn_metadata.graph_pad_size
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_PREFILL)
-        self.block_table = common_attn_metadata.block_table_tensor[:
-                                                                   block_table_size]
+        # self.block_table = common_attn_metadata.block_table_tensor[:
+        #                                                            block_table_size]
+        self.block_table_list = []
+        for block_table in common_attn_metadata.block_table_tensor_list:
+            self.block_table_list.append(block_table[:block_table_size])
         # self.set_prefill_block_table(common_attn_metadata)
 
         prefill_metadata = None
@@ -428,6 +445,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_actual_tokens=self.num_actual_tokens,
             query_lens=self.query_lens,
             slot_mapping=self.slot_mapping,
+            slot_mapping_list=self.slot_mapping_list,
             head_dim=self.model_config.get_head_size(),
             num_decodes=self.num_decodes,
             num_decode_tokens=self.num_decode_tokens,
@@ -439,6 +457,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             decode=decode_metadata,
             query_start_loc=query_start_loc,
             block_tables=self.block_table,
+            block_table_list=self.block_table_list,
             seq_lens=self.seq_lens,
             cos=cos,
             sin=sin,
@@ -470,6 +489,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         prefill_input_positions = input_positions[tokens_start:]
         cos, sin = get_cos_and_sin_mla(prefill_input_positions)
+        prefill_block_table_list = []
+        for block_table in self.block_table_list:
+            prefill_block_table_list.append(block_table[reqs_start:, ...])
         return AscendDSAPrefillMetadata(
             attn_mask=self.attn_mask_builder.get_final_mla_mask(
                 self.model_config),
@@ -477,7 +499,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens,
             context_lens=self.seq_lens[reqs_start:],
             input_positions=prefill_input_positions,
-            block_table=self.block_table[reqs_start:, ...],
+            block_table=None,
+            block_table_list=prefill_block_table_list,
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,
@@ -509,7 +532,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
-        self.block_table = self.block_table[:block_table_size]
+        # self.block_table = self.block_table[:block_table_size]
+        for i in range(len(self.block_table_list)):
+            self.block_table_list[i] = self.block_table_list[i][:block_table_size]
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
         # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
@@ -571,7 +596,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         cos, sin = get_cos_and_sin_mla(input_positions, use_cache=True)
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
-            block_table=self.block_table,
+            block_table=None,
+            block_table_list=self.block_table_list,
             seq_lens=self.seq_lens,
             seq_lens_list=seq_lens_list,
             max_seq_lens=max_seq_lens,
