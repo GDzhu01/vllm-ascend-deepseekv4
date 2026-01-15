@@ -2583,6 +2583,14 @@ class NPUModelRunner(GPUModelRunner):
                             dtype=torch.int8,
                             device=self.device,
                         )
+                        current_soc_type = get_ascend_device_type()
+                        c8_indexer_scale_factor = 32 \
+                                if current_soc_type == AscendDeviceType.A5 else 64
+                        indexer_k_scale_tensor = torch.zeros(
+                            kv_cache_tensor.size // 5 // c8_indexer_scale_factor,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
                     elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
                         c128_kv_tensor = torch.zeros(
                             kv_cache_tensor.size,
@@ -2604,7 +2612,7 @@ class NPUModelRunner(GPUModelRunner):
                                 and "linear_attn" not in layer_name_inner):
                             current_layer_id = layer_id + 1
                             if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
-                                kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
+                                kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor, indexer_k_scale_tensor)
                             elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
                                 kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
                             else:
@@ -2613,8 +2621,7 @@ class NPUModelRunner(GPUModelRunner):
                             #     kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
                             # elif "c128" in layer_name_inner:
                             #     kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
-                elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
-                ):
+                elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys():
                     # NOTE: We need to init k cache tensor (nope cache tensor in mla) and
                     # v cache tensor (rope cache tensor in mla) separately to support prefill disaggregation,
                     # as it only support the 0-dim of kv_cache is `num_blocks`.
@@ -2712,7 +2719,7 @@ class NPUModelRunner(GPUModelRunner):
 
         Args:
             kv_cache_config: The KV cache config
-            kv_cache_raw_tensors: The KV cache buffer of each layer, with
+            kv_cache_raw_tenssors: The KV cache buffer of each layer, with
                 correct size but uninitialized shape.
         Returns:
             Dict[str, torch.Tensor]: A map between layer names to their
@@ -2740,8 +2747,8 @@ class NPUModelRunner(GPUModelRunner):
                     dtype = kv_cache_spec.dtype
                     layer_index = extract_layer_index(layer_name)
                     if layer_index in c4_layers:
-                        c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
-                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel()
+                        c4_kv_tensor, indexer_k_tensor, indexer_k_scale_tensor = kv_cache_raw_tensors[layer_name]
+                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel() + indexer_k_scale_tensor.numel()
                         num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
                         c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks, kv_cache_spec.block_size // 4,
@@ -2751,9 +2758,19 @@ class NPUModelRunner(GPUModelRunner):
                             num_blocks, kv_cache_spec.block_size // 4,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.indexer_head_size)
+                        indexer_k_scale_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
+                            num_blocks, kv_cache_spec.block_size // 4,
+                            kv_cache_spec.num_kv_heads,
+                            1)
+                        current_soc_type = get_ascend_device_type()
+                        c8_indexer_dtype = torch.float8_e4m3fn \
+                            if current_soc_type == AscendDeviceType.A5 else torch.int8
+                        c8_scale_indexer_dtype = torch.float32 \
+                            if current_soc_type == AscendDeviceType.A5 else torch.float16
                         c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
-                        indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
-                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
+                        indexer_k_cache = indexer_k_tensor.view(c8_indexer_dtype).view(indexer_k_cache_shape)
+                        indexer_k_scale_cache = indexer_k_scale_tensor.view(c8_scale_indexer_dtype).view(indexer_k_scale_cache_shape)
+                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache, indexer_k_scale_cache)
                     elif layer_index in c128_layers:
                         c128_kv_tensor = kv_cache_raw_tensors[layer_name]
                         sum_page_size_bytes = c128_kv_tensor.numel()
