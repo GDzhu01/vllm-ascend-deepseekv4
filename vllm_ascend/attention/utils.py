@@ -102,6 +102,10 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
 
+    # the block table is a list cause the different compress ratios need different one
+    block_table_tensor_list: List[torch.Tensor] = None
+    slot_mapping_list: List[torch.Tensor] = None
+
     # TODO: Remove it when vLLM no longer uses this function.
     def unpadded(self, num_actual_tokens: int,
                  num_actual_reqs: int) -> "AscendCommonAttentionMetadata":

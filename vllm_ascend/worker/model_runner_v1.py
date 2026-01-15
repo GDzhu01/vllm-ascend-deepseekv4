@@ -24,7 +24,7 @@ from contextlib import contextmanager, nullcontext
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from multiprocessing import Manager
-from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional, Union, cast
 
 import numpy as np
 import torch
@@ -49,6 +49,8 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
 from vllm.model_executor.model_loader import get_model
 from vllm.model_executor.models.utils import extract_layer_index
+from vllm.model_executor.models import VllmModelForPooling
+from vllm.sampling_params import SamplingType
 from vllm.sequence import IntermediateTensors
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
@@ -58,6 +60,7 @@ from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (AttentionSpec, CrossAttentionSpec,
                                         EncoderOnlyAttentionSpec,
+                                        CompressAttentionSpec,
                                         FullAttentionSpec, KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
@@ -73,6 +76,7 @@ from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
 from vllm.v1.spec_decode.ngram_proposer import NgramProposer
 from vllm.v1.spec_decode.suffix_decoding import SuffixDecodingProposer
 from vllm.v1.structured_output.utils import apply_grammar_bitmask
+from vllm.v1.worker.gpu_input_batch import CachedRequestState
 from vllm.v1.worker.gpu_model_runner import (AsyncGPUModelRunnerOutput,
                                              GPUModelRunner)
 from vllm.v1.worker.kv_connector_model_runner_mixin import KVConnectorOutput
@@ -327,6 +331,7 @@ class NPUModelRunner(GPUModelRunner):
             vocab_size=self.model_config.get_vocab_size(),
             block_sizes=[self.block_size],
             kernel_block_sizes=[[self.cache_config.block_size]],
+            compress_ratios = [4, 128],
             is_spec_decode=bool(self.vllm_config.speculative_config),
             logitsprocs=build_logitsprocs(
                 self.vllm_config, self.device, self.pin_memory,
@@ -921,14 +926,27 @@ class NPUModelRunner(GPUModelRunner):
                     num_input_tokens if self.pcp_size == 1 else
                     total_num_scheduled_tokens * self.pcp_size -
                     sum(self.pcp_manager.num_pcp_pads_cpu[:num_reqs]))
-                blk_table = self.input_batch.block_table[kv_cache_group_id]
-                blk_table_tensor = blk_table.get_device_tensor()
-                slot_mapping = blk_table.slot_mapping.gpu[:
-                                                          maybe_pcp_full_tokens]
-                if self.pcp_size == 1:
-                    slot_mapping[
-                        total_num_scheduled_tokens:num_input_tokens].fill_(-1)
+                # blk_table 针对不同的压缩比，取两次
+                # slot_mapping 同样两次
+                # 搞个 block_table_map, compress_ratio: block_table
+                # blk_table_list[0]: c4
+                # blk_table_list[1]: c128
+                blk_table_list = self.input_batch.block_table.block_tables
+                # TODO: refactor this logic to MultiGroupBlockTable
+                blk_table_tensor_list = []
+                slot_mapping_list = []
+                for blk_table in blk_table_list:
+                    blk_table_tensor_list.append(blk_table.get_device_tensor(num_reqs))
+
+                    slot_mapping = blk_table.slot_mapping.gpu[:
+                                                        maybe_pcp_full_tokens]
+                    if self.pcp_size == 1:
+                        slot_mapping[
+                            total_num_scheduled_tokens:num_input_tokens].fill_(-1)
+                    slot_mapping_list.append(slot_mapping)
+
             if self.pcp_size * self.dcp_size > 1:
+                # TODO: adapt the logic in cp
                 self.long_seq_metadata = self.pcp_manager.generate_pcp_metadata(
                     total_num_scheduled_tokens, self.query_lens,
                     self.input_batch)
@@ -986,6 +1004,7 @@ class NPUModelRunner(GPUModelRunner):
                     num_reqs = num_reqs_padded
 
             # Make AscendCommonAttentionMetadata
+            # 传入 block_table_map，可以只初始化一次 metadata
             common_attn_metadata = AscendCommonAttentionMetadata(
                 query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
                 query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs + 1],
@@ -996,8 +1015,10 @@ class NPUModelRunner(GPUModelRunner):
                 num_input_tokens=num_input_tokens,
                 actual_seq_lengths_q=self.actual_seq_lengths_q,
                 # TODO: change this to the right block table for linear attn
-                block_table_tensor=blk_table_tensor[:num_reqs],
-                slot_mapping=slot_mapping,
+                block_table_tensor=None,
+                slot_mapping=None,
+                block_table_tensor_list=blk_table_tensor_list,
+                slot_mapping_list=slot_mapping_list,
                 state_ids=state_ids,
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
@@ -1011,6 +1032,7 @@ class NPUModelRunner(GPUModelRunner):
                 encoder_seq_lens_cpu=encoder_seq_lens_cpu)
 
             if self.speculative_config and self.pcp_size * self.dcp_size > 1:
+                # TODO: adapt me to block table list
                 # For pcp + spec decode, we flatten block_table
                 # to avoid irregular attn_mask shape, e.g.,
                 # num_decode_req=2, num_prefill_req=3, num_speculative_tokens=1,
@@ -2367,7 +2389,7 @@ class NPUModelRunner(GPUModelRunner):
         ])
 
         self.may_reinitialize_input_batch(kv_cache_config)
-        # kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
+        kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
         kv_states = self.initialize_kv_state()
 
         if has_kv_transfer_group():
@@ -2519,7 +2541,12 @@ class NPUModelRunner(GPUModelRunner):
                                               Optional[torch.Tensor]]] = {}
         # prefill disaggregation need the addr of cache tensor be aligned with 2M
         alignment = 2 * 1024 * 1024
-        for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
+
+        is_dsv4 = True
+        # 按照已有逻辑，给每一层分配不同大小的 buffer
+        # (c4_kv_tensor, indexer_kv_tensor)
+        # c128_kv_tensor
+        for layer_id, kv_cache_tensor in enumerate(kv_cache_config.kv_cache_tensors):
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
                 layer_name = kv_cache_tensor.shared_by[idx]
@@ -2542,6 +2569,50 @@ class NPUModelRunner(GPUModelRunner):
                         # shared the kvcache between the self_attn specs in the same group
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
+                elif "attn" in layer_name and is_dsv4:
+                    # TODO adapt to original code
+                    current_layer_id = layer_id + 1
+                    if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
+                        c4_kv_tensor = torch.zeros(
+                            kv_cache_tensor.size * 4 // 5,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
+                        indexer_k_tensor = torch.zeros(
+                            kv_cache_tensor.size // 5,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
+                    elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
+                        c128_kv_tensor = torch.zeros(
+                            kv_cache_tensor.size,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
+                    else:
+                        # layer 0,1, still init a tensor size of num_blocks * min_page_size
+                        # TODO check whether we can remove this placeholder tensor
+                        placeholder_tensor = torch.zeros(
+                            kv_cache_tensor.size,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
+
+                    for layer_name_inner in kv_cache_tensor.shared_by:
+                        # shared the kvcache between the self_attn specs in the same group
+                        if ("attn" in layer_name_inner
+                                and "linear_attn" not in layer_name_inner):
+                            current_layer_id = layer_id + 1
+                            if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
+                                kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
+                            elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
+                                kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
+                            else:
+                                kv_cache_raw_tensors[layer_name_inner] = placeholder_tensor
+                            # if "c4" in layer_name_inner:
+                            #     kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
+                            # elif "c128" in layer_name_inner:
+                            #     kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
                 elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # NOTE: We need to init k cache tensor (nope cache tensor in mla) and
@@ -2647,6 +2718,10 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
+        # reshape 成 [num_blocks, 128 // ratio, 1, head_size]
+        c1_layers = [0, 1]
+        c4_layers = list(range(2, 43, 2))
+        c128_layers = list(range(3, 43, 2))
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
             kv_cache_spec = group.kv_cache_spec
@@ -2655,9 +2730,47 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_name in self.runner_only_attn_layers:
                     continue
 
+                if isinstance(kv_cache_spec, CompressAttentionSpec):
+                    # c4_kv_tensor = torch.zeros(
+                    #     kv_cache_tensor.size*4//5
+                    # )
+                    # indexer_k_tensor = torch.zeros(
+                    #     kv_cache_tensor.size//5
+                    # )
+                    dtype = kv_cache_spec.dtype
+                    layer_index = extract_layer_index(layer_name)
+                    if layer_index in c4_layers:
+                        c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
+                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel()
+                        num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                        c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                            num_blocks, kv_cache_spec.block_size // 4,
+                            kv_cache_spec.num_kv_heads,
+                            kv_cache_spec.head_size)
+                        indexer_k_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
+                            num_blocks, kv_cache_spec.block_size // 4,
+                            kv_cache_spec.num_kv_heads,
+                            kv_cache_spec.indexer_head_size)
+                        c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
+                        indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
+                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
+                    elif layer_index in c128_layers:
+                        c128_kv_tensor = kv_cache_raw_tensors[layer_name]
+                        sum_page_size_bytes = c128_kv_tensor.numel()
+                        num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                        # TODO: now the block size of c128 layer is 16. Adapt me later
+                        c128_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                            num_blocks, kv_cache_spec.block_size // 128,
+                            kv_cache_spec.num_kv_heads,
+                            kv_cache_spec.head_size)
+                        c128_kv_cache = c128_kv_tensor.view(dtype).view(c128_kv_cache_shape)
+                        kv_caches[layer_name] = c128_kv_cache
+                    else:
+                        assert layer_index in c1_layers, "layer index out of range"
+                        kv_caches[layer_name] = kv_cache_raw_tensors[layer_name]
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
-                if isinstance(kv_cache_spec, AttentionSpec):
+                elif isinstance(kv_cache_spec, AttentionSpec):
                     raw_dsa_k_tensor = None
                     if self.use_sparse:
                         raw_k_tensor, raw_v_tensor, raw_dsa_k_tensor = kv_cache_raw_tensors[  # type: ignore
@@ -2846,6 +2959,7 @@ class NPUModelRunner(GPUModelRunner):
                     self.vllm_config.speculative_config.num_speculative_tokens
                     if self.vllm_config.speculative_config else 0),
                 kernel_block_sizes=kernel_block_sizes,
+                compress_ratios = [4, 128],
             )
 
     def initialize_attn_backend(self, kv_cache_config: KVCacheConfig) -> None:
@@ -2973,7 +3087,7 @@ class NPUModelRunner(GPUModelRunner):
         kv_cache_spec: dict[str, KVCacheSpec] = {}
         attn_layers = get_layers_from_vllm_config(self.vllm_config,
                                                   AttentionLayerBase)
-        for layer_name, attn_module in attn_layers.items():
+        for layer_id, (layer_name, attn_module) in enumerate(attn_layers.items()):
             if isinstance(attn_module, Attention):
                 if (kv_tgt_layer :=
                         attn_module.kv_sharing_target_layer_name) is not None:
@@ -3026,12 +3140,39 @@ class NPUModelRunner(GPUModelRunner):
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype)
+            # elif isinstance(attn_module, DSAAttention):
+            #     kv_cache_spec[layer_name] = FullAttentionSpec(
+            #             block_size=block_size,
+            #             num_kv_heads=1,
+            #             head_size=attn_module.head_size,
+            #             dtype=self.kv_cache_dtype)
             elif isinstance(attn_module, DSAAttention):
-                kv_cache_spec[layer_name] = FullAttentionSpec(
+                current_layer_id = layer_id + 1
+                if current_layer_id in [1, 2]:
+                    # TODO(lxs): 1-2 layer spec will not allocate pagesize
+                    kv_cache_spec[layer_name] = CompressAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
-                        head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        head_size=512,
+                        dtype=torch.bfloat16,
+                    )
+                elif current_layer_id % 2 == 1:
+                   kv_cache_spec[layer_name] = CompressAttentionSpec(
+                       block_size=block_size,
+                       num_kv_heads=1,
+                       head_size=512,
+                       dtype=torch.bfloat16,
+                       compress_ratio=4,
+                       indexer_head_size=128
+                   )
+                else:
+                    kv_cache_spec[layer_name] = CompressAttentionSpec(
+                        block_size=block_size,
+                        num_kv_heads=1,
+                        head_size=512,
+                        dtype=torch.bfloat16,
+                        compress_ratio=128,
+                    )
 
 
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
@@ -3085,6 +3226,278 @@ class NPUModelRunner(GPUModelRunner):
         with _torch_cuda_wrapper(), _replace_gpu_model_runner_function_wrapper(
                 parent_module_name):
             super().capture_model()
+
+    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
+        """Update the cached states and the persistent batch with the scheduler
+        output.
+
+        The updated states are used by the `_prepare_inputs` function to create
+        the input GPU tensors for the model.
+
+        The SamplingMetadata is updated and copied to the GPU if there is a
+        new/resumed/paused/finished request in the batch.
+        """
+        # Remove finished requests from the cached states.
+        for req_id in scheduler_output.finished_req_ids:
+            self.requests.pop(req_id, None)
+            self.num_prompt_logprobs.pop(req_id, None)
+        # Remove the finished requests from the persistent batch.
+        # NOTE(woosuk): There could be an edge case where finished_req_ids and
+        # scheduled_req_ids overlap. This happens when a request is aborted and
+        # then resubmitted with the same ID. In this case, we treat them as two
+        # distinct requests - clearing the cached states for the first request
+        # and handling the second as a new request.
+        for req_id in scheduler_output.finished_req_ids:
+            self.input_batch.remove_request(req_id)
+
+        # Free the cached encoder outputs.
+        for mm_hash in scheduler_output.free_encoder_mm_hashes:
+            self.encoder_cache.pop(mm_hash, None)
+
+        # Remove the unscheduled requests from the persistent batch.
+        # NOTE(woosuk): The unscheduled requests are either preempted requests
+        # or running requests that are not scheduled in this step. We remove
+        # them from the persistent batch but keep their cached states since
+        # they will be scheduled again sometime in the future.
+        scheduled_req_ids = scheduler_output.num_scheduled_tokens.keys()
+        cached_req_ids = self.input_batch.req_id_to_index.keys()
+        resumed_req_ids = scheduler_output.scheduled_cached_reqs.resumed_req_ids
+        # NOTE(zhuohan): cached_req_ids and resumed_req_ids are usually disjoint,
+        # so `(scheduled_req_ids - resumed_req_ids) == scheduled_req_ids` holds
+        # apart from the forced-preemption case in reset_prefix_cache. And in
+        # that case we include the resumed_req_ids in the unscheduled set so
+        # that they get cleared from the persistent batch before being re-scheduled
+        # in the normal resumed request path.
+        unscheduled_req_ids = cached_req_ids - (scheduled_req_ids - resumed_req_ids)
+        # NOTE(woosuk): The persistent batch optimization assumes that
+        # consecutive batches contain mostly the same requests. If batches
+        # have low request overlap (e.g., alternating between two distinct
+        # sets of requests), this optimization becomes very inefficient.
+        for req_id in unscheduled_req_ids:
+            self.input_batch.remove_request(req_id)
+
+        reqs_to_add: list[CachedRequestState] = []
+        # Add new requests to the cached states.
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            req_id = new_req_data.req_id
+            sampling_params = new_req_data.sampling_params
+            pooling_params = new_req_data.pooling_params
+
+            if (
+                sampling_params
+                and sampling_params.sampling_type == SamplingType.RANDOM_SEED
+            ):
+                generator = torch.Generator(device=self.device)
+                generator.manual_seed(sampling_params.seed)
+            else:
+                generator = None
+
+            if self.is_pooling_model:
+                assert pooling_params is not None
+                task = pooling_params.task
+                assert task is not None, "You did not set `task` in the API"
+
+                model = cast(VllmModelForPooling, self.get_model())
+                to_update = model.pooler.get_pooling_updates(task)
+                to_update.apply(pooling_params)
+
+            req_state = CachedRequestState(
+                req_id=req_id,
+                prompt_token_ids=new_req_data.prompt_token_ids,
+                prompt_embeds=new_req_data.prompt_embeds,
+                mm_features=new_req_data.mm_features,
+                sampling_params=sampling_params,
+                pooling_params=pooling_params,
+                generator=generator,
+                block_ids=new_req_data.block_ids,
+                state_id=new_req_data.state_id,
+                num_computed_tokens=new_req_data.num_computed_tokens,
+                output_token_ids=[],
+                lora_request=new_req_data.lora_request,
+            )
+            self.requests[req_id] = req_state
+
+            if sampling_params and sampling_params.prompt_logprobs is not None:
+                self.num_prompt_logprobs[req_id] = (
+                    self.input_batch.vocab_size
+                    if sampling_params.prompt_logprobs == -1
+                    else sampling_params.prompt_logprobs
+                )
+
+            # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
+            if self.uses_mrope:
+                self._init_mrope_positions(req_state)
+
+            # Only relevant for models using XD-RoPE (e.g, HunYuan-VL)
+            if self.uses_xdrope_dim > 0:
+                self._init_xdrope_positions(req_state)
+
+            reqs_to_add.append(req_state)
+
+        # Update the states of the running/resumed requests.
+        is_last_rank = get_pp_group().is_last_rank
+        req_data = scheduler_output.scheduled_cached_reqs
+
+        # Wait until valid_sampled_tokens_count is copied to cpu,
+        # then use it to update actual num_computed_tokens of each request.
+        valid_sampled_token_count = self._get_valid_sampled_token_count()
+
+        for i, req_id in enumerate(req_data.req_ids):
+            req_state = self.requests[req_id]
+            num_computed_tokens = req_data.num_computed_tokens[i]
+            new_block_ids = req_data.new_block_ids[i]
+            resumed_from_preemption = req_id in req_data.resumed_req_ids
+            num_output_tokens = req_data.num_output_tokens[i]
+            req_index = self.input_batch.req_id_to_index.get(req_id)
+
+            # prev_num_draft_len is used in async scheduling mode with
+            # spec decode. it indicates if need to update num_computed_tokens
+            # of the request. for example:
+            # fist step: num_computed_tokens = 0, spec_tokens = [],
+            # prev_num_draft_len = 0.
+            # second step: num_computed_tokens = 100(prompt lenth),
+            # spec_tokens = [a,b], prev_num_draft_len = 0.
+            # third step: num_computed_tokens = 100 + 2, spec_tokens = [c,d],
+            # prev_num_draft_len = 2.
+            # num_computed_tokens in first step and second step does't contain
+            # the spec tokens length, but in third step it contains the
+            # spec tokens length. we only need to update num_computed_tokens
+            # when prev_num_draft_len > 0.
+            if req_state.prev_num_draft_len:
+                if req_index is None:
+                    req_state.prev_num_draft_len = 0
+                else:
+                    assert self.input_batch.prev_req_id_to_index is not None
+                    prev_req_index = self.input_batch.prev_req_id_to_index[req_id]
+                    num_accepted = valid_sampled_token_count[prev_req_index] - 1
+                    num_rejected = req_state.prev_num_draft_len - num_accepted
+                    num_computed_tokens -= num_rejected
+                    req_state.output_token_ids.extend([-1] * num_accepted)
+
+            # Update the cached states.
+            req_state.num_computed_tokens = num_computed_tokens
+
+            if not is_last_rank:
+                # When using PP, the scheduler sends the sampled tokens back,
+                # because there's no direct communication between the first-
+                # stage worker and the last-stage worker.
+                new_token_ids = req_data.new_token_ids[i]
+                # Add the sampled token(s) from the previous step (if any).
+                # This doesn't include "unverified" tokens like spec tokens.
+                num_new_tokens = (
+                    num_computed_tokens + len(new_token_ids) - req_state.num_tokens
+                )
+                if num_new_tokens == 1:
+                    # Avoid slicing list in most common case.
+                    req_state.output_token_ids.append(new_token_ids[-1])
+                elif num_new_tokens > 0:
+                    req_state.output_token_ids.extend(new_token_ids[-num_new_tokens:])
+            elif num_output_tokens < len(req_state.output_token_ids):
+                # Some output tokens were discarded due to a sync-KV-load
+                # failure. Align the cached state.
+                del req_state.output_token_ids[num_output_tokens:]
+                if req_index is not None:
+                    end_idx = (
+                        self.input_batch.num_prompt_tokens[req_index]
+                        + num_output_tokens
+                    )
+                    self.input_batch.num_tokens[req_index] = end_idx
+                    self.input_batch.num_tokens_no_spec[req_index] = end_idx
+
+            # Update the block IDs.
+            if not resumed_from_preemption:
+                if new_block_ids is not None:
+                    # Append the new blocks to the existing block IDs.
+                    for block_ids, new_ids in zip(req_state.block_ids, new_block_ids):
+                        block_ids.extend(new_ids)
+            else:
+                assert req_index is None
+                assert new_block_ids is not None
+                # The request is resumed from preemption.
+                # Replace the existing block IDs with the new ones.
+                req_state.block_ids = new_block_ids
+
+            if req_index is None:
+                # The request is not in the persistent batch.
+                # The request was either preempted and resumed later, or was not
+                # scheduled in the previous step and needs to be added again.
+
+                if self.use_async_scheduling and num_output_tokens > 0:
+                    # We must recover the output token ids for resumed requests in the
+                    # async scheduling case, so that correct input_ids are obtained.
+                    resumed_token_ids = req_data.all_token_ids[req_id]
+                    req_state.output_token_ids = resumed_token_ids[-num_output_tokens:]
+
+                reqs_to_add.append(req_state)
+                continue
+
+            # Update the persistent batch.
+            self.input_batch.num_computed_tokens_cpu[req_index] = num_computed_tokens
+            if new_block_ids is not None:
+                # TODO(wjq): check is num_tokens
+                num_tokens = (
+                    num_computed_tokens + len(req_data.new_token_ids[i]) - req_state.num_tokens
+                )
+                self.input_batch.block_table.append_row(new_block_ids, req_index, num_tokens)
+
+            # For the last rank, we don't need to update the token_ids_cpu
+            # because the sampled tokens are already cached.
+            if not is_last_rank:
+                # Add new_token_ids to token_ids_cpu.
+                start_token_index = num_computed_tokens
+                end_token_index = num_computed_tokens + len(new_token_ids)
+                self.input_batch.token_ids_cpu[
+                    req_index, start_token_index:end_token_index
+                ] = new_token_ids
+                self.input_batch.num_tokens_no_spec[req_index] = end_token_index
+                self.input_batch.num_tokens[req_index] = end_token_index
+
+            # Add spec_token_ids to token_ids_cpu.
+            spec_token_ids = scheduler_output.scheduled_spec_decode_tokens.get(
+                req_id, []
+            )
+            num_spec_tokens = len(spec_token_ids)
+            # For async scheduling, token_ids_cpu assigned from
+            # spec_token_ids are placeholders and will be overwritten in
+            # _prepare_input_ids.
+            if num_spec_tokens:
+                start_index = self.input_batch.num_tokens_no_spec[req_index]
+                end_token_index = start_index + num_spec_tokens
+                self.input_batch.token_ids_cpu[
+                    req_index, start_index:end_token_index
+                ] = spec_token_ids
+                # NOTE(woosuk): `num_tokens` here may include spec tokens.
+                self.input_batch.num_tokens[req_index] += num_spec_tokens
+
+            # When speculative decoding is used with structured output,
+            # the scheduler can drop draft tokens that do not
+            # conform to the schema. This can result in
+            # scheduler_output.scheduled_spec_decode_tokens being empty,
+            # even when speculative decoding is enabled.
+            self.input_batch.spec_token_ids[req_index].clear()
+            self.input_batch.spec_token_ids[req_index].extend(spec_token_ids)
+
+            # there are no draft tokens with async scheduling,
+            # we clear the spec_decoding info in scheduler_output and
+            # use normal sampling but rejection_sampling.
+            if self.use_async_scheduling:
+                req_state.prev_num_draft_len = num_spec_tokens
+                if num_spec_tokens and self._draft_token_ids is None:
+                    scheduler_output.total_num_scheduled_tokens -= num_spec_tokens
+                    scheduler_output.num_scheduled_tokens[req_id] -= num_spec_tokens
+                    scheduler_output.scheduled_spec_decode_tokens.pop(req_id, None)
+        # Add the new or resumed requests to the persistent batch.
+        # The smaller empty indices are filled first.
+        for request in reqs_to_add:
+            self.input_batch.add_request(request)
+
+        # Condense the batched states if there are gaps left by removed requests
+        self.input_batch.condense()
+        # Allow attention backend to reorder the batch, potentially
+        self._may_reorder_batch(scheduler_output)
+        # Refresh batch metadata with any pending updates.
+        self.input_batch.refresh_metadata()
+
 
     def _prepare_multimodal_fields(self):
         """
