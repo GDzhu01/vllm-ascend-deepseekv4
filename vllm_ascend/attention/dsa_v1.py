@@ -927,12 +927,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         output: Optional[torch.Tensor] = None,
         kv_state: Tuple[torch.Tensor] = None,
     ) -> torch.Tensor:
-        return self._forward_single_op(self,
+        return self._forward_single_op(
             hidden_states,
             kv_cache,
             attn_metadata,
             kv_state,
-            True
         )
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
@@ -1208,7 +1207,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         #     o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
         # TODO: O inverse is True
         o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        o_pe = self.rope_single(o_pe, cos, sin)
+        o_pe = self.rope_single(o_pe, cos, sin, True)
         o = torch.cat([o_nope, o_pe], dim=-1)
         topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
 
