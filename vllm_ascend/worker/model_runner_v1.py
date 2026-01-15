@@ -2748,7 +2748,7 @@ class NPUModelRunner(GPUModelRunner):
                     layer_index = extract_layer_index(layer_name)
                     if layer_index in c4_layers:
                         c4_kv_tensor, indexer_k_tensor, indexer_k_scale_tensor = kv_cache_raw_tensors[layer_name]
-                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel() + indexer_k_scale_tensor.numel()
+                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel()
                         num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
                         c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks, kv_cache_spec.block_size // 4,
