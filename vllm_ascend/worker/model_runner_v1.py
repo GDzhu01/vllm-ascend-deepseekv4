@@ -515,6 +515,9 @@ class NPUModelRunner(GPUModelRunner):
 
         req_indices = np.repeat(self.arange_np[:num_reqs],
                                 num_scheduled_tokens)
+        print(30*"=")
+        print(f"req_indices: {req_indices}, num_scheduled_tokens: {num_scheduled_tokens}")
+
         if not scheduler_output.scheduled_spec_decode_tokens:
             num_valid_tokens = np.array(tokens, dtype=np.int32)
         else:
@@ -543,18 +546,28 @@ class NPUModelRunner(GPUModelRunner):
                out=positions_np)
 
         positions_compress = []
+        positions_len_compress = []
         compress_ratios = [4, 128]
+        print(30*"=")
         for compress_ratio in compress_ratios:
-            positions_compress.append(
-                self.batch_get_compressed_pos(
+            positions_compress_element, positions_len_compress_element = self.batch_get_compressed_pos(
                     self.input_batch.num_computed_tokens_cpu[:num_reqs],
                     num_scheduled_tokens[:num_reqs],
                     compress_ratio
                 )
-            )
+            positions_compress.append(positions_compress_element)
+            positions_len_compress.append(positions_len_compress_element)
+        print(f"num_computed_tokens_cpu: {self.input_batch.num_computed_tokens_cpu[:num_reqs]} \num_scheduled_tokens: {num_scheduled_tokens[:num_reqs]}, \npositions_len_compress: {positions_len_compress}")
 
+        print(f"req_indices: {req_indices} \npositions_np: {positions_np} \npositions_compress: {positions_compress}")
+        req_indices_compress4 = np.repeat(self.arange_np[:num_reqs],
+                                positions_len_compress[0])
+        req_indices_compress128 = np.repeat(self.arange_np[:num_reqs],
+                                positions_len_compress[1])
+        req_indices_compress = [req_indices_compress4, req_indices_compress128]
+        print(30*"=")
         self.input_batch.block_table.compute_slot_mapping(
-            req_indices, positions_np, positions_compress)
+            req_indices, positions_np, positions_compress, req_indices_compress)
         self.input_batch.block_table.commit_slot_mapping(
             total_num_scheduled_tokens)
         # for pcp, prefill mtp should use origin scheduleroutput ,
@@ -975,12 +988,13 @@ class NPUModelRunner(GPUModelRunner):
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
 
-            # get kv_state id
-            state_ids = torch.tensor(
-                [self.requests[req_id].state_id for req_id in req_ids],
-                dtype=torch.int32,
-                device=self.device,
-            )
+            # TODO: FIXME when adapting states cache
+            # # get kv_state id
+            # state_ids = torch.tensor(
+            #     [self.requests[req_id].state_id for req_id in req_ids],
+            #     dtype=torch.int32,
+            #     device=self.device,
+            # )
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1032,7 +1046,7 @@ class NPUModelRunner(GPUModelRunner):
                 slot_mapping=None,
                 block_table_tensor_list=blk_table_tensor_list,
                 slot_mapping_list=slot_mapping_list,
-                state_ids=state_ids,
+                # state_ids=state_ids,
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
@@ -2403,7 +2417,10 @@ class NPUModelRunner(GPUModelRunner):
 
         self.may_reinitialize_input_batch(kv_cache_config)
         kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
+        print(30*"=", f"after initialize_kv_cache_tensors")
+
         kv_states = self.initialize_kv_state()
+        print(30*"=", f"after initialize_kv_state")
 
         if has_kv_transfer_group():
             get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
@@ -2514,9 +2531,12 @@ class NPUModelRunner(GPUModelRunner):
         """
         # Initialize the memory buffer for KV cache
         kv_cache_raw_tensors = self._allocate_kv_cache_tensors(kv_cache_config)
+        print(30*"=", f"after _allocate_kv_cache_tensors -- kv_cache_raw_tensors:{kv_cache_raw_tensors}")
+
         # Change the memory buffer to the desired shape
         kv_caches = self._reshape_kv_cache_tensors(kv_cache_config,
                                                    kv_cache_raw_tensors)
+        print(30*"=", f"after _reshape_kv_cache_tensors")
 
         # Set up cross-layer KV cache sharing
         for layer_name, target_layer_name in self.shared_kv_cache_layers.items(
@@ -2530,6 +2550,8 @@ class NPUModelRunner(GPUModelRunner):
         bind_kv_cache(kv_caches,
                       self.compilation_config.static_forward_context,
                       self.kv_caches, num_attn_module)
+        print(30*"=", f"after bind_kv_cache")
+
         return kv_caches
 
     def _allocate_kv_cache_tensors(
@@ -2559,10 +2581,11 @@ class NPUModelRunner(GPUModelRunner):
         # 按照已有逻辑，给每一层分配不同大小的 buffer
         # (c4_kv_tensor, indexer_kv_tensor)
         # c128_kv_tensor
-        for layer_id, kv_cache_tensor in enumerate(kv_cache_config.kv_cache_tensors):
+        for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
                 layer_name = kv_cache_tensor.shared_by[idx]
+                exact_layer_id = extract_layer_index(layer_name)
                 if "linear_attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # for mamba linear attention
@@ -2583,9 +2606,10 @@ class NPUModelRunner(GPUModelRunner):
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
                 elif "attn" in layer_name and is_dsv4:
+                    print(30*"=", f"kv_cache_tensor: {kv_cache_tensor}")
+                    print(30*"=", f"exact_layer_id: {exact_layer_id}, layer_name: {layer_name} kv_cache_tensor.size: {kv_cache_tensor.size}")
                     # TODO adapt to original code
-                    current_layer_id = layer_id + 1
-                    if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
+                    if exact_layer_id % 2 == 0:
                         c4_kv_tensor = torch.zeros(
                             kv_cache_tensor.size * 4 // 5,
                             dtype=torch.int8,
@@ -2596,33 +2620,15 @@ class NPUModelRunner(GPUModelRunner):
                             dtype=torch.int8,
                             device=self.device,
                         )
-                    elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
+                        kv_cache_raw_tensors[layer_name] = (c4_kv_tensor, indexer_k_tensor)
+                    elif exact_layer_id % 2 != 0:
                         c128_kv_tensor = torch.zeros(
                             kv_cache_tensor.size,
                             dtype=torch.int8,
                             device=self.device,
                         )
-                    else:
-                        # layer 0,1, still init a tensor size of num_blocks * min_page_size
-                        # TODO check whether we can remove this placeholder tensor
-                        placeholder_tensor = torch.zeros(
-                            kv_cache_tensor.size,
-                            dtype=torch.int8,
-                            device=self.device,
-                        )
+                        kv_cache_raw_tensors[layer_name] = c128_kv_tensor
 
-                    for layer_name_inner in kv_cache_tensor.shared_by:
-                        # shared the kvcache between the self_attn specs in the same group
-                        if ("attn" in layer_name_inner
-                                and "linear_attn" not in layer_name_inner):
-                            current_layer_id = layer_id + 1
-                            if current_layer_id % 2 == 1 and current_layer_id not in [0, 1]:
-                                kv_cache_raw_tensors[layer_name_inner] = (c4_kv_tensor, indexer_k_tensor)
-                            elif current_layer_id % 2 == 0 and current_layer_id not in [0, 1]:
-                                # TODO(lxs): may replace c128_kv_tensor by tuple (c128_kv_tensor,)
-                                kv_cache_raw_tensors[layer_name_inner] = c128_kv_tensor
-                            else:
-                                kv_cache_raw_tensors[layer_name_inner] = placeholder_tensor
                 elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # NOTE: We need to init k cache tensor (nope cache tensor in mla) and
@@ -2707,6 +2713,7 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_name in self.runner_only_attn_layers:
                     continue
                 layer_names.add(layer_name)
+        print(30*"=", f"layer_names: {layer_names}, set(kv_cache_raw_tensors.keys(): {set(kv_cache_raw_tensors.keys())}")
         assert layer_names == set(kv_cache_raw_tensors.keys(
         )), "Some layers are not correctly initialized"
 
@@ -2729,42 +2736,52 @@ class NPUModelRunner(GPUModelRunner):
             corresponding memory buffer for KV cache.
         """
         # reshape 成 [num_blocks, 128 // ratio, 1, head_size]
-        c1_layers = [0, 1]
-        c4_layers = list(range(2, 43, 2))
-        c128_layers = list(range(3, 43, 2))
+
+        # TODO(cmq): modify 6 to num_layers
+        c4_layers = list(range(0, 6, 2))
+        c128_layers = list(range(1, 7, 2))
+
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
             kv_cache_spec = group.kv_cache_spec
             attn_backend = group.backend
             for layer_name in group.layer_names:
+                print(30*"=", f"layer_name: {layer_name}")
                 if layer_name in self.runner_only_attn_layers:
                     continue
+                print(30*"=", f"kv_cache_spec:{kv_cache_spec}")
 
                 if isinstance(kv_cache_spec, CompressAttentionSpec):
-                    # c4_kv_tensor = torch.zeros(
-                    #     kv_cache_tensor.size*4//5
-                    # )
-                    # indexer_k_tensor = torch.zeros(
-                    #     kv_cache_tensor.size//5
-                    # )
                     dtype = kv_cache_spec.dtype
                     layer_index = extract_layer_index(layer_name)
+                    print(30*"=", f"layer_index: {layer_index}")
+
                     if layer_index in c4_layers:
+                        print(30*"=", f"in c4_layers branch, layer_index: {layer_index}")
+                        print(30*"=", f"kv_cache_raw_tensors[layer_name]: {kv_cache_raw_tensors[layer_name]}")
+
                         c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
+                        print(30*"=", f"c4_kv_tensor: {c4_kv_tensor}, indexer_k_tensor:{indexer_k_tensor}")
                         sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel()
+                        print(30*"=", f"after numel")
+
                         num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
                         c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.head_size)
+                        print(30*"=", f"after c4_kv_cache_shape")
                         indexer_k_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.indexer_head_size)
+
+                        print(30*"=", f"before 4 view")
                         c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
                         indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
                         kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
                     elif layer_index in c128_layers:
+                        print(30*"=", f"in c128_layers branch")
                         c128_kv_tensor = kv_cache_raw_tensors[layer_name]
                         sum_page_size_bytes = c128_kv_tensor.numel()
                         num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
@@ -2773,11 +2790,10 @@ class NPUModelRunner(GPUModelRunner):
                             num_blocks // 128, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.head_size)
+                        print(30*"=", f"before 128 view")
                         c128_kv_cache = c128_kv_tensor.view(dtype).view(c128_kv_cache_shape)
                         kv_caches[layer_name] = c128_kv_cache
-                    else:
-                        assert layer_index in c1_layers, "layer index out of range"
-                        kv_caches[layer_name] = kv_cache_raw_tensors[layer_name]
+
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
                 elif isinstance(kv_cache_spec, AttentionSpec):
@@ -3151,17 +3167,10 @@ class NPUModelRunner(GPUModelRunner):
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype)
             elif isinstance(attn_module, DSAAttention):
-                current_layer_id = layer_id + 1
-                if current_layer_id in [1, 2]:
-                    # TODO(lxs): 1-2 layer spec will not allocate pagesize
-                    kv_cache_spec[layer_name] = Compress4AttentionSpec(
-                        block_size=block_size,
-                        num_kv_heads=1,
-                        head_size=512,
-                        dtype=torch.bfloat16,
-                    )
-                elif current_layer_id % 2 == 1:
-                   kv_cache_spec = Compress4AttentionSpec(
+                if layer_id in [0, 1]:
+                    self.runner_only_attn_layers.add(layer_name)
+                elif layer_id % 2 == 0:
+                   kv_cache_spec[layer_name] = Compress4AttentionSpec(
                        block_size=block_size,
                        num_kv_heads=1,
                        head_size=512,
@@ -3169,8 +3178,8 @@ class NPUModelRunner(GPUModelRunner):
                        compress_ratio=4,
                        indexer_head_size=128
                    )
-                else:
-                    kv_cache_spec = Compress128AttentionSpec(
+                elif layer_id % 2 != 0:
+                    kv_cache_spec[layer_name] = Compress128AttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=512,
@@ -3303,6 +3312,8 @@ class NPUModelRunner(GPUModelRunner):
                 model = cast(VllmModelForPooling, self.get_model())
                 to_update = model.pooler.get_pooling_updates(task)
                 to_update.apply(pooling_params)
+                
+            print(f"req_id: {req_id}, block_id: {new_req_data.block_ids}")
 
             req_state = CachedRequestState(
                 req_id=req_id,
@@ -3534,7 +3545,7 @@ class NPUModelRunner(GPUModelRunner):
         old: np.ndarray,
         new: np.ndarray,
         ratio: int
-    ) -> list[np.ndarray]:
+    ) -> (np.ndarray, np.ndarray):
         """
         多请求批量版：old/new都是np数组，为每个请求独立计算压缩pos
         :param old: 多请求历史token数，shape=[num_reqs,]
@@ -3550,9 +3561,13 @@ class NPUModelRunner(GPUModelRunner):
         len_new = (old + new) // ratio
         l_diff = len_new - len_old
         res = []
+        res_len = []
         for i, l in enumerate(l_diff):
-            res.append(np.arange(len_old[i], len_old[i] + l, dtype=np.int32))
-        return res
+            res.append(np.arange(len_old[i], len_old[i] + l))
+            res_len.append(l)
+        res = np.concatenate(res)
+        res_len = np.array(res_len)
+        return res, res_len
 
 @contextmanager
 def _torch_cuda_wrapper():

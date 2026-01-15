@@ -21,7 +21,7 @@ class BlockTable:
                  num_speculative_tokens: int = 0,
                  compress_ratio: int = 1):
         self.max_num_reqs = max_num_reqs
-        self.max_num_blocks_per_req = max_num_blocks_per_req
+        self.max_num_blocks_per_req = max_num_blocks_per_req // compress_ratio
         self.max_num_batched_tokens = max_num_batched_tokens // compress_ratio
         self.pin_memory = pin_memory
         self.device = device
@@ -130,7 +130,7 @@ class BlockTable:
         self.block_table.np[[src, tgt]] = self.block_table.np[[tgt, src]]
 
     def compute_slot_mapping(self, req_indices: np.ndarray,
-                             positions: np.ndarray, positions_compress: np.ndarray = None) -> None:
+                             positions: np.ndarray, positions_compress: np.ndarray = None, req_indices_compress: np.ndarray = None,) -> None:
         # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
         # -> [0, 0, K, K, K + 1, K + 1, K + 2, 2 * K, 2 * K, 2 * K + 1]
         # where K is the max_num_blocks_per_req and the block size is 2.
@@ -178,25 +178,30 @@ class BlockTable:
                 mask, slot_mapping, -1)
         else:
             block_table_indices = (
-                    req_indices * self.max_num_blocks_per_req + positions // self.block_size
+                    req_indices_compress * self.max_num_blocks_per_req + positions_compress // self.block_size
             )
             # block_table_indices: [[0]+[0,0,0,0, 1,1,1,1]]
 
             block_numbers = self.block_table.np.ravel()[block_table_indices]
             # block_numbers: [2,2,2,2, 5,5,5,5]
 
-            block_offsets = positions % self.block_size
+            block_offsets = positions_compress % self.block_size
             # block_offsets: [0,0, 1,1, 0,0, 1,1]
             # 压缩完后的 slot mapping 要去重
             # TODO(cmq): 把这边的逻辑都搬到 vllm-ascend 的 blocktable 去
             # 1. 不满压缩比的时候，给 state_manager 放
             # 2. state_manager 那边放满的时候，给 compress kv 放
             # 3. overlap 要考虑
+            print(30*"=")
+            print(f"compress_ratio: {self.compress_ratio}")
+
+            print(f"block_numbers: {block_numbers}, \nblock_size: {self.block_size}, \nblock_offsets: {block_offsets}, \nself.slot_mapping.np: {self.slot_mapping.np[: req_indices.shape[0]]}")
             np.add(
                 block_numbers * self.block_size,  # [4,4,4,4, 10,10,10,10]
                 block_offsets,  # [4,4,5,5, 10,10,11,11]
-                out=self.slot_mapping.np[: req_indices.shape[0]],
+                out=self.slot_mapping.np[: req_indices_compress.shape[0]],
             )
+            print(f"self.slot_mapping.np: {self.slot_mapping.np[: req_indices_compress.shape[0]]}")
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)
@@ -320,9 +325,10 @@ class MultiGroupBlockTable:
         req_indices: np.ndarray,
         positions: np.ndarray,
         positions_compress: list[np.ndarray] = None,
+        req_indices_compress: list[np.ndarray] = None,
     ) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.compute_slot_mapping(req_indices, positions, positions_compress[i])
+            block_table.compute_slot_mapping(req_indices, positions, positions_compress[i], req_indices_compress[i])
 
     def commit_block_table(self, num_reqs: int) -> None:
         for block_table in self.block_tables:

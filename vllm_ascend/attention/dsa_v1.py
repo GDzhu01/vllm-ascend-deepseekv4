@@ -76,6 +76,11 @@ class AscendDSABackend(AttentionBackend):
     def get_impl_cls() -> Type["DSAAttentionImpl"]:
         return AscendDSAImpl
 
+    @staticmethod
+    def get_supported_block_size() -> list[int]:
+        return [128]
+
+
 @dataclass
 class ChunkedContextMetadata:
     # New for MLA (compared to FlashAttention)
