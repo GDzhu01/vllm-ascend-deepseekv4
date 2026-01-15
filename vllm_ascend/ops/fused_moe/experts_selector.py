@@ -19,7 +19,6 @@ from typing import Callable, Optional
 import torch
 
 from vllm_ascend.utils import get_weight_prefetch_method
-import custom_ops
 
 
 def select_experts(hidden_states: torch.Tensor,
@@ -228,7 +227,11 @@ def _select_experts_with_fusion_ops(
     if scoring_func == "sqrtsoftplus":
         if input_ids is not None:
             input_ids=input_ids.to(torch.int64)
-        tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
+            tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
+            # tid2eid_ones = 
+        else:
+            tid2eid_ones = None
+        # print(f'softplussssssssssssssssssssssssssssssssssssssssssssssssssssssssssss')
         topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
             x=router_logits,                        # 输入张量
             k=top_k,                        # 选取的专家数量

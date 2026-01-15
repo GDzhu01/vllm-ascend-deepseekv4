@@ -39,7 +39,7 @@ from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
-from vllm_ascend.ops.pypto.attention_post_impl import npu_attention_post_v4
+from vllm_ascend.ops.pypto import AttentionPostV4
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -733,6 +733,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.wkv = self.compressor.wkv
             self.wgate = self.compressor.wgate
             self.compress_norm = self.compressor.norm
+        self.npu_attention_post_func = AttentionPostV4()
 
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
@@ -826,14 +827,14 @@ class AscendDSAImpl(DSAAttentionImpl):
             o_proj_input[:decode_tokens] = output_decode
 
         # zyl remove
-        o_proj_input = o_proj_input.view(-1, 64, 512)
+        o_proj_input = o_proj_input.view(-1, self.n_local_groups, 512)
         cos = cos.view(-1,cos.shape[-1])
         sin = sin.view(-1,sin.shape[-1])
-        wo_a = self.wo_a.weight.reshape(8,4096,1024)
+        wo_a = self.wo_a.weight.reshape(self.n_local_groups,self.o_lora_rank,-1)
         wo_b = self.wo_b.weight.reshape(8192,4096)
         # attn post
         # print(f'****************************cos = {cos.shape}')
-        output[...] = npu_attention_post_v4(o_proj_input, cos, sin, wo_a, wo_b)
+        output[...] = self.npu_attention_post_func(o_proj_input, cos, sin, wo_a, wo_b)
 
         return output_padded
     

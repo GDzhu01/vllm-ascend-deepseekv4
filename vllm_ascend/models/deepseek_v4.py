@@ -102,8 +102,8 @@ elif current_platform.is_xpu():
 
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
-from vllm_ascend.ops.pypto.hc_pre_impl import npu_hc_pre
-from vllm_ascend.ops.pypto.hc_post_impl import npu_hc_post
+from vllm_ascend.ops.pypto import npu_hc_pre,npu_hc_post,HC_PRE,HC_POST
+
 logger = init_logger(__name__)
 
 
@@ -582,9 +582,7 @@ class DeepseekV4Attention(nn.Module):
         hidden_states: torch.Tensor,
         llama_4_scaling: torch.Tensor | None,
     ) -> torch.Tensor:
-        # return self.dsa_attn(positions, hidden_states, llama_4_scaling)
-        
-        return hidden_states
+        return self.dsa_attn(positions, hidden_states, llama_4_scaling)
 
 
 class DeepseekV2DecoderLayer(nn.Module):
@@ -649,12 +647,15 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc,dtype = torch.float32))
         self.hc_attn_scale = nn.Parameter(torch.empty(3,dtype = torch.float32))
         self.hc_ffn_scale = nn.Parameter(torch.empty(3,dtype = torch.float32))
+        self.hc_pre_func = HC_PRE()
+        self.hc_post_func = HC_POST()
         
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         if (use_pypto := 1):
-            y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
+            # y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
+            y, post,comb = self.hc_pre_func(x, hc_fn.bfloat16(), hc_scale, hc_base)
             return y.to(dtype), post, comb
         x = x.flatten(1).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
@@ -666,11 +667,8 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
         if (use_pypto := 1):
-            print("================================== x shape is ", x.shape)
-            print("================================== residual shape is ", residual.shape)
-            print("================================== post shape is ", post.shape)
-            print("================================== comb shape is ", comb.shape)
-            y = npu_hc_post(x, residual.float(), post, comb)
+            y = self.hc_post_func(x, residual.float(), post, comb)
+            # y = npu_hc_post(x, residual.float(), post, comb)
             return y.type_as(x)
         #x=(b,s,h)  residual=(b,s,c, h), post=(b,s,c), comb=(b,s,c,c)
         y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
@@ -800,7 +798,8 @@ class DeepseekV4Model(nn.Module):
             residual = intermediate_tensors["residual"]
 
         # Compute llama 4 scaling once per forward pass if enabled
-        llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
+        llama_4_scaling_config = None
+        # llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
         llama_4_scaling: torch.Tensor | None
         if llama_4_scaling_config is not None:
             llama_4_scaling = _get_llama_4_scaling(

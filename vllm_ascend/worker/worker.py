@@ -21,6 +21,8 @@ import copy
 import gc
 from types import NoneType
 from typing import Optional
+import importlib.util
+import importlib
 
 import torch
 import torch.nn as nn
@@ -93,6 +95,12 @@ class NPUWorker(WorkerBase):
         """Initialize the worker for Ascend."""
         # register patch for vllm
         from vllm_ascend.utils import adapt_patch
+        pkg_name = 'custom_ops'
+        if importlib.util.find_spec(pkg_name) is not None:
+            custom_ops = importlib.import_module(pkg_name)  # 等价于 import numpy
+            print("import ok:", custom_ops)
+        else:
+            print("not found:", pkg_name)
         adapt_patch()
         # Import _inductor for graph mode execution with triton
         # This lazy import avoids torch_npu re-initialization in patch

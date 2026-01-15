@@ -57,16 +57,32 @@ class TestMoeGatingTopk(TestBase):
         self.norm_type_int = 2 # 0-Softmax，1-Sigmoid，2-Softplus
 
     def test_cumsum_group_list_with_type_0(self):
+
         torch.npu.set_device(0)
-        scores = torch.randn((self.input_size,self.n_routed_experts), dtype=torch.bfloat16).npu()
+        scores = torch.randn((self.input_size,self.n_routed_experts), dtype=torch.float32).npu()
         scores_ref = scores.clone()
         input_ids = torch.randint(0, self.vocab_size, (self.input_size,),dtype=torch.int64).npu()
         if self.use_hash:
             tid2eid = torch.empty(self.vocab_size, self.n_activated_experts, dtype=torch.int32).npu()
             bias = None
         else:
-            bias = torch.empty(self.n_routed_experts, dtype=torch.bfloat16).npu()
+            bias = torch.empty(self.n_routed_experts, dtype=torch.float32).npu()
 
+        ns = torch.ops.custom
+        ops = [name for name in dir(ns) if not name.startswith("_")]
+        print(f'ops: {ops}')
+        for op_name in sorted(ops):
+            op = getattr(ns, op_name)
+            print(f"\n== custom::{op_name} ==")
+            # 有些对象能 dir 出 overload 名字
+            overloads = [n for n in dir(op) if not n.startswith("_")]
+            # 过滤掉一些明显不是 overload 的属性（经验规则，不保证 100%）
+            overloads = [n for n in overloads if n not in ("default",)]
+            if hasattr(op, "default"):
+                print("  - overload: default")
+            for ov in overloads:
+                print(f"  - overload: {ov}")
+        
         weights, indices, _ = torch.ops.custom.npu_moe_gating_top_k(
             x=scores, 
             k=self.n_activated_experts,
