@@ -927,16 +927,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         output: Optional[torch.Tensor] = None,
         kv_state: Tuple[torch.Tensor] = None,
     ) -> torch.Tensor:
+        assert output is not None, "Output tensor must be provided."
+        if attn_metadata is None:
+            # Profiling run.
+            return output.fill_(0)
         return self._forward_single_op(
             hidden_states,
             kv_cache,
             attn_metadata,
             kv_state,
         )
-        assert output is not None, "Output tensor must be provided."
-        if attn_metadata is None:
-            # Profiling run.
-            return output.fill_(0)
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
