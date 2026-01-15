@@ -420,6 +420,8 @@ class Compressor(nn.Module):
             return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
 
+        self.kv_cache = None
+
     def overlap_transform(self, tensor: torch.Tensor, value=0):
         # tensor: [b,s,r,2d]
         b, s, _, _ = tensor.size()
