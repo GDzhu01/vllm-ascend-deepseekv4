@@ -286,9 +286,10 @@ class NPUWorker(WorkerBase):
         c128_coff = 1
         c128_compress_ratio = 128
         dtype_size = 4  # torch.float32
+        sliding_window_multiple = 2
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]
-        swa_memory = max_num_reqs * window_size * head_dim * dtype_size * num_layers
+        swa_memory = (max_num_reqs + 1) * sliding_window_multiple * window_size * head_dim * dtype_size * num_layers
         
         # compress: [args.max_batch_size, coff * compress_ratio, coff * self.head_dim], dtype=torch.float32
         # C4 compressor memory

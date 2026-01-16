@@ -359,6 +359,9 @@ class NPUModelRunner(GPUModelRunner):
         self.intermediate_tensors: IntermediateTensors | None = None
         self.reorder_batch_threshold: int | None = None
         self.long_seq_metadata = None
+        self.sliding_window_multiple = 2
+        self.swa_slot_mapping = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
+        self.swa_block_table = self._make_buffer((self.max_num_reqs, self.sliding_window_multiple), dtype=torch.int32)
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -593,6 +596,16 @@ class NPUModelRunner(GPUModelRunner):
             # Eager mode.
             num_input_tokens = total_num_scheduled_tokens
         self.query_lens = torch.from_numpy(num_scheduled_tokens)
+
+        # compute slot_mapping and block_table of sliding window
+        state_ids_np = np.array(
+            [self.requests[req_id].state_id for req_id in req_ids],
+        )
+        swa_slot_mapping, swa_block_table = self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
+        self.swa_slot_mapping.np[:total_num_scheduled_tokens] = swa_slot_mapping
+        self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
+        self.swa_block_table.np[:num_reqs] = swa_block_table
+        self.swa_block_table.copy_to_gpu(num_reqs)
 
         # Get info across DP ranks.
         # NOTE: maybe_padded_num_tokens is only used when using TorchAir with DP,
@@ -1020,6 +1033,8 @@ class NPUModelRunner(GPUModelRunner):
                 block_table_tensor_list=blk_table_tensor_list,
                 slot_mapping_list=slot_mapping_list,
                 state_ids=state_ids,
+                swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
+                swa_block_table=self.swa_block_table.gpu[:num_reqs],
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
@@ -2427,7 +2442,7 @@ class NPUModelRunner(GPUModelRunner):
             for layer_name in group.layer_names:
                 layer_index = extract_layer_index(layer_name)
                 sliding_window = _get_aligned_tensor(
-                    torch.Size([self.max_num_reqs, window_size, head_dim]),
+                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
                     torch.float32,
                     alignment,
                 )
@@ -3525,6 +3540,72 @@ class NPUModelRunner(GPUModelRunner):
                             tensor,
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
+
+
+    def _compute_swa_meta(
+        self,
+        state_ids: np.ndarray,
+        positions: np.ndarray,
+        query_lens: np.ndarray,
+    ):
+        """
+        sliding_window: [(max_num_reqs + 1) * window_multiple(2), window_size(128), dim(512)]
+        Each request will be allocated to one state containing two continuous blocks.
+        Similar to kv_cache blocks, state 0 (block 0 & 1) keeps empty.
+        For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
+        [req0 -> state 2 (block 4, 5), req1 -> state 4 (block 8, 9)]
+
+                    |<-------- 128 -------->|<-------- 128 -------->|
+                    -------------------------------------------------
+        (state_0)   | block0 (keeps empty)  | block1 (keeps empty)  |
+                    -------------------------------------------------
+        (state_1)   | block2                | block3                |
+                    -------------------------------------------------
+        (state_2)   | block4 req0           | block5 req0           |
+                    -------------------------------------------------
+        (state_3)   | block6                | block7                |
+                    -------------------------------------------------
+        (state_4)   | block8 req1           | block9 req1           |
+                    -------------------------------------------------
+
+        """
+        num_reqs = state_ids.shape[0]
+        window_size = 128
+        window_multiple = self.sliding_window_multiple # 2 * window_size for each req
+
+        # similar to kv_cache slot_mapping,
+        # slot = base (of block_id) + offset (inside block)
+        base = state_ids.repeat(query_lens) * window_size * window_multiple
+        offset = positions % (window_size * window_multiple)
+        swa_slot_mapping = base + offset
+
+        # set slot of out of window tokens of prefill to -1
+        # if kernel support overwrite, we can remove this
+        out_of_window_mask_list = []
+        for query_len in query_lens:
+            if query_len <= window_size:
+                out_of_window_mask_list.append(np.repeat(0, query_len))
+            else:
+                out_of_window_mask_list.append(np.repeat(1, query_len - window_size))
+                out_of_window_mask_list.append(np.repeat(0, window_size))
+        out_of_window_mask = np.concatenate(out_of_window_mask_list)
+        swa_slot_mapping = np.where(out_of_window_mask, -1, swa_slot_mapping)
+
+        # generate state table
+        query_end_index = query_lens.cumsum() - 1
+        query_end_position = positions[query_end_index]
+        swa_block_table = np.zeros([num_reqs, window_multiple], dtype=np.int32)
+        for i in range(num_reqs):
+            base_block = state_ids[i] * window_multiple
+            if query_end_position[i] < window_size:
+                swa_block_table[i][0] = base_block
+            else:
+                tail_block_offset = query_end_position[i] // window_size % window_multiple
+                head_block_offset = (tail_block_offset + 1) % window_multiple
+                swa_block_table[i][0] = base_block + head_block_offset
+                swa_block_table[i][1] = base_block + tail_block_offset
+
+        return swa_slot_mapping, swa_block_table
 
 
 @contextmanager

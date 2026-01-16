@@ -289,6 +289,8 @@ class AscendDSAMetadata:
     sin: torch.Tensor
     cos: torch.Tensor
     block_table_list: list[torch.Tensor]
+    swa_slot_mapping: torch.Tensor
+    swa_block_table: torch.Tensor
 
     # New for MLA (compared to FlashAttention)
     # For handling prefill decode split
@@ -603,6 +605,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cos=cos,
             sin=sin,
             state_ids=self.state_ids,
+            swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
+            swa_block_table=common_attn_metadata.swa_block_table,
         )
     
     def build_prefill_metadata(
