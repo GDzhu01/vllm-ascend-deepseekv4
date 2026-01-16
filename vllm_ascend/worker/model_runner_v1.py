@@ -87,6 +87,7 @@ from vllm.v1.worker.utils import AttentionGroup
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
+from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata
 # yapf conflicts with isort for this block
 # yapf: disable
 from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
@@ -988,13 +989,12 @@ class NPUModelRunner(GPUModelRunner):
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
 
-            # TODO: FIXME when adapting states cache
-            # # get kv_state id
-            # state_ids = torch.tensor(
-            #     [self.requests[req_id].state_id for req_id in req_ids],
-            #     dtype=torch.int32,
-            #     device=self.device,
-            # )
+            # get kv_state id
+            state_ids = torch.tensor(
+                [self.requests[req_id].state_id for req_id in req_ids],
+                dtype=torch.int32,
+                device=self.device,
+            )
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1046,7 +1046,7 @@ class NPUModelRunner(GPUModelRunner):
                 slot_mapping=None,
                 block_table_tensor_list=blk_table_tensor_list,
                 slot_mapping_list=slot_mapping_list,
-                # state_ids=state_ids,
+                state_ids=state_ids,
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
@@ -1125,6 +1125,29 @@ class NPUModelRunner(GPUModelRunner):
 
                 for layer_name in attn_group.layer_names:
                     attn_metadata[layer_name] = attn_metadata_i
+
+            # ------------- make swa metadata -----------------
+            kv_cache_spec = Compress4AttentionSpec(
+                block_size=self.block_size,
+                num_kv_heads=1,
+                head_size=512,
+                dtype=torch.bfloat16,
+            )
+            swa_metadata_builder = self.attn_backend.get_builder_cls()(
+                kv_cache_spec,
+                list(self.runner_only_attn_layers),
+                self.vllm_config,
+                self.device,
+                AscendDSAMetadata,
+                supports_dcp_with_varlen=False,
+            )
+            for layer_name in self.runner_only_attn_layers:
+                common_prefix_len = 0
+                swa_attn_metadata = builder.build(
+                    common_prefix_len=common_prefix_len,
+                    common_attn_metadata=common_attn_metadata)
+                attn_metadata[layer_name] = swa_attn_metadata
+            # ---------------------------------------------------
 
         # update global cos, sin
         update_cos_sin(positions)
