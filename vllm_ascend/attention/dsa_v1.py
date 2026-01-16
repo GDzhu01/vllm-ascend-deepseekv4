@@ -45,7 +45,6 @@ from vllm_ascend.ops.pypto import AttentionPostV4
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
-MAX_O_PROJ_PREFETCH_SIZE = 16 * 1024 * 1024
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
@@ -1565,3 +1564,75 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             topk_idxs += offset
         return topk_idxs
+    
+    def _forward_single_op_decode(
+        self,        
+        hidden_states,
+        kv_cache,
+        attn_metadata,
+        kv_state,
+        is_prefill):
+        x = hidden_states
+        num_tokens = x.size(0)
+        if self.compress_ratio > 1 and self.compressor.kv_cache is None:
+            pass
+        qr = q = self.q_norm(self.wq_a(x)[0])
+        q = self.wq_b(q)[0].unflatten(-1, (self.num_local_heads, self.head_dim))
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.rms_norm_eps)
+
+        # win kv & topk_idxs
+        kv = self.wkv(x)[0]
+        kv = self.kv_norm(kv)  # [T, D]
+            
+        self.rotary_emb(q[..., -self.qk_rope_head_dim :], (attn_metadata.decode.cos, attn_metadata.decode.sin))
+        self.rotary_emb(kv[..., -self.qk_rope_head_dim :], (attn_metadata.decode.cos, attn_metadata.decode.sin))
+        
+
+        topk_idxs = get_window_topk_idxs(
+            num_tokens, self.window_size, attn_metadata.decode.seq_lens, is_prefill
+        )
+        
+        if self.compress_ratio >1:
+            if self.indexer is not None:
+                
+                # indexer
+                compress_topk_idxs = self.indexer_single_op(
+                    x=x,
+                    q_lora=qr,
+                    # forward_batch=forward_batch,
+                    attn_metadata = attn_metadata,
+                )
+                
+            else:
+                compress_topk_idxs = get_compress_topk_idxs(
+                    num_tokens,
+                    self.compress_ratio,
+                    attn_metadata = attn_metadata,
+                    window_size=self.window_size,
+                    is_prefill=is_prefill,
+                )
+                topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
+        topk_idxs = topk_idxs.int()
+        
+
+        # get swa buffer
+        if self.compress_ratio > 1:
+            self.compressor.forward2(x, attn_metadata=attn_metadata) ##### TODO: inp
+        
+        q = q
+        k = kv 
+        v = kv 
+        
+            
+        attn_output = self.single_op_attention(q,k,v,attn_metadata,self.attn_sink,topk_indices=topk_idxs)
+        
+
+        self.rotary_emb(attn_output[..., -self.qk_rope_head_dim :], positions, True)
+        
+        attn_output = attn_output.reshape(attn_output.shape[0], self.local_o_groups, -1)
+        wo_a = self.wo_a.weight.view(self.local_o_groups, self.o_lora_rank, -1)
+        attn_output = torch.einsum("sgd,grd->sgr", attn_output, wo_a)
+        output = self.wo_b(attn_output.flatten(1))[0]
+        return output
+
+

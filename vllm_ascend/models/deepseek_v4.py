@@ -941,6 +941,7 @@ class DeepseekV4Model(nn.Module):
         intermediate_tensors: IntermediateTensors | None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        print(f'xxxxxxxxxxxxxxxxxxxxxx input_ids: {input_ids}')
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
