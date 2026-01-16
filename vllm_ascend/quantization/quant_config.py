@@ -64,6 +64,7 @@ class AscendQuantConfig(QuantizationConfig):
         # TODO
         extra_quant_dict = {}
         for name in self.quant_description.keys():
+            new_name=name
             if not name.startswith('model'):
                 new_name = f'model.{name}'
             extra_quant_dict[new_name] = self.quant_description[name]
@@ -71,6 +72,7 @@ class AscendQuantConfig(QuantizationConfig):
         
         extra_quant_dict = {}
         for name in self.quant_description.keys():
+            new_name=name
             if 'attn' in name and 'self_attn' not in name:
                 new_name = name.replace('.attn.','.self_attn.')
             extra_quant_dict[new_name] = self.quant_description[name]
@@ -78,13 +80,15 @@ class AscendQuantConfig(QuantizationConfig):
         
         extra_quant_dict = {}
         for name in self.quant_description.keys():
+            new_name=name
             if 'ffn' in name:
                 new_name = name.replace('ffn','mlp')
             extra_quant_dict[new_name] = self.quant_description[name]
         self.quant_description.update(extra_quant_dict)
         
         extra_quant_dict = {}
-        for name in self.quant_description.keys():            
+        for name in self.quant_description.keys():
+            new_name=name        
             if 'w1' in name:
                 new_name = name.replace('.w1.','.gate_proj.')
             if 'w2' in name:

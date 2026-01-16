@@ -1099,6 +1099,9 @@ class AscendDeepseekV4ForCausalLM(
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')
                 print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
+            if 'model.lm_head.' in name:
+                name = name.replace('model.lm_head.','lm_head.')
+                print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             if 'embed.' in name and 'embed_token.' not in name:
                 name = name.replace('embed.','embed_tokens.')
             if 'attn' in name and 'self_attn' not in name:
