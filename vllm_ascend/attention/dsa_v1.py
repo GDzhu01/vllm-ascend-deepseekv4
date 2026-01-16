@@ -68,9 +68,8 @@ class AscendDSABackend(AttentionBackend):
         return num_blocks, block_size, num_kv_heads, head_size
 
     @staticmethod
-    def get_indexer_k_cache_shape(num_blocks: int, block_size: int, num_kv_heads: int,
-                           head_size: int) -> tuple[int, ...]:
-        return num_blocks, block_size, num_kv_heads, head_size
+    def get_scale_shape(num_blocks: int, block_size: int, scale_size: int) -> tuple[int, ...]:
+        return num_blocks, block_size, scale_size
 
     @staticmethod
     def get_impl_cls() -> Type["DSAAttentionImpl"]:

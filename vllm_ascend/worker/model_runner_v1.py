@@ -1127,7 +1127,7 @@ class NPUModelRunner(GPUModelRunner):
                     attn_metadata[layer_name] = attn_metadata_i
 
             # ------------- make swa metadata -----------------
-            kv_cache_spec = Compress4AttentionSpec(
+            kv_cache_spec = AttentionSpec(
                 block_size=self.block_size,
                 num_kv_heads=1,
                 head_size=512,
@@ -2629,21 +2629,36 @@ class NPUModelRunner(GPUModelRunner):
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
                 elif "attn" in layer_name and is_dsv4:
+                    c4_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
+                    num_blocks = kv_cache_config.num_blocks
                     print(30*"=", f"kv_cache_tensor: {kv_cache_tensor}")
                     print(30*"=", f"exact_layer_id: {exact_layer_id}, layer_name: {layer_name} kv_cache_tensor.size: {kv_cache_tensor.size}")
                     # TODO adapt to original code
+                    print(30*"=")
+                    print(f"c4_spec.compress_kv_size_bytes: {num_blocks*c4_spec.compress_kv_size_bytes/1024/1024}")
+                    print(f"c4_spec.indexer_k_size_bytes: {num_blocks*c4_spec.indexer_k_size_bytes/1024/1024}")
+                    print(f"c4_spec.indexer_scale_size_bytes: {num_blocks*c4_spec.indexer_scale_size_bytes/1024/1024}")
+
                     if exact_layer_id % 2 == 0:
                         c4_kv_tensor = torch.zeros(
-                            kv_cache_tensor.size * 4 // 5,
+                            num_blocks * c4_spec.compress_kv_size_bytes,
                             dtype=torch.int8,
                             device=self.device,
                         )
                         indexer_k_tensor = torch.zeros(
-                            kv_cache_tensor.size // 5,
+                            num_blocks * c4_spec.indexer_k_size_bytes,
                             dtype=torch.int8,
                             device=self.device,
                         )
-                        kv_cache_raw_tensors[layer_name] = (c4_kv_tensor, indexer_k_tensor)
+                        indexer_scale_tensor = torch.zeros(
+                            num_blocks * c4_spec.indexer_scale_size_bytes,
+                            dtype=torch.int8,
+                            device=self.device,
+                        )
+
+                        kv_cache_raw_tensors[layer_name] = (c4_kv_tensor, indexer_k_tensor, indexer_scale_tensor)
+                        print(f"c4_kv_tensor: {c4_kv_tensor.shape}, indexer_k_tensor: {indexer_k_tensor.shape}, indexer_scale_tensor: {indexer_scale_tensor.shape}")
+
                     elif exact_layer_id % 2 != 0:
                         c128_kv_tensor = torch.zeros(
                             kv_cache_tensor.size,
@@ -2783,26 +2798,34 @@ class NPUModelRunner(GPUModelRunner):
                         print(30*"=", f"in c4_layers branch, layer_index: {layer_index}")
                         print(30*"=", f"kv_cache_raw_tensors[layer_name]: {kv_cache_raw_tensors[layer_name]}")
 
-                        c4_kv_tensor, indexer_k_tensor = kv_cache_raw_tensors[layer_name]
-                        print(30*"=", f"c4_kv_tensor: {c4_kv_tensor}, indexer_k_tensor:{indexer_k_tensor}")
-                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel()
+                        c4_kv_tensor, indexer_k_tensor, indexer_scale_tensor = kv_cache_raw_tensors[layer_name]
+                        print(30*"=", f"c4_kv_tensor: {c4_kv_tensor.shape}, indexer_k_tensor:{indexer_k_tensor.shape}, indexer_scale_tensor: {indexer_scale_tensor.shape}")
+                        sum_page_size_bytes = c4_kv_tensor.numel() + indexer_k_tensor.numel() + indexer_scale_tensor.numel()
                         print(30*"=", f"after numel")
 
                         num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                        assert num_blocks == kv_cache_config.num_blocks, f"num_blocks: {num_blocks} kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
                         c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.head_size)
                         print(30*"=", f"after c4_kv_cache_shape")
-                        indexer_k_cache_shape = self.attn_backend.get_indexer_k_cache_shape(
+                        indexer_k_cache_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.indexer_head_size)
+                        indexer_scale_shape = self.attn_backend.get_scale_shape(
+                            num_blocks // 4,
+                            kv_cache_spec.block_size,
+                            scale_size=1)
+                        print(f"indexer_k_cache_shape: {indexer_k_cache_shape}, indexer_scale_shape: {indexer_scale_shape}")
 
                         print(30*"=", f"before 4 view")
-                        c4_kv_cache = c4_kv_tensor.view(dtype).view(c4_kv_cache_shape)
-                        indexer_k_cache = indexer_k_tensor.view(dtype).view(indexer_k_cache_shape)
-                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache)
+                        c4_kv_cache = c4_kv_tensor.view(kv_cache_spec.nope_dtype).view(c4_kv_cache_shape)
+                        indexer_k_cache = indexer_k_tensor.view(kv_cache_spec.indexer_dtype).view(indexer_k_cache_shape)
+                        indexer_scale_cache = indexer_scale_tensor.view(kv_cache_spec.indexer_scale_dtype).view(indexer_scale_shape)
+
+                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache, indexer_scale_cache)
                     elif layer_index in c128_layers:
                         print(30*"=", f"in c128_layers branch")
                         c128_kv_tensor = kv_cache_raw_tensors[layer_name]
@@ -3193,22 +3216,69 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_id in [0, 1]:
                     self.runner_only_attn_layers.add(layer_name)
                 elif layer_id % 2 == 0:
-                   kv_cache_spec[layer_name] = Compress4AttentionSpec(
-                       block_size=block_size,
-                       num_kv_heads=1,
-                       head_size=512,
-                       dtype=torch.bfloat16,
-                       compress_ratio=4,
-                       indexer_head_size=128
-                   )
+                    if get_ascend_device_type() == AscendDeviceType.A5:
+                        # TODO(cmq): get the dim info from model config
+                        kv_cache_spec[layer_name] = Compress4AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            nope_dytpe=torch.float8_e4m3fn,
+                            rope_dim=64,
+                            rope_dytpe=torch.bfloat16,
+                            scale_dim=7,
+                            scale_dytpe=torch.float8_e4m3fn,
+                            dtype=torch.float8_e4m3fn,
+                            compress_ratio=4,
+                            indexer_head_size=128,
+                            indexer_dtype=torch.float8_e4m3fn,
+                            indexer_scale_dim=1,
+                            indexer_scale_dtype=torch.float32,
+                        )
+                    else:
+                        kv_cache_spec[layer_name] = Compress4AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            rope_dim=64,
+                            scale_dim=0,
+                            dtype=torch.bfloat16,
+                            compress_ratio=4,
+                            indexer_head_size=128,
+                            # TOOOOOOOOOOOOOOOOOOOOOOOOODO
+                            indexer_dtype=torch.int8,
+                            indexer_scale_dim=1,
+                            indexer_scale_dtype=torch.float16,
+                        )
                 elif layer_id % 2 != 0:
-                    kv_cache_spec[layer_name] = Compress128AttentionSpec(
-                        block_size=block_size,
-                        num_kv_heads=1,
-                        head_size=512,
-                        dtype=torch.bfloat16,
-                        compress_ratio=128,
-                    )
+                    if get_ascend_device_type() == AscendDeviceType.A5:
+                        # TODO(cmq): get the dim info from model config
+                        kv_cache_spec[layer_name] = Compress128AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            nope_dytpe=torch.float8_e4m3fn,
+                            rope_dim=64,
+                            rope_dytpe=torch.bfloat16,
+                            scale_dim=7,
+                            scale_dytpe=torch.float8_e4m3fn,
+                            dtype=torch.bfloat16,
+                            compress_ratio=128,
+                        )
+                    else:
+                        kv_cache_spec[layer_name] = Compress128AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            rope_dim=64,
+                            scale_dim=0,
+                            dtype=torch.bfloat16,
+                            compress_ratio=128,
+                        )
+
 
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
         if len(mamba_layers) > 0:
