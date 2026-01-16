@@ -27,6 +27,7 @@
 import typing
 from collections.abc import Callable, Iterable
 from itertools import islice
+import math
 
 import torch
 import torch_npu
@@ -106,6 +107,67 @@ from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.pypto import npu_hc_pre,npu_hc_post,HC_PRE,HC_POST
 
 logger = init_logger(__name__)
+
+def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
+    """
+    Precomputes frequency-based complex exponential values for rotary positional embeddings.
+
+    Args:
+        args (ModelArgs): Model arguments containing positional embedding parameters.
+
+    Returns:
+        torch.Tensor: Precomputed complex exponential values for positional embeddings.
+    """
+
+    def find_correction_dim(num_rotations, dim, base, max_seq_len):
+        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
+
+    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
+        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
+        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
+        return max(low, 0), min(high, dim-1)
+
+    def linear_ramp_factor(min, max, dim):
+        if min == max:
+            max += 0.001
+        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
+        ramp_func = torch.clamp(linear_func, 0, 1)
+        return ramp_func
+
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    if original_seq_len > 0:
+        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
+        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
+        freqs = freqs / factor * (1 - smooth) + freqs * smooth
+
+    t = torch.arange(seqlen)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
+    """
+    Applies rotary positional embeddings to the input tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor with positional embeddings to be applied.
+        freqs_cis (torch.Tensor): Precomputed complex exponential values for positional embeddings.
+
+    Returns:
+        torch.Tensor: Tensor with rotary embeddings applied.
+    """
+    y = x
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
+    if inverse:
+        freqs_cis = freqs_cis.conj()
+    if x.ndim == 3:
+        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
+    else:
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    print(x.device, freqs_cis.to("npu"))
+    x = torch.view_as_real(x * freqs_cis.to("npu")).flatten(-2)
+    y.copy_(x)
+    return y
 
 
 
@@ -256,9 +318,9 @@ class DeepseekV4MoE(nn.Module):
             scoring_func=getattr(config, "score_func", "softmax"),
             # we do scaling outside, set factor to 1.0 to avoid double mul
             # aiter applies routed_scaling_factor internally
-            routed_scaling_factor=1.0
-            if not self.is_rocm_aiter_moe_enabled
-            else self.routed_scaling_factor,
+            routed_scaling_factor=1.5,
+            # if not self.is_rocm_aiter_moe_enabled
+            # else self.routed_scaling_factor,
             e_score_correction_bias=self.gate.e_score_correction_bias,
             enable_eplb=self.enable_eplb,
             num_redundant_experts=self.n_redundant_experts,
@@ -270,9 +332,8 @@ class DeepseekV4MoE(nn.Module):
             tid2eid=self.gate.tid2eid
         )
         
+    def forward(self, hidden_states: torch.Tensor,input_ids = None) -> torch.Tensor:
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return hidden_states
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
 
@@ -292,7 +353,7 @@ class DeepseekV4MoE(nn.Module):
             # router_logits: (num_tokens, n_experts)
             router_logits, _ = self.gate(hidden_states)
             fused_moe_out = self.experts(
-                hidden_states=hidden_states, router_logits=router_logits
+                hidden_states=hidden_states, router_logits=router_logits,input_ids=input_ids
             )
 
         shared_output, final_hidden_states = fused_moe_out
@@ -301,9 +362,9 @@ class DeepseekV4MoE(nn.Module):
 
         # Fix FP16 overflow
         # See DeepseekV2DecoderLayer for more details.
-        if hidden_states.dtype != torch.float16:
-            if not self.is_rocm_aiter_moe_enabled:
-                final_hidden_states *= self.routed_scaling_factor
+        # if hidden_states.dtype != torch.float16:
+        #     if not self.is_rocm_aiter_moe_enabled:
+        #         final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
             shared_output *= 1.0 / self.routed_scaling_factor
@@ -324,7 +385,7 @@ class DeepseekV4MoE(nn.Module):
 
         return final_hidden_states.view(num_tokens, hidden_dim)
 
-    # def forward(self, hidden_states):
+    # def forward(self, hidden_states, input_ids):
     #     return hidden_states
 
 def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
@@ -472,10 +533,25 @@ class Compressor(nn.Module):
         if not should_compress:
             return kv
         kv = self.norm(kv.to(dtype))
-        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        kv_pe = self.rope_single(kv_pe, cos, sin)
-        kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        kv = kv.view(-1, 1, 1, self.nope_head_dim+self.rope_head_dim)
+        # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        # kv_pe = self.rope_single(kv_pe, cos, sin)
+        # kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        
+        # offset = ratio if overlap else 0
+        
+        self.rope_theta = 10000.0
+        self.compress_rope_theta = 40000.0
+        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
+                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
+                                         4, 32, 1)
+        should_compress = seqlen >= ratio
+        remainder = seqlen % ratio
+        cutoff = seqlen - remainder
+        freqs_cis = self.freqs_cis[:cutoff:ratio]
+        
+        apply_rotary_emb(kv[..., -64:], freqs_cis)
+        
         # kv=kv.squeeze(0)
         return kv
     
@@ -577,7 +653,9 @@ class DeepseekV4Attention(nn.Module):
                 if config.rope_parameters.get("apply_yarn_scaling", True)
                 else "deepseek_llama_scaling"
             )
-
+        self.compress_ratio = config.compress_ratios[layer_idx]
+        if self.compress_ratio >1:
+            config.rope_parameters['rope_theta'] = 40000
         self.rotary_emb = get_rope(
             self.rope_head_dim,
             max_position=max_position_embeddings,
@@ -586,18 +664,18 @@ class DeepseekV4Attention(nn.Module):
         )
         self.scaling = self.head_dim**-0.5
 
-        if (
-            config.rope_parameters["rope_type"] != "default"
-            and config.rope_parameters["rope_type"] == "deepseek_yarn"
-        ):
-            mscale_all_dim = config.rope_parameters.get("mscale_all_dim", False)
-            scaling_factor = config.rope_parameters["factor"]
-            mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-            self.scaling = self.scaling * mscale * mscale
+        # if (
+        #     config.rope_parameters["rope_type"] != "default"
+        #     and config.rope_parameters["rope_type"] == "deepseek_yarn"
+        # ):
+        #     mscale_all_dim = config.rope_parameters.get("mscale_all_dim", False)
+        #     scaling_factor = config.rope_parameters["factor"]
+        #     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
+        #     self.scaling = self.scaling * mscale * mscale
         
 
 
-        self.compress_ratio = config.compress_ratios[layer_idx]
+
         
         if self.compress_ratio > 1:
             self.compressor = Compressor(vllm_config,config, self.compress_ratio, self.head_dim,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor",)
@@ -722,10 +800,10 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
-        if (use_pypto := 1):
-            # y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
-            y, post,comb = self.hc_pre_func(x, hc_fn.bfloat16(), hc_scale, hc_base)
-            return y.to(dtype), post, comb
+        # if (use_pypto := 1):
+        #     # y, post, comb = npu_hc_pre(x, hc_fn.bfloat16(), hc_scale, hc_base)
+        #     y, post,comb = self.hc_pre_func(x, hc_fn.bfloat16(), hc_scale, hc_base)
+        #     return y.to(dtype), post, comb
         x = x.flatten(1).float() #(b,s,c*h)
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
         mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
@@ -735,10 +813,10 @@ class DeepseekV2DecoderLayer(nn.Module):
         return y.to(dtype), post, comb
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        if (use_pypto := 1):
-            y = self.hc_post_func(x, residual.float(), post, comb)
-            # y = npu_hc_post(x, residual.float(), post, comb)
-            return y.type_as(x)
+        # if (use_pypto := 1):
+        #     y = self.hc_post_func(x, residual.float(), post, comb)
+        #     # y = npu_hc_post(x, residual.float(), post, comb)
+        #     return y.type_as(x)
         #x=(b,s,h)  residual=(b,s,c, h), post=(b,s,c), comb=(b,s,c,c)
         y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
         #y = (b,s,c,1)*(b,s,1,h) + torch.sum((b,s,c,c,1)*(b,s,c,1,h), dim=2)
@@ -751,23 +829,31 @@ class DeepseekV2DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
         llama_4_scaling: torch.Tensor | None = None,
+        input_ids = None,
     ) -> torch.Tensor:
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
+        if torch.distributed.get_rank() == 0:
+            print(f"=====================================after hcpre rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}, post is {post}, comb is {comb}")
         hidden_states = self.input_layernorm(hidden_states)
         attn_kwargs = {
             "positions": positions,
             "hidden_states": hidden_states,
             "llama_4_scaling": llama_4_scaling
         }
+        if torch.distributed.get_rank() == 0:
+            print(f"=====================================before attn rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.self_attn(**attn_kwargs)
+        if torch.distributed.get_rank() == 0:
+            print(f"=====================================after attb rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
-
+        if torch.distributed.get_rank() == 0:
+            print(f"=====================================after hc_post rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         # Fully Connected
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states,input_ids)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
 
         return hidden_states, residual
@@ -884,7 +970,7 @@ class DeepseekV4Model(nn.Module):
         hidden_states = hidden_states.unsqueeze(1).repeat( 1, self.hc_mult, 1) #(b,s, c, h)
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual = layer(
-                positions, hidden_states, residual, llama_4_scaling
+                positions, hidden_states, residual, llama_4_scaling,input_ids
             )
         hidden_states = self.hc_head(hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base)
         if not get_pp_group().is_last_rank:
@@ -1026,6 +1112,7 @@ class AscendDeepseekV4ForCausalLM(
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        print(f'===================inputid is :{input_ids.cpu()}, rank is :{torch.distributed.get_rank()}')
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )

@@ -52,10 +52,11 @@ from vllm_ascend.utils import (AscendDeviceType, enable_sp,
 
 class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
 
-    def __init__(self, moe: FusedMoEConfig = None):
+    def __init__(self, moe: FusedMoEConfig = None,tid2eid=None):
 
         super().__init__(moe=moe)
         self.dynamic_eplb = get_ascend_config().dynamic_eplb
+        self.tid2eid=tid2eid
 
     def process_weights_after_loading(self, layer):
         super(UnquantizedFusedMoEMethod,
@@ -91,9 +92,11 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
               apply_router_weight_on_input: bool = False,
               enable_force_load_balance: bool = False,
               shared_experts: Optional[Any] = None,
+            #   tid2eid = None,
               **kwargs) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -106,7 +109,10 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             scoring_func=scoring_func,
             routed_scaling_factor=routed_scaling_factor,
             e_score_correction_bias=e_score_correction_bias,
-            global_num_experts=global_num_experts)
+            global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids
+            )
 
         if zero_expert_num > 0 and zero_expert_type is not None:
             topk_ids, topk_weights, zero_expert_result = zero_experts_compute(
@@ -174,7 +180,7 @@ class AscendFusedMoE(FusedMoE):
 
         if self.quant_config is None:
             self.quant_method = AscendUnquantizedFusedMoEMethod(
-                self.moe_config)
+                self.moe_config,tid2eid=self.tid2eid)
         else:
             self.quant_method = self.quant_config.get_quant_method(
                 self, self.layer_name)
@@ -277,7 +283,8 @@ class AscendFusedMoE(FusedMoE):
             final_hidden_states)
 
     def forward_impl(self, hidden_states: torch.Tensor,
-                     router_logits: torch.Tensor):
+                     router_logits: torch.Tensor,
+                     input_ids = None):
         assert self.quant_method is not None
 
         # For w8a8 dynamic we can do npu_dynamic_quant and gate in parallel.
@@ -321,7 +328,7 @@ class AscendFusedMoE(FusedMoE):
                     routed_scaling_factor=self.routed_scaling_factor,
                     e_score_correction_bias=self.e_score_correction_bias,
                     global_num_experts=self.global_num_experts,
-                    input_ids=None if self.tid2eid is None else forward_context.input_ids,  # Note: get ids from forward context
+                    input_ids=input_ids,  # Note: get ids from forward context
                     tid2eid=self.tid2eid, # 
                     )
 
@@ -442,16 +449,18 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         self,
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
+        input_ids = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         shared_out, fused_out = AscendFusedMoE.forward(
             self,
             hidden_states=hidden_states,
             router_logits=router_logits,
+            input_ids= input_ids
         )
         return shared_out, fused_out
 
     def forward_impl(self, hidden_states: torch.Tensor,
-                     router_logits: torch.Tensor):
+                     router_logits: torch.Tensor,input_ids = None):
         shared_out = None
         if not self.multistream_overlap_gate:
             # Make sure the shared experts stream begins after hidden_states are ready.
@@ -471,6 +480,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
             self,
             hidden_states=hidden_states,
             router_logits=router_logits,
+            input_ids=input_ids
         )
 
         if not self.multistream_overlap_gate:

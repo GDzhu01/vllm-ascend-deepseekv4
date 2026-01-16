@@ -17,7 +17,7 @@
 from typing import Callable, Optional
 
 import torch
-
+import torch.nn.functional as F
 from vllm_ascend.utils import get_weight_prefetch_method
 
 
@@ -73,6 +73,11 @@ def select_experts(hidden_states: torch.Tensor,
         custom_routing_function=custom_routing_function)
 
     if is_support_npu_moe_gating_top_k:
+        # if torch.distributed.get_rank() == 0:
+        print(f"=====================================router_logits : {torch.distributed.get_rank()}, router_logits is {router_logits}")
+        if tid2eid is not None:
+            print(f'tid2eid: {tid2eid.shape}')
+            print(f'input_ids: {input_ids} rank: {torch.distributed.get_rank()}')
         topk_weights, topk_ids = _select_experts_with_fusion_ops(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -85,9 +90,12 @@ def select_experts(hidden_states: torch.Tensor,
             scoring_func=scoring_func,
             routed_scaling_factor=routed_scaling_factor,
             global_num_experts=global_num_experts,
-            tid2eid = None,
-            input_ids = None,
+            tid2eid = tid2eid,
+            input_ids = input_ids,
         )
+        if torch.distributed.get_rank() == 0:
+            print(f"=====================================topk_weights :  topk_weights is {topk_weights}")
+            print(f"=====================================topk_ids :  topk_ids is {topk_ids}")
     else:
         topk_weights, topk_ids = _native_select_experts(
             hidden_states=hidden_states,
@@ -224,31 +232,55 @@ def _select_experts_with_fusion_ops(
     topk_group = topk_group if topk_group is not None else 1
     num_expert_group = num_expert_group if num_expert_group is not None else 1
     renorm = int(renormalize)
-    if scoring_func == "sqrtsoftplus":
-        if input_ids is not None:
-            input_ids=input_ids.to(torch.int64)
-            # tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
-            tid2eid_ones = tid2eid.to(torch.int32)
-        else:
-            tid2eid_ones = None
+    if scoring_func == "sqrtsoftplus" or True:
+        # if input_ids is not None:
+        #     input_ids=input_ids.to(torch.int64)
+        #     # tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
+        #     tid2eid_ones = tid2eid.to(torch.int32)
+        # else:
+        #     tid2eid_ones = None
         # print(f'softplussssssssssssssssssssssssssssssssssssssssssssssssssssssssssss')
-        topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
-            x=router_logits,                        # 输入张量
-            k=top_k,                        # 选取的专家数量
-            bias=e_score_correction_bias,                # 偏置张量（可选）
-            input_ids=input_ids,      # 输入词表（可选）
-            tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
-            k_group=topk_group,           # 选取的组数量（可选）
-            group_count=num_expert_group,   # 总组数（可选）
-            routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
-            eps=float(1e-20),                  # 数值稳定性参数（可选）
-            group_select_mode=1,  # 组选择模式（可选）
-            renorm=0,            # 重归一化标志（可选）
-            norm_type=2,       # 归一化类型（可选）
-            out_flag=False          # 是否输出归一化结果（可选）
-        )
-        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
-        return topk_weights, topk_ids
+        # topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
+        #     x=router_logits,                        # 输入张量
+        #     k=top_k,                        # 选取的专家数量
+        #     bias=e_score_correction_bias,                # 偏置张量（可选）
+        #     input_ids=input_ids,      # 输入词表（可选）
+        #     tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
+        #     k_group=topk_group,           # 选取的组数量（可选）
+        #     group_count=num_expert_group,   # 总组数（可选）
+        #     routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
+        #     eps=float(1e-20),                  # 数值稳定性参数（可选）
+        #     group_select_mode=1,  # 组选择模式（可选）
+        #     renorm=0,            # 重归一化标志（可选）
+        #     norm_type=2,       # 归一化类型（可选）
+        #     out_flag=False          # 是否输出归一化结果（可选）
+        # )
+
+        scores = F.softplus(router_logits).sqrt()
+        original_scores = scores
+        if e_score_correction_bias is not None:
+            scores = scores + e_score_correction_bias
+        tid2eid = None
+        if tid2eid is not None: # Note: if hash
+            print(f'input_ids: {input_ids} fc rank: {torch.distributed.get_rank()}')
+            tid2eid_cpu = tid2eid.detach().cpu()
+            print(f'1111 fc rank: {torch.distributed.get_rank()}')
+            input_ids_cpu = input_ids.cpu()
+            print('2222')
+            topk_ids = tid2eid_cpu[input_ids_cpu].to(scores.device)
+            print(f'hi')
+        else:
+            topk_ids = scores.topk(top_k, dim=-1)[1]
+        print('hiiiii')
+        weights = original_scores.gather(1, topk_ids)
+        print('fuck')
+        weights /= weights.sum(dim=-1, keepdim=True)
+        print('off')
+        weights *= routed_scaling_factor
+        print("============================================", routed_scaling_factor)
+        
+        # topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+        return weights, topk_ids.to(torch.int32)
     elif scoring_func == "softmax":
         norm_type = 0
     else:
