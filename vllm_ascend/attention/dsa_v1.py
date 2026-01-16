@@ -243,6 +243,12 @@ class AscendDSAPrefillMetadata:
     max_query_len: int
     max_seq_lens: int
     state_ids: torch.Tensor
+
+    block_table_list: list[torch.Tensor]
+    slot_mapping_list: list[torch.Tensor]
+    swa_slot_mapping: torch.Tensor
+    swa_block_table: torch.Tensor
+
     chunked_context: Optional[ChunkedContextMetadata] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
@@ -258,12 +264,19 @@ class AscendDSADecodeMetadata:
     max_seq_lens: int
     seq_lens_list: list[int]
     state_ids: torch.Tensor
+
+    block_table_list: list[torch.Tensor]
+    slot_mapping_list: list[torch.Tensor]
+    swa_slot_mapping: torch.Tensor
+    swa_block_table: torch.Tensor
+
     query_start_loc: torch.tensor = None
     attn_mask: Optional[torch.Tensor] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
     cp_seq_len: torch.Tensor = None
     batch_seq_mask: torch.Tensor = None
+
 
 
 @dataclass
@@ -282,15 +295,16 @@ class AscendDSAMetadata:
 
     num_actual_tokens: int  # Number of tokens excluding padding.
     slot_mapping: torch.Tensor
-    slot_mapping_list: list[torch.Tensor]
     query_start_loc: torch.Tensor
     seq_lens: torch.Tensor
     block_tables: torch.Tensor
     sin: torch.Tensor
     cos: torch.Tensor
     block_table_list: list[torch.Tensor]
+    slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
+
 
     # New for MLA (compared to FlashAttention)
     # For handling prefill decode split
@@ -671,6 +685,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             end_idx = block_cumsum[i]
             prefill_block_table[i, :prefill_block[i]] = block_id[start_idx:end_idx]
 
+        # slotmapping
+        prefill_slot_mapping_list = []
+        for slot_mapping in common_attn_metadata.slot_mapping_list:
+            prefill_slot_mapping_list.append(slot_mapping[tokens_start:])
+        prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
+
         
         prefill_block_table_list = []
         for block_table in self.block_table_list:
@@ -684,6 +704,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             input_positions=prefill_input_positions,
             block_table=prefill_block_table,
             block_table_list=prefill_block_table_list,
+            slot_mapping_list=prefill_slot_mapping_list,
+            swa_slot_mapping=prefill_swa_slot_mapping,
+            swa_block_table=common_attn_metadata.swa_block_table[reqs_start:, ...],
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,
@@ -716,7 +739,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
         # self.block_table = self.block_table[:block_table_size]
         for i in range(len(self.block_table_list)):
-            self.block_table_list[i] = self.block_table_list[i][:block_table_size]
+            self.block_table_list[i] = self.block_table_list[i][:block_table_size, ...]
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
         # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
@@ -726,54 +749,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         seq_lens_list = common_attn_metadata.seq_lens_cpu[:self.num_decodes].tolist()
 
         cp_seq_len, batch_seq_mask = None, None
-
-        # if self.graph_pad_size > num_reqs:
-        #     if self.speculative_config.disable_padded_drafter_batch:
-        #         num_reqs_pad_size = self.graph_pad_size - num_reqs
-        #         # actual_seq_lengths_q = self.pad_actual_seq_len_q_mtp_disable_pad(
-        #         #     num_reqs_pad_size, num_reqs, actual_seq_lengths_q)
-        #         seq_lens_list = seq_lens_list + [0] * (self.graph_pad_size -
-        #                                                self.num_decodes)
-        #         num_block_pad_size = self.graph_pad_size - self.block_table.shape[
-        #             0]
-        #         if num_block_pad_size > 0:
-        #             block_table_padding = torch.zeros(
-        #                 (num_block_pad_size, ) + self.block_table.shape[1:],
-        #                 dtype=self.block_table.dtype,
-        #                 device=self.block_table.device)
-        #             self.block_table = torch.cat(
-        #                 [self.block_table, block_table_padding], dim=0)
-        #     else:
-        #         num_token_pad_size = self.graph_pad_size - self.num_decode_tokens
-        #         num_reqs_pad_size = (
-        #             self.graph_pad_size //
-        #             common_attn_metadata.decode_token_per_req - num_reqs)
-        #         num_block_table_pad_size = (
-        #             self.graph_pad_size //
-        #             common_attn_metadata.decode_token_per_req -
-        #             self.num_decodes)
-        #         seq_lens_list = self.seq_lens.tolist() + [0
-        #                                                   ] * num_reqs_pad_size
-        #         slot_padding = torch.full((num_token_pad_size, ),
-        #                                   PAD_SLOT_ID,
-        #                                   dtype=self.slot_mapping.dtype,
-        #                                   device=self.slot_mapping.device)
-        #         self.slot_mapping = torch.cat(
-        #             [self.slot_mapping, slot_padding])
-        #         block_table_padding = torch.zeros(
-        #             (num_block_table_pad_size, ) + self.block_table.shape[1:],
-        #             dtype=self.block_table.dtype,
-        #             device=self.block_table.device)
-        #         self.block_table = torch.cat(
-        #             [self.block_table, block_table_padding], dim=0)
-        #         position_padding = torch.zeros(num_token_pad_size,
-        #                                        dtype=input_positions.dtype,
-        #                                        device=input_positions.device)
-        #         input_positions = torch.cat(
-        #             [input_positions, position_padding])
-        #         # actual_seq_lengths_q = self.pad_actual_seq_len_q_mtp_enable_pad(
-        #         #     num_reqs_pad_size, num_reqs, actual_seq_lengths_q,
-        #         #     common_attn_metadata)
 
         cos, sin = get_cos_and_sin_mla(input_positions, use_cache=True)
 
@@ -788,10 +763,21 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cos_c4, sin_c4 = get_cos_and_sin_mla(compress_c4_position)
         cos_c128, sin_c128 = get_cos_and_sin_mla(compress_c128_position)
+
+        # slotmapping
+        decode_slot_mapping_list = []
+        for slot_mapping in common_attn_metadata.slot_mapping_list:
+            decode_slot_mapping_list.append(slot_mapping[:self.num_decode_tokens])
+        decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
+
+
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
             block_table=None,
             block_table_list=self.block_table_list,
+            swa_block_table=common_attn_metadata.swa_block_table[:block_table_size, ...],
+            slot_mapping_list=decode_slot_mapping_list,
+            swa_slot_mapping=decode_swa_slot_mapping,
             seq_lens=self.seq_lens[:self.num_decodes],
             seq_lens_list=seq_lens_list,
             max_seq_lens=max_seq_lens,
