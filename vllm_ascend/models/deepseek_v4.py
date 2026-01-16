@@ -272,6 +272,7 @@ class DeepseekV4MoE(nn.Module):
         
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return hidden_states
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
 
