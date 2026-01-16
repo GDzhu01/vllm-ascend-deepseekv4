@@ -646,22 +646,25 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wo_b",
             return_bias=False,
         )
-        
+        self.compress_ratio = config.compress_ratios[layer_idx]
         if config.rope_parameters["rope_type"] != "default":
             config.rope_parameters["rope_type"] = (
                 "deepseek_yarn"
                 if config.rope_parameters.get("apply_yarn_scaling", True)
                 else "deepseek_llama_scaling"
             )
+
         self.compress_ratio = config.compress_ratios[layer_idx]
         if self.compress_ratio >1:
             config.rope_parameters['rope_theta'] = 40000
+
         self.rotary_emb = get_rope(
             self.rope_head_dim,
             max_position=max_position_embeddings,
             rope_parameters=config.rope_parameters,
             is_neox_style=False,
         )
+        print(f'self.rotary_emb: {self.rotary_emb}')
         self.scaling = self.head_dim**-0.5
 
         # if (
@@ -672,10 +675,6 @@ class DeepseekV4Attention(nn.Module):
         #     scaling_factor = config.rope_parameters["factor"]
         #     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
         #     self.scaling = self.scaling * mscale * mscale
-        
-
-
-
         
         if self.compress_ratio > 1:
             self.compressor = Compressor(vllm_config,config, self.compress_ratio, self.head_dim,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor",)

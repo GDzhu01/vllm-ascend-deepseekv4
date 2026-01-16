@@ -1056,6 +1056,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
         return output_padded
 
+
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
@@ -1377,8 +1378,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
         topk_idxs = topk_idxs.int()
         
-        cos = cos.view(1,1,-1,64)
-        sin = sin.view(1,1,-1,64)
         # compress kv & attn
         if start_pos == 0:
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
@@ -1500,6 +1499,28 @@ class AscendDSAImpl(DSAAttentionImpl):
             layout_key="PA_BSND",
         )
         return sparse_indices
+    
+    def rope_single_2(self,
+                      x,cos,sin,inverse=False):
+        if inverse:
+            sin = sin * -1
+        tnd_layout = 1
+        if len(x.shape)==3:
+            num_tokens,num_heads,rotary_dim = x.shape
+        else:
+            tnd_layout=0
+            _,num_tokens,num_heads,rotary_dim = x.shape
+        x_rot = torch_npu.npu_interleave_rope(
+            x.reshape(num_tokens, num_heads, 1, rotary_dim),
+            cos,
+            sin,
+        )
+        if tnd_layout:
+            x = x_rot.reshape(num_tokens, -1, rotary_dim)
+        else:
+            x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
+        return x
+    
     
     def indexer_select_single_op(
         self,

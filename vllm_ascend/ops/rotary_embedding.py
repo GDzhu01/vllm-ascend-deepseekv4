@@ -57,11 +57,11 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype,
     global _cos
     global _sin
 
-    if _cos_mla is not None or \
-        _sin_mla is not None or \
-        _cos is not None or \
-        _sin is not None:
-        return
+    # if _cos_mla is not None or \
+    #     _sin_mla is not None or \
+    #     _cos is not None or \
+    #     _sin is not None:
+    #     return
 
     model_config = vllm_config.model_config
     max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
@@ -120,14 +120,16 @@ def get_cos_and_sin_mla(positions, use_cache=False):
 
 def _record_cos_sin_cache(cos_sin_cache):
     global _cos_sin_cache
-    if _cos_sin_cache is not None:
-        return
+    # if _cos_sin_cache is not None:
+    #     return
+    print(f'??????????????????????????????????????????')
     _cos_sin_cache = cos_sin_cache
 
 
 def _record_cos_and_sin_cache(cos_cache, sin_cache):
     global _cos_cache
     global _sin_cache
+    print(f'???!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!?????')
     _cos_cache = cos_cache
     _sin_cache = sin_cache
 
@@ -135,8 +137,8 @@ def _record_cos_and_sin_cache(cos_cache, sin_cache):
 def _record_cos_and_sin_cache_interleaved(cos_sin_cache):
     global _cos_cache
     global _sin_cache
-    if _cos_cache is not None or _sin_cache is not None:
-        return
+    # if _cos_cache is not None or _sin_cache is not None:
+    #     return
     hidden_dim = cos_sin_cache.shape[-1] // 2
     cos_cache, sin_cache = cos_sin_cache.view(-1, 2, hidden_dim).repeat(
         1, 1, 2).chunk(2, dim=1)
@@ -150,10 +152,10 @@ def update_cos_sin(positions):
     global _cos_slice
     global _sin_slice
 
-    if _cos_sin_cache is None or \
-        _cos is None or \
-        _sin is None:
-        return
+    # if _cos_sin_cache is None or \
+    #     _cos is None or \
+    #     _sin is None:
+    #     return
 
     num_tokens = positions.size(0)
     _cos[:, :num_tokens] = _cos_sin_cache.index_select(0, positions).view(
