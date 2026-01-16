@@ -59,6 +59,47 @@ class AscendQuantConfig(QuantizationConfig):
     def __init__(self, quant_config: Dict[str, Any]):
         super().__init__()
         self.quant_description = quant_config
+        
+        
+        # TODO
+        extra_quant_dict = {}
+        for name in self.quant_description.keys():
+            if not name.startswith('model'):
+                new_name = f'model.{name}'
+            extra_quant_dict[new_name] = self.quant_description[name]
+        self.quant_description.update(extra_quant_dict)
+        
+        extra_quant_dict = {}
+        for name in self.quant_description.keys():
+            if 'attn' in name and 'self_attn' not in name:
+                new_name = name.replace('.attn.','.self_attn.')
+            extra_quant_dict[new_name] = self.quant_description[name]
+        self.quant_description.update(extra_quant_dict)
+        
+        extra_quant_dict = {}
+        for name in self.quant_description.keys():
+            if 'ffn' in name:
+                new_name = name.replace('ffn','mlp')
+            extra_quant_dict[new_name] = self.quant_description[name]
+        self.quant_description.update(extra_quant_dict)
+        
+        extra_quant_dict = {}
+        for name in self.quant_description.keys():            
+            if 'w1' in name:
+                new_name = name.replace('.w1.','.gate_proj.')
+            if 'w2' in name:
+                new_name = name.replace('.w2.','.down_proj.')
+            if 'w3' in name:
+                new_name = name.replace('.w3.','.up_proj.')
+            
+            if 'head' in name and 'lm_head' not in name:
+                new_name = name.replace('head','lm_head')
+            if 'embed' in name and 'embed_tokens' not in name:
+                new_name = name.replace('embed','embed_tokens')
+            extra_quant_dict[new_name] = self.quant_description[name]
+        self.quant_description.update(extra_quant_dict)
+            
+            
         # TODO(whx): remove this adaptation after adding "shared_head"
         # to prefix of DeepSeekShareHead in vLLM.
         extra_quant_dict = {}
@@ -70,6 +111,10 @@ class AscendQuantConfig(QuantizationConfig):
                 new_k = k.replace("weight_packed", "weight")
                 extra_quant_dict[new_k] = self.quant_description[k]
         self.quant_description.update(extra_quant_dict)
+        
+        # for k in self.quant_description.keys():
+        #     print(f'k after fix: {k}')
+        # exit()
 
     def __repr__(self) -> str:
         return "AscendQuantConfig:\n" + super().__repr__()
@@ -107,9 +152,10 @@ class AscendQuantConfig(QuantizationConfig):
     def quant_prefix_mapper(self, model_type: str, prefix: str) -> str:
         # TODO (Levi-JQ): will be removed when QuantizationConfig.apply_vllm_mapper is implemented
         prefix_mapping = QUANT_MODEL_PREFIX_MAPPINGS.get(model_type)
+        substr_mapping = QUANT_MODEL_SUBSTR_MAPPINGS.get(model_type)
         if prefix_mapping:
             hf_to_vllm_mapper = WeightsMapper(
-                orig_to_new_prefix=prefix_mapping)
+                orig_to_new_prefix=prefix_mapping,orig_to_new_substr=substr_mapping)
             return hf_to_vllm_mapper._map_name(prefix)
         return prefix
 
@@ -136,6 +182,7 @@ class AscendQuantConfig(QuantizationConfig):
         from vllm.attention.layer import Attention
         if prefix.startswith("language_model"):
             prefix = prefix.split('.', 1)[-1]
+        # print(f'prefix in get_quant_method: {prefix}')
         if isinstance(layer, LinearBase):
             if self.is_layer_skipped_ascend(prefix,
                                             self.packed_modules_mapping):
@@ -166,6 +213,11 @@ class AscendQuantConfig(QuantizationConfig):
         fused_mapping: Mapping[str, List[str]] = MappingProxyType({})):
         # adapted from vllm.model_executor.layers.quantization.utils.quant_utils.is_layer_skipped
         proj_name = prefix.split(".")[-1]
+        # for k in self.quant_description.keys():
+        #     print(f'after fix: {k}')
+        # print(f'proj_name: {proj_name}')
+        # for k in fused_mapping:
+        #     print(f'fused_mapping: {k}')
         if proj_name in fused_mapping:
             shard_prefixes = [
                 prefix.replace(proj_name, shard_proj_name)
@@ -209,6 +261,23 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
         "visual.": "model.visual.",
         "language_model.lm_head.": "lm_head.",
         "language_model.model.": "model.language_model.",
+    },
+    "deepseek_v4": {
+        "layers.": "model.layers.",
+        "embed.": "model.embed_tokens.",
+        "head.": "lm_head.",
+    },
+}
+
+QUANT_MODEL_SUBSTR_MAPPINGS = {
+    "deepseek_v4": {
+        ".attn.": ".sefl_attn.",
+        ".w1.": ".gate_proj.",
+        ".w2.": ".down_proj.",
+        ".w3.": ".up_proj.",
+        ".ffn.": ".mlp.",
+        ".ffn_norm.": ".post_attention_layernorm.",
+        ".attn_norm.": ".input_layernorm.",
     },
 }
 

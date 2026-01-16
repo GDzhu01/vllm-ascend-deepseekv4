@@ -92,7 +92,7 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
     from fast_hadamard_transform import hadamard_transform
     return hadamard_transform(x, scale=x.size(-1) ** -0.5)
-
+import math
 
 def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
     """
@@ -149,6 +149,10 @@ def sparse_attn_torch(
     topk_idxs: torch.Tensor, 
     softmax_scale: float
 ) -> torch.Tensor:
+    q= q.unsqueeze(0)
+    kv=kv.unsqueeze(0).squeeze(2)
+    topk_idxs=topk_idxs.to(q.device)
+    print(f'q.shape: {q.shape}, kv.shape: {kv.shape}, topk_ids.shape: {topk_idxs.shape}')
     b, m, h, d = q.shape
     
     # Prepare indices: clamp -1 to 0 for gathering, but keep mask
@@ -181,7 +185,7 @@ def sparse_attn_torch(
     # Weighted Sum
     numerator = torch.matmul(exp_scores.unsqueeze(3), kv_f32.unsqueeze(2)).squeeze(3)
     output = numerator / total_denominator.unsqueeze(-1)
-    
+    output=output.squeeze(0)
     return output.to(q.dtype)
 
 
@@ -815,6 +819,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.window_size = window_size
         self.q_lora_rank = q_lora_rank
         self.compress_ratio = compress_ratio
+        self.softmax_scale = self.head_dim ** -0.5
 
 
         # MLA Args
@@ -847,7 +852,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.inderxer_dim: int = self.indexer.head_dim  # 128
             self.inderxer_wq_b = self.indexer.wq_b    # (1024, 32*128)    
             self.weights_proj = self.indexer.weights_proj   # (4096, 32)
-            self.softmax_scale = self.inderxer_dim ** -0.5
+            self.indexer_softmax_scale = self.inderxer_dim ** -0.5
 
             self.indexer_compress = self.indexer.compressor
 
@@ -859,16 +864,17 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             self.indexcom_head_dim = self.indexer.compressor.head_dim
             self.indexcom_rotate = self.indexer.compressor.rotate
+            self.index_topk=512
 
         # compress param
         if self.compressor is not None:
             self.compressor_head_dim = self.compressor.head_dim
-            self.overlap = self.compressor.overlap
-            self.rotate = self.compressor.rotate
+            self.compressor_overlap = self.compressor.overlap
+            self.compressor_rotate = self.compressor.rotate
 
-            self.ape = self.compressor.ape
-            self.wkv = self.compressor.wkv
-            self.wgate = self.compressor.wgate
+            self.compressor_ape = self.compressor.ape
+            self.compressor_wkv = self.compressor.wkv
+            self.compressor_wgate = self.compressor.wgate
             self.compress_norm = self.compressor.norm
         self.npu_attention_post_func = AttentionPostV4()
 
@@ -905,11 +911,14 @@ class AscendDSAImpl(DSAAttentionImpl):
     ) -> torch.Tensor:
         if inverse:
             sin = sin * -1
-        B, N, D = x.shape
-        S = 1
+        S, N, D = x.shape
+        B = 1
         x = x.view(B, N, S, D)
+        cos = cos.view(1,1,-1,64)
+        sin = sin.view(1,1,-1,64)
+        print(f'x.shape: {x.shape}, cos.shape: {cos.shape}')
         x = torch_npu.npu_interleave_rope(x, cos, sin)
-        return x.view(B, N, D)
+        return x.view(S, N, D)
     
     def get_compress_topk_idxs(
         self,
@@ -1168,7 +1177,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.compress_ratio > 1 and self.compressor.kv_cache is None:
             self.compressor.kv_cache = kv_cache[0][:, win:]
         # q
+        x = hidden_states
         qr = q = self.q_norm(self.wq_a(x))
+        print(f'qr.shape in indexer: {qr.shape}')
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
         q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
@@ -1177,27 +1188,33 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # win kv & topk_idxs
         kv = self.wkv(x)
+        print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
         kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         kv_pe = self.rope_single(kv_pe, cos, sin)
         kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
         if self.compress_ratio > 1:
             offset = kv.size(1) if start_pos == 0 else win
             if self.indexer is not None:
-                compress_topk_idxs = self.indexer_select_single_op(x, qr, start_pos, cos, sin, offset)
+                compress_topk_idxs = self.indexer_select_single_op(x, qr, cos, sin, offset)
             else:
-                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset)
+                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset).to(kv.device)
             topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
         topk_idxs = topk_idxs.int()
-
+        
+        cos = cos.view(1,1,-1,64)
+        sin = sin.view(1,1,-1,64)
         # compress kv & attn
         if start_pos == 0:
-            self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
+            # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
+
                 if (kv_compress := self.compressor(x, start_pos, cos, sin)) is not None:
-                    kv = torch.cat([kv, kv_compress], dim=1)
+                    print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')
+                    if kv_compress.shape[1]:
+                        kv = torch.cat([kv, kv_compress], dim=0)
             # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
             o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
         # else:
@@ -1215,7 +1232,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         o = o.view(bsz, seqlen, self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        x = self.wo_b(o.flatten(2))
+        o=o.flatten(2).squeeze(0)
+        x = self.wo_b(o)
         return x
 
     def indexer_select(
@@ -1301,37 +1319,41 @@ class AscendDSAImpl(DSAAttentionImpl):
         ratio = self.compress_ratio
         rd = self.rope_head_dim
         end_pos = start_pos + seqlen
-        if self.indexer.compressor.kv_cache is None:
-            self.indexer.compressor.kv_cache = self.indexer.kv_cache
-        q = self.wq_b(qr)
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        # if self.indexer.compressor.kv_cache is None:
+        #     self.indexer.compressor.kv_cache = self.indexer.kv_cache
+        q = self.inderxer_wq_b(qr)
+        print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
+        q = q.view(bsz, seqlen, self.indexer_heads, self.indexcom_head_dim)
         ## rope
         cos_q, sin_q = cos, sin
-        cos = cos.view(-1, 1, 1, self.rope_head_dim)
-        sin = sin.view(-1, 1, 1, self.rope_head_dim)
+        cos_q = cos_q.view(1, 1, -1, self.rope_head_dim)
+        sin_q = sin_q.view(1, 1, -1, self.rope_head_dim)
 
         q_pe, q_nope = torch.split(
             q,
-            [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+            [self.rope_head_dim, self.indexcom_head_dim - self.rope_head_dim],
             dim=-1)  # [b,s,64,64+64]
 
-        q_pe = q_pe.unsqueeze(2)
+        # q_pe = q_pe.unsqueeze(2)
+        q_pe = q_pe.transpose(1,2)
+        print(f'q_pe.shape: {q_pe.shape},cos_q: {cos_q.shape}')
         q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
-        q_pe = q_pe.squeeze(2)
+        q_pe = q_pe.transpose(1,2)
         q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
 
         # q = rotate_activation(q)
-        self.indexer.compressor(x, start_pos, cos, sin)
-        weights = self.weights_proj(x) * (self.softmax_scale * self.n_heads ** -0.5)
+        kv = self.indexer.compressor(x, start_pos, cos_q, sin_q)
+        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
         # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-        index_score = torch.einsum("bshd,btd->bsht", q, self.kv_cache[:bsz, :end_pos // ratio])
+        print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
+        index_score = torch.einsum("bshd,btd->bsht", q, kv)
         index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
         if start_pos == 0:
-            mask = torch.arange(seqlen // ratio).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
+            mask = torch.arange(seqlen // ratio,device=q.device).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
             index_score += torch.where(mask, float("-inf"), 0)
         topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
         if start_pos == 0:
-            mask = topk_idxs >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
+            mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
             topk_idxs = torch.where(mask, -1, topk_idxs + offset)
         else:
             topk_idxs += offset

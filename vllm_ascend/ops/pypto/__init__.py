@@ -35,8 +35,6 @@ def attn_post(atten_res, cos, sin, wo_a, wo_b):
 
 class AttentionPostV4(torch.nn.Module):
     def forward(self, attn_res, cos, sin, wo_a, wo_b):
-        for i in range(20):
-            torch.add(attn_res, 0)
         return torch.ops.pypto.attn_post(attn_res, cos, sin, wo_a, wo_b)
     
 pyptolib.define("hc_post(Tensor x, Tensor residual, Tensor post, Tensor comb) -> (Tensor)")

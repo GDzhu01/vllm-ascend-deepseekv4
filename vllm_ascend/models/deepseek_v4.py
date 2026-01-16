@@ -29,6 +29,7 @@ from collections.abc import Callable, Iterable
 from itertools import islice
 
 import torch
+import torch_npu
 from torch import nn
 from transformers import DeepseekV2Config, DeepseekV3Config, DeepseekV4Config
 
@@ -374,6 +375,7 @@ class Indexer(nn.Module):
             prefix=f"{prefix}.wq_b",
             return_bias=False,
         )
+        print(f'self.wq_b: {self.n_heads}, {self.head_dim}')
 
         self.weights_proj = ReplicatedLinear(
             config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
@@ -438,7 +440,7 @@ class Compressor(nn.Module):
             cos: torch.Tensor,
             sin: torch.Tensor
         )-> torch.Tensor:
-        assert self.kv_cache is not None
+        x= x.unsqueeze(0)
         bsz, seqlen, _ = x.size()
         ratio, overlap, d = self.compress_ratio, self.overlap, self.head_dim
         dtype = x.dtype
@@ -449,11 +451,14 @@ class Compressor(nn.Module):
             should_compress = seqlen >= ratio
             remainder = seqlen % ratio
             cutoff = seqlen - remainder
-            freqs_cis = freqs_cis[:cutoff:ratio]
+            # freqs_cis = freqs_cis[:cutoff:ratio]
+            print(f'cutoff:{cutoff},ratio:{ratio}')
+            cos = cos[:,:,:cutoff:ratio,:]
+            sin = sin[:,:,:cutoff:ratio,:]
             offset = ratio if overlap else 0
             if remainder > 0:
                 kv, _ = kv.split([cutoff, remainder], dim=1)
-                self.score_state[:bsz, offset : offset+remainder] = score[:, cutoff:] + self.ape[:remainder]
+                # self.score_state[:bsz, offset : offset+remainder] = score[:, cutoff:] + self.ape[:remainder]
                 score = score[:, :cutoff]
             kv = kv.unflatten(1, (-1, ratio))
             score = score.unflatten(1, (-1, ratio)) + self.ape
@@ -464,13 +469,30 @@ class Compressor(nn.Module):
         # if self.rotate:
         #     kv = rotate_activation(kv)
         if not should_compress:
-            return
+            return kv
         kv = self.norm(kv.to(dtype))
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
         kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         kv_pe = self.rope_single(kv_pe, cos, sin)
         kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        # kv=kv.squeeze(0)
         return kv
+    
+    def rope_single(
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        inverse: bool = False,
+    ) -> torch.Tensor:
+        if inverse:
+            sin = sin * -1
+        B, N, D = x.shape
+        S = 1
+        x = x.view(B, N, S, D)
+        print(f'x.shape: {x.shape}, cos.shape: {cos.shape}')
+        x = torch_npu.npu_interleave_rope(x, cos, sin)
+        return x.view(B, N, D)
 
 class DeepseekV4Attention(nn.Module):
     def __init__(
@@ -529,6 +551,7 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wkv",
             return_bias=False,
         )
+        print(f'self.head_dim: {self.head_dim}')
         self.kv_norm = RMSNorm(self.head_dim, self.norm_eps)
         self.wo_a = ColumnParallelLinear(
             self.n_heads * self.head_dim // self.n_groups,
@@ -1061,11 +1084,39 @@ class AscendDeepseekV4ForCausalLM(
         head_start = tp_rank * heads_per_rank
 
         for name, loaded_weight in weights:
+            
+            # TODO: 
+            if not name.startswith('model'):
+                name = f'model.{name}'
+            
+            if '.w1.' in name:
+                name = name.replace('.w1.','.gate_proj.')
+            if '.w2.' in name:
+                name = name.replace('.w2.','.down_proj.')
+            if '.w3.' in name:
+                name = name.replace('.w3.','.up_proj.')
+            
+            if 'model.head.' in name and 'model.lm_head.' not in name:
+                name = name.replace('model.head.','lm_head.')
+                print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
+            if 'embed.' in name and 'embed_token.' not in name:
+                name = name.replace('embed.','embed_tokens.')
+            if 'attn' in name and 'self_attn' not in name:
+                name = name.replace('.attn.','.self_attn.')
+            if '.ffn.' in name:
+                name = name.replace('.ffn.','.mlp.')
+            if '.ffn_norm.' in name:
+                name = name.replace('.ffn_norm.','.post_attention_layernorm.')
+            if '.attn_norm.' in name:
+                name = name.replace('.attn_norm.','.input_layernorm.')
+            
             if "rotary_emb.inv_freq" in name:
                 continue
             if ".gate.bias" in name:
                 name=name.replace('.gate.bias','.gate.e_score_correction_bias')
 
+            if 'wq_b' in name:
+                print(f'loaded_weight.shape for wq_b: {loaded_weight.shape}')
             if "sink" in name:
                 # Handle attention sinks (distributed across ranks)
                 param = params_dict[name]
