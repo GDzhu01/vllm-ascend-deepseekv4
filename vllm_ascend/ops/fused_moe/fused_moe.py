@@ -283,8 +283,7 @@ class AscendFusedMoE(FusedMoE):
             final_hidden_states)
 
     def forward_impl(self, hidden_states: torch.Tensor,
-                     router_logits: torch.Tensor,
-                     input_ids = None):
+                     router_logits: torch.Tensor):
         assert self.quant_method is not None
 
         # For w8a8 dynamic we can do npu_dynamic_quant and gate in parallel.
@@ -448,19 +447,17 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        router_logits: torch.Tensor,
-        input_ids = None
+        router_logits: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         shared_out, fused_out = AscendFusedMoE.forward(
             self,
             hidden_states=hidden_states,
-            router_logits=router_logits,
-            input_ids= input_ids
+            router_logits=router_logits
         )
         return shared_out, fused_out
 
     def forward_impl(self, hidden_states: torch.Tensor,
-                     router_logits: torch.Tensor,input_ids = None):
+                     router_logits: torch.Tensor):
         shared_out = None
         if not self.multistream_overlap_gate:
             # Make sure the shared experts stream begins after hidden_states are ready.
@@ -479,8 +476,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         routed_out = AscendFusedMoE.forward_impl(
             self,
             hidden_states=hidden_states,
-            router_logits=router_logits,
-            input_ids=input_ids
+            router_logits=router_logits
         )
 
         if not self.multistream_overlap_gate:

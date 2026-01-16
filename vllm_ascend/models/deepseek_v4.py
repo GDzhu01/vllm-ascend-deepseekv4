@@ -353,7 +353,7 @@ class DeepseekV4MoE(nn.Module):
             # router_logits: (num_tokens, n_experts)
             router_logits, _ = self.gate(hidden_states)
             fused_moe_out = self.experts(
-                hidden_states=hidden_states, router_logits=router_logits,input_ids=input_ids
+                hidden_states=hidden_states, router_logits=router_logits
             )
 
         shared_output, final_hidden_states = fused_moe_out
@@ -365,9 +365,9 @@ class DeepseekV4MoE(nn.Module):
         # if hidden_states.dtype != torch.float16:
         #     if not self.is_rocm_aiter_moe_enabled:
         #         final_hidden_states *= self.routed_scaling_factor
-        elif self.shared_experts is not None:
-            assert shared_output is not None
-            shared_output *= 1.0 / self.routed_scaling_factor
+        # elif self.shared_experts is not None:
+        #     assert shared_output is not None
+        #     shared_output *= 1.0 / self.routed_scaling_factor
 
         if self.shared_experts is not None:
             assert shared_output is not None
@@ -827,8 +827,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
-        llama_4_scaling: torch.Tensor | None = None,
-        input_ids = None,
+        llama_4_scaling: torch.Tensor | None = None
     ) -> torch.Tensor:
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
@@ -852,7 +851,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states,input_ids)
+        hidden_states = self.mlp(hidden_states)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
 
         return hidden_states, residual
@@ -970,7 +969,7 @@ class DeepseekV4Model(nn.Module):
         hidden_states = hidden_states.unsqueeze(1).repeat( 1, self.hc_mult, 1) #(b,s, c, h)
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual = layer(
-                positions, hidden_states, residual, llama_4_scaling,input_ids
+                positions, hidden_states, residual, llama_4_scaling
             )
         hidden_states = self.hc_head(hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base)
         if not get_pp_group().is_last_rank:
