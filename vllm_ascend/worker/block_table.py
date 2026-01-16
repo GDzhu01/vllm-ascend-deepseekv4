@@ -96,7 +96,6 @@ class BlockTable:
         self,
         block_ids,
         row_idx: int,
-        num_tokens: int
     ) -> None:
         if not block_ids:
             return
@@ -111,9 +110,9 @@ class BlockTable:
         self.block_table.np[row_idx, start:start + num_blocks] = block_ids
         self.num_blocks_per_row[row_idx] += num_blocks
 
-    def add_row(self, block_ids: list[int], row_idx: int, num_tokens: int) -> None:
+    def add_row(self, block_ids: list[int], row_idx: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
-        self.append_row(block_ids, row_idx, num_tokens)
+        self.append_row(block_ids, row_idx)
 
     def move_row(self, src: int, tgt: int) -> None:
         num_blocks = self.num_blocks_per_row[src]
@@ -302,13 +301,13 @@ class MultiGroupBlockTable:
         ]
 
     def append_row(self, block_ids: tuple[list[int], ...],
-                   row_idx: int, num_tokens: int) -> None:
+                   row_idx: int) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.append_row(block_ids[i], row_idx, num_tokens)
+            block_table.append_row(block_ids[i], row_idx)
 
-    def add_row(self, block_ids: tuple[list[int], ...], row_idx: int, num_tokens: int) -> None:
+    def add_row(self, block_ids: tuple[list[int], ...], row_idx: int) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.add_row(block_ids[0], row_idx, num_tokens)
+            block_table.add_row(block_ids[0], row_idx)
             # NOTE first simple kv route, only 1 kv manager and 1 block_id in scheduler_output,
             # but 2 block_tables for C4/C128. Try to find a better implementation.
 
