@@ -74,10 +74,10 @@ def select_experts(hidden_states: torch.Tensor,
 
     if is_support_npu_moe_gating_top_k:
         # if torch.distributed.get_rank() == 0:
-        print(f"=====================================router_logits : {torch.distributed.get_rank()}, router_logits is {router_logits}")
-        if tid2eid is not None:
-            print(f'tid2eid: {tid2eid.shape}')
-            print(f'input_ids: {input_ids} rank: {torch.distributed.get_rank()}')
+        # print(f"=====================================router_logits : {torch.distributed.get_rank()}, router_logits is {router_logits}")
+        # if tid2eid is not None:
+        #     print(f'tid2eid: {tid2eid.shape}')
+        #     print(f'input_ids: {input_ids.shape} rank: {torch.distributed.get_rank()}')
         topk_weights, topk_ids = _select_experts_with_fusion_ops(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -233,7 +233,7 @@ def _select_experts_with_fusion_ops(
     num_expert_group = num_expert_group if num_expert_group is not None else 1
     renorm = int(renormalize)
     if scoring_func == "sqrtsoftplus" or True:
-        # if input_ids is not None:
+        # if tid2eid is not None:
         #     input_ids=input_ids.to(torch.int64)
         #     # tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
         #     tid2eid_ones = tid2eid.to(torch.int32)
@@ -255,6 +255,9 @@ def _select_experts_with_fusion_ops(
         #     norm_type=2,       # 归一化类型（可选）
         #     out_flag=False          # 是否输出归一化结果（可选）
         # )
+        
+        # topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+        # return topk_weights, topk_ids
 
         scores = F.softplus(router_logits).sqrt()
         original_scores = scores
@@ -262,16 +265,18 @@ def _select_experts_with_fusion_ops(
             scores = scores + e_score_correction_bias
         tid2eid = None
         if tid2eid is not None: # Note: if hash
-            print(f'input_ids: {input_ids} fc rank: {torch.distributed.get_rank()}')
-            tid2eid_cpu = tid2eid.detach().cpu()
-            print(f'1111 fc rank: {torch.distributed.get_rank()}')
-            input_ids_cpu = input_ids.cpu()
+            # print(f'input_ids: {input_ids} fc rank: {torch.distributed.get_rank()}')
+            # tid2eid_cpu = tid2eid.detach().cpu()
+            # print(f'1111 fc rank: {torch.distributed.get_rank()}')
+            # input_ids_cpu = input_ids.cpu()
             print('2222')
-            topk_ids = tid2eid_cpu[input_ids_cpu].to(scores.device)
+            # topk_ids = tid2eid_cpu[input_ids_cpu].to(scores.device)
+            topk_ids = tid2eid[input_ids]
             print(f'hi')
         else:
             topk_ids = scores.topk(top_k, dim=-1)[1]
         print('hiiiii')
+        print(f'topk_ids.shape: {topk_ids.shape},original_scores.shape: {original_scores.shape}')
         weights = original_scores.gather(1, topk_ids)
         print('fuck')
         weights /= weights.sum(dim=-1, keepdim=True)
@@ -279,7 +284,7 @@ def _select_experts_with_fusion_ops(
         weights *= routed_scaling_factor
         print("============================================", routed_scaling_factor)
         
-        # topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+
         return weights, topk_ids.to(torch.int32)
     elif scoring_func == "softmax":
         norm_type = 0
@@ -369,8 +374,6 @@ def _native_select_experts(
 
     if e_score_correction_bias is not None:
         topk_weights = topk_weights + self.bias
-    if use_hash:
-        topk_weights = tid2eid[input_ids]
     if custom_routing_function is not None:
         topk_weights, topk_ids = custom_routing_function(
             hidden_states=hidden_states,

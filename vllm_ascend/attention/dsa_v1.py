@@ -105,8 +105,8 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    print(x.device, freqs_cis.to("npu"))
-    x = torch.view_as_real(x * freqs_cis.to("npu")).flatten(-2)
+    # print(x.device, freqs_cis.to("npu"))
+    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
     y.copy_(x)
     return y
 
@@ -213,7 +213,7 @@ def sparse_attn_torch(
     q= q.unsqueeze(0)
     kv=kv.unsqueeze(0).squeeze(2)
     topk_idxs=topk_idxs.to(q.device)
-    print(f'q.shape: {q.shape}, kv.shape: {kv.shape}, topk_ids.shape: {topk_idxs.shape}')
+    # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}, topk_ids.shape: {topk_idxs.shape}')
     b, m, h, d = q.shape
     
     # Prepare indices: clamp -1 to 0 for gathering, but keep mask
@@ -1312,8 +1312,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         cos = attn_metadata.prefill.cos
         sin = attn_metadata.prefill.sin
-        print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, sin shape is {sin.shape}")
-        print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, cos shape is {cos.shape}")
+        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, sin shape is {sin.shape}")
+        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, cos shape is {cos.shape}")
         
         seqlen, _ = hidden_states.size()
         bsz = 1
@@ -1321,20 +1321,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         win = self.window_size
         ratio = self.compress_ratio
         rd = self.rope_head_dim
-        if self.compress_ratio > 1 and self.compressor.kv_cache is None:
-            self.compressor.kv_cache = kv_cache[0][:, win:]
+        # if self.compress_ratio > 1 and self.compressor.kv_cache is None:
+        #     self.compressor.kv_cache = kv_cache[0][:, win:]
         # q
         x = hidden_states
         qr = q = self.q_norm(self.wq_a(x))
-        print(f"=====================================in attention qr rank : {torch.distributed.get_rank()}, q is {qr}, mean is {qr.mean()}")
+        # print(f"=====================================in attention qr rank : {torch.distributed.get_rank()}, q is {qr}, mean is {qr.mean()}")
         print(f'qr.shape in indexer: {qr.shape}')
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        print(f"=====================================in attention q after wqb rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
+        # print(f"=====================================in attention q after wqb rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
         q_dtype = q.dtype
         q *= torch.rsqrt(q.to(torch.float32).square().mean(-1, keepdim=True) + self.eps)
-        print("*****************", self.eps)
+        # print("*****************", self.eps)
         q = q.to(q_dtype)
-        print(f"=====================================in attention q after rsqt rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
+        # print(f"=====================================in attention q after rsqt rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
         
         
         
@@ -1354,7 +1354,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         # win kv & topk_idxs
         kv = self.wkv(x)
-        print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
+        # print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
         
@@ -1366,9 +1366,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         apply_rotary_emb(kv[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
         
-        print(f"=====================================in attention kv rank : {torch.distributed.get_rank()}, kv is {kv}, mean is {kv.mean()}")
+        # print(f"=====================================in attention kv rank : {torch.distributed.get_rank()}, kv is {kv}, mean is {kv.mean()}")
         topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
-        print(f"=====================================in attention topkidx rank : {torch.distributed.get_rank()}, topkidx is {topk_idxs}")
+        # print(f"=====================================in attention topkidx rank : {torch.distributed.get_rank()}, topkidx is {topk_idxs}")
         if self.compress_ratio > 1:
             offset = kv.size(1) if start_pos == 0 else win
             if self.indexer is not None:
@@ -1384,12 +1384,12 @@ class AscendDSAImpl(DSAAttentionImpl):
             if self.compress_ratio > 1:
 
                 if (kv_compress := self.compressor(x, start_pos, cos, sin)) is not None:
-                    print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')
+                    # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')
                     if kv_compress.shape[1]:
                         kv = torch.cat([kv, kv_compress.squeeze(2)], dim=0)
             # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
             o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
-        print(f"=====================================in attention o1 rank : {torch.distributed.get_rank()}, o1 is {o}")
+        # print(f"=====================================in attention o1 rank : {torch.distributed.get_rank()}, o1 is {o}")
         # else:
         #     self.kv_cache[:bsz, start_pos % win] = kv.squeeze(1)
         #     if self.compress_ratio > 1:
@@ -1411,10 +1411,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         o = o.view(bsz, seqlen, self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        print(f"=====================================in attention o2 rank : {torch.distributed.get_rank()}, o2 is {o}")
+        # print(f"=====================================in attention o2 rank : {torch.distributed.get_rank()}, o2 is {o}")
         o=o.flatten(2).squeeze(0)
         x = self.wo_b(o)
-        print(f"=====================================in attention attn out rank : {torch.distributed.get_rank()}, attn out is {x}")
+        # print(f"=====================================in attention attn out rank : {torch.distributed.get_rank()}, attn out is {x}")
         
         return x
 
@@ -1539,7 +1539,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # if self.indexer.compressor.kv_cache is None:
         #     self.indexer.compressor.kv_cache = self.indexer.kv_cache
         q = self.inderxer_wq_b(qr)
-        print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
+        # print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
         q = q.view(bsz, seqlen, self.indexer_heads, self.indexcom_head_dim)
         ## rope
         cos_q, sin_q = cos, sin
@@ -1553,7 +1553,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # q_pe = q_pe.unsqueeze(2)
         q_pe = q_pe.transpose(1,2)
-        print(f'q_pe.shape: {q_pe.shape},cos_q: {cos_q.shape}')
+        # print(f'q_pe.shape: {q_pe.shape},cos_q: {cos_q.shape}')
         # q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
         # q_pe = q_pe.transpose(1,2)
         # q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
@@ -1572,7 +1572,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         kv = self.indexer.compressor(x, start_pos, cos_q, sin_q)
         weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
         # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-        print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
+        # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
         index_score = torch.einsum("bshd,btd->bsht", q, kv.squeeze(2))
         index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
         if start_pos == 0:

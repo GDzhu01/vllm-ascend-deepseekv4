@@ -164,8 +164,8 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    print(x.device, freqs_cis.to("npu"))
-    x = torch.view_as_real(x * freqs_cis.to("npu")).flatten(-2)
+    # print(x.device, freqs_cis.to("npu"))
+    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
     y.copy_(x)
     return y
 
@@ -233,7 +233,7 @@ class DeepseekV4MoE(nn.Module):
         self.tp_rank = get_tensor_model_parallel_rank()
         layer_idx = int(prefix.split(sep=".")[-2])
         self.layer_idx = layer_idx
-        self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
+        self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.5)
 
         self.ep_group = get_ep_group().device_group
         self.ep_rank = get_ep_group().rank_in_group
@@ -318,9 +318,9 @@ class DeepseekV4MoE(nn.Module):
             scoring_func=getattr(config, "score_func", "softmax"),
             # we do scaling outside, set factor to 1.0 to avoid double mul
             # aiter applies routed_scaling_factor internally
-            routed_scaling_factor=1.5,
-            # if not self.is_rocm_aiter_moe_enabled
-            # else self.routed_scaling_factor,
+            # routed_scaling_factor=1.5,
+            routed_scaling_factor=1.0 if not self.is_rocm_aiter_moe_enabled
+            else self.routed_scaling_factor,
             e_score_correction_bias=self.gate.e_score_correction_bias,
             enable_eplb=self.enable_eplb,
             num_redundant_experts=self.n_redundant_experts,
@@ -362,12 +362,12 @@ class DeepseekV4MoE(nn.Module):
 
         # Fix FP16 overflow
         # See DeepseekV2DecoderLayer for more details.
-        # if hidden_states.dtype != torch.float16:
-        #     if not self.is_rocm_aiter_moe_enabled:
-        #         final_hidden_states *= self.routed_scaling_factor
-        # elif self.shared_experts is not None:
-        #     assert shared_output is not None
-        #     shared_output *= 1.0 / self.routed_scaling_factor
+        if hidden_states.dtype != torch.float16:
+            if not self.is_rocm_aiter_moe_enabled:
+                final_hidden_states *= self.routed_scaling_factor
+        elif self.shared_experts is not None:
+            assert shared_output is not None
+            shared_output *= 1.0 / self.routed_scaling_factor
 
         if self.shared_experts is not None:
             assert shared_output is not None
@@ -437,7 +437,7 @@ class Indexer(nn.Module):
             prefix=f"{prefix}.wq_b",
             return_bias=False,
         )
-        print(f'self.wq_b: {self.n_heads}, {self.head_dim}')
+        # print(f'self.wq_b: {self.n_heads}, {self.head_dim}')
 
         self.weights_proj = ReplicatedLinear(
             config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
@@ -514,7 +514,7 @@ class Compressor(nn.Module):
             remainder = seqlen % ratio
             cutoff = seqlen - remainder
             # freqs_cis = freqs_cis[:cutoff:ratio]
-            print(f'cutoff:{cutoff},ratio:{ratio}')
+            # print(f'cutoff:{cutoff},ratio:{ratio}')
             cos = cos[:,:,:cutoff:ratio,:]
             sin = sin[:,:,:cutoff:ratio,:]
             offset = ratio if overlap else 0
@@ -567,7 +567,7 @@ class Compressor(nn.Module):
         B, N, D = x.shape
         S = 1
         x = x.view(B, N, S, D)
-        print(f'x.shape: {x.shape}, cos.shape: {cos.shape}')
+        # print(f'x.shape: {x.shape}, cos.shape: {cos.shape}')
         x = torch_npu.npu_interleave_rope(x, cos, sin)
         return x.view(B, N, D)
 
@@ -628,7 +628,7 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wkv",
             return_bias=False,
         )
-        print(f'self.head_dim: {self.head_dim}')
+        # print(f'self.head_dim: {self.head_dim}')
         self.kv_norm = RMSNorm(self.head_dim, self.norm_eps)
         self.wo_a = ColumnParallelLinear(
             self.n_heads * self.head_dim // self.n_groups,
@@ -664,7 +664,7 @@ class DeepseekV4Attention(nn.Module):
             rope_parameters=config.rope_parameters,
             is_neox_style=False,
         )
-        print(f'self.rotary_emb: {self.rotary_emb}')
+        # print(f'self.rotary_emb: {self.rotary_emb}')
         self.scaling = self.head_dim**-0.5
 
         # if (
@@ -831,22 +831,22 @@ class DeepseekV2DecoderLayer(nn.Module):
     ) -> torch.Tensor:
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
-        if torch.distributed.get_rank() == 0:
-            print(f"=====================================after hcpre rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}, post is {post}, comb is {comb}")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"=====================================after hcpre rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}, post is {post}, comb is {comb}")
         hidden_states = self.input_layernorm(hidden_states)
         attn_kwargs = {
             "positions": positions,
             "hidden_states": hidden_states,
             "llama_4_scaling": llama_4_scaling
         }
-        if torch.distributed.get_rank() == 0:
-            print(f"=====================================before attn rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"=====================================before attn rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.self_attn(**attn_kwargs)
-        if torch.distributed.get_rank() == 0:
-            print(f"=====================================after attb rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"=====================================after attb rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
-        if torch.distributed.get_rank() == 0:
-            print(f"=====================================after hc_post rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"=====================================after hc_post rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         # Fully Connected
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
@@ -1111,7 +1111,7 @@ class AscendDeepseekV4ForCausalLM(
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
-        print(f'===================inputid is :{input_ids.cpu()}, rank is :{torch.distributed.get_rank()}')
+        # print(f'===================inputid is :{input_ids.cpu()}, rank is :{torch.distributed.get_rank()}')
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )
