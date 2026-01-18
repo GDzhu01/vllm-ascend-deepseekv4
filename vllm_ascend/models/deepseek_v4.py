@@ -27,6 +27,7 @@
 import typing
 from collections.abc import Callable, Iterable
 from itertools import islice
+import torch.nn.functional as F
 import math
 
 import torch
@@ -108,6 +109,26 @@ from vllm_ascend.ops.pypto import npu_hc_pre,npu_hc_post,HC_PRE,HC_POST
 
 logger = init_logger(__name__)
 
+def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
+    from scipy.linalg import hadamard
+    if hadamard is None:
+        raise ImportError("Please install scipy")
+    x_shape = x.shape
+    dim = x.shape[-1]
+    x = x.reshape(-1, dim)
+    log_dim = math.ceil(math.log2(dim))
+    dim_padded = 2 ** log_dim
+    if dim != dim_padded:
+        x = F.pad(x, (0, dim_padded - dim))
+    out = F.linear(x, torch.tensor(hadamard(dim_padded, dtype=float), dtype=x.dtype, device=x.device))
+    out = out * scale
+    return out[..., :dim].reshape(*x_shape)
+
+def rotate_activation(x: torch.Tensor) -> torch.Tensor:
+    hidden_size = x.size(-1)
+    return hadamard_transform_ref(x, scale=hidden_size ** -0.5)
+
+
 def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
     """
     Precomputes frequency-based complex exponential values for rotary positional embeddings.
@@ -156,8 +177,8 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
     Returns:
         torch.Tensor: Tensor with rotary embeddings applied.
     """
-    y = x
-    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
+    y = x   # (1,1,1,64)
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2))) # (1,1,1,32)
     if inverse:
         freqs_cis = freqs_cis.conj()
     if x.ndim == 3:
@@ -167,7 +188,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
     # print(x.device, freqs_cis.to("npu"))
     x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
     y.copy_(x)
-    return y
+    return y  # 
 
 
 
@@ -528,12 +549,12 @@ class Compressor(nn.Module):
                 kv = self.overlap_transform(kv, 0)
                 score = self.overlap_transform(score, float("-inf"))
             kv = (kv * score.softmax(dim=2)).sum(dim=2)
-        # if self.rotate:
-        #     kv = rotate_activation(kv)
+        if self.rotate:
+            kv = rotate_activation(kv)
         if not should_compress:
             return kv
         kv = self.norm(kv.to(dtype))
-        kv = kv.view(-1, 1, 1, self.nope_head_dim+self.rope_head_dim)
+        kv = kv.view(1, -1, 1, self.nope_head_dim+self.rope_head_dim)
         # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         # kv_pe = self.rope_single(kv_pe, cos, sin)
         # kv = torch.cat([kv_nope, kv_pe], dim=-1)
@@ -549,11 +570,12 @@ class Compressor(nn.Module):
         remainder = seqlen % ratio
         cutoff = seqlen - remainder
         freqs_cis = self.freqs_cis[:cutoff:ratio]
-        
-        apply_rotary_emb(kv[..., -64:], freqs_cis)
+        bsz = 1
+        seq = kv.shape[1]
+        apply_rotary_emb(kv[..., -64:].view(1, seq, -1, self.rope_head_dim), freqs_cis)
         
         # kv=kv.squeeze(0)
-        return kv
+        return kv # s b n d
     
     def rope_single(
         self,

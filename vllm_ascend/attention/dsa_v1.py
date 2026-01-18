@@ -149,10 +149,24 @@ def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int
 #     return y
 
 
+def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
+    from scipy.linalg import hadamard
+    if hadamard is None:
+        raise ImportError("Please install scipy")
+    x_shape = x.shape
+    dim = x.shape[-1]
+    x = x.reshape(-1, dim)
+    log_dim = math.ceil(math.log2(dim))
+    dim_padded = 2 ** log_dim
+    if dim != dim_padded:
+        x = F.pad(x, (0, dim_padded - dim))
+    out = F.linear(x, torch.tensor(hadamard(dim_padded, dtype=float), dtype=x.dtype, device=x.device))
+    out = out * scale
+    return out[..., :dim].reshape(*x_shape)
+
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
-    assert x.dtype == torch.bfloat16
-    from fast_hadamard_transform import hadamard_transform
-    return hadamard_transform(x, scale=x.size(-1) ** -0.5)
+    hidden_size = x.size(-1)
+    return hadamard_transform_ref(x, scale=hidden_size ** -0.5)
 import math
 
 def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
@@ -1385,8 +1399,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
                 if (kv_compress := self.compressor(x, start_pos, cos, sin)) is not None:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')
-                    if kv_compress.shape[1]:
-                        kv = torch.cat([kv, kv_compress.squeeze(2)], dim=0)
+                    if kv_compress.shape[1]:  # bsnd
+                        kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
             # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
             o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
         # print(f"=====================================in attention o1 rank : {torch.distributed.get_rank()}, o1 is {o}")
@@ -1568,7 +1582,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
         
 
-        # q = rotate_activation(q)
+        q = rotate_activation(q)
         kv = self.indexer.compressor(x, start_pos, cos_q, sin_q)
         weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
         # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
