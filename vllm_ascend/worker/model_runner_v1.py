@@ -2449,13 +2449,16 @@ class NPUModelRunner(GPUModelRunner):
             get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
 
     def initialize_kv_state(self):
-        if 0: # model_config is not dsk_v4
+        is_dsv4 = True
+
+        if not is_dsv4: # model_config is not dsk_v4
             return
         kv_states: Dict[str, tuple[torch.Tensor]] = {}
         # TODO get this from config file
         c1_layers = [0, 1]
-        c4_layers = list(range(2, 43, 2))
-        c128_layers = list(range(3, 43, 2))
+        num_layers = self.model_config.hf_config.num_hidden_layers
+        c4_layers = list(range(2, num_layers, 2))
+        c128_layers = list(range(3, num_layers, 2))
         window_size = 128
         head_dim = 512
         indexer_head_dim = 128
@@ -2773,11 +2776,9 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        # reshape 成 [num_blocks, 128 // ratio, 1, head_size]
-
-        # TODO(cmq): modify 6 to num_layers
-        c4_layers = list(range(0, 6, 2))
-        c128_layers = list(range(1, 7, 2))
+        num_layers = self.model_config.hf_config.num_hidden_layers
+        c4_layers = list(range(0, num_layers, 2))
+        c128_layers = list(range(1, num_layers, 2))
 
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
