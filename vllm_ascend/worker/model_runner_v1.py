@@ -2496,7 +2496,7 @@ class NPUModelRunner(GPUModelRunner):
                 layer_index = extract_layer_index(layer_name)
                 sliding_window = _get_aligned_tensor(
                     torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
-                    torch.float32,
+                    torch.bfloat16,
                     alignment,
                 )
                 if layer_index in c4_layers:
@@ -2504,22 +2504,22 @@ class NPUModelRunner(GPUModelRunner):
                     compress_ratio = 4
                     c4_kv_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     c4_score_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     c4_indexer_kv_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     c4_indexer_score_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     kv_states[layer_name] = (sliding_window, c4_kv_state, c4_score_state, c4_indexer_kv_state, c4_indexer_score_state)
@@ -2528,12 +2528,12 @@ class NPUModelRunner(GPUModelRunner):
                     compress_ratio = 128
                     c128_kv_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     c128_score_state = _get_aligned_tensor(
                         torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
-                        torch.float32,
+                        torch.bfloat16,
                         alignment,
                     )
                     kv_states[layer_name] = (sliding_window, c128_kv_state, c128_score_state)
@@ -2541,6 +2541,18 @@ class NPUModelRunner(GPUModelRunner):
                     assert layer_index in c1_layers, "layer_index out of range"
                     kv_states[layer_name] = (sliding_window)
 
+        sliding_window0 = _get_aligned_tensor(
+                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                    torch.bfloat16,
+                    alignment,
+                )
+        sliding_window1 = _get_aligned_tensor(
+                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                    torch.bfloat16,
+                    alignment,
+                )
+        kv_states['model.layers.0.self_attn.attn'] = [(sliding_window0)]
+        kv_states['model.layers.1.self_attn.attn'] = [(sliding_window1)]
         # bind kv cache to layers
         # TODO maybe move this to bind_kv_states in utils
         forward_context = self.compilation_config.static_forward_context
@@ -2791,8 +2803,8 @@ class NPUModelRunner(GPUModelRunner):
         # reshape 成 [num_blocks, 128 // ratio, 1, head_size]
 
         # TODO(cmq): modify 6 to num_layers
-        c4_layers = list(range(0, 6, 2))
-        c128_layers = list(range(1, 7, 2))
+        c4_layers = list(range(0, 43, 2))
+        c128_layers = list(range(1, 44, 2))
 
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
@@ -3262,7 +3274,7 @@ class NPUModelRunner(GPUModelRunner):
                             compress_ratio=4,
                             indexer_head_size=128,
                             # TOOOOOOOOOOOOOOOOOOOOOOOOODO
-                            indexer_dtype=torch.int8,
+                            indexer_dtype=torch.bfloat16, 
                             indexer_scale_dim=1,
                             indexer_scale_dtype=torch.float16,
                         )

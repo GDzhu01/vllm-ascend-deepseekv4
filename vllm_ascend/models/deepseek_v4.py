@@ -521,7 +521,8 @@ class Compressor(nn.Module):
             x: torch.Tensor,
             start_pos: int,
             cos: torch.Tensor,
-            sin: torch.Tensor
+            sin: torch.Tensor,
+            kv_state = None,
         )-> torch.Tensor:
         x= x.unsqueeze(0)
         bsz, seqlen, _ = x.size()
@@ -539,20 +540,61 @@ class Compressor(nn.Module):
             cos = cos[:,:,:cutoff:ratio,:]
             sin = sin[:,:,:cutoff:ratio,:]
             offset = ratio if overlap else 0
+            if overlap and cutoff >= ratio:
+                if kv.shape[-1]==1024:
+                    kv_state[1][0, :ratio] = kv[0, cutoff-ratio:cutoff]
+                    kv_state[2][0, :ratio] = score[0, cutoff-ratio:cutoff] + self.ape
+                elif kv.shape[-1]==256:
+                    kv_state[3][0, :ratio] = kv[0, cutoff-ratio:cutoff]
+                    kv_state[4][0, :ratio] = score[0, cutoff-ratio:cutoff] + self.ape
+
             if remainder > 0:
-                kv, _ = kv.split([cutoff, remainder], dim=1)
-                # self.score_state[:bsz, offset : offset+remainder] = score[:, cutoff:] + self.ape[:remainder]
-                score = score[:, :cutoff]
+                if kv.shape[-1]==1024 or kv.shape[-1]==512:
+                    kv, kv_state[1][0, offset : offset+remainder] = kv.split([cutoff, remainder], dim=1)
+                    kv_state[2][0, offset : offset+remainder] = score[0, cutoff:] + self.ape[:remainder]
+                    score = score[:, :cutoff]
+                elif kv.shape[-1]==256 or kv.shape[-1]==128:
+                    kv, kv_state[3][0, offset : offset+remainder] = kv.split([cutoff, remainder], dim=1)
+                    kv_state[4][0, offset : offset+remainder] = score[0, cutoff:] + self.ape[:remainder]
+                    score = score[:, :cutoff]
             kv = kv.unflatten(1, (-1, ratio))
             score = score.unflatten(1, (-1, ratio)) + self.ape
             if overlap:
                 kv = self.overlap_transform(kv, 0)
                 score = self.overlap_transform(score, float("-inf"))
             kv = (kv * score.softmax(dim=2)).sum(dim=2)
+        else:
+            should_compress = (start_pos + 1) % self.compress_ratio == 0
+            score += self.ape[start_pos % ratio]
+            if overlap:
+                if kv.shape[-1]==1024:
+                    kv_state[1][0, ratio + start_pos % ratio] = kv.squeeze(1)
+                    kv_state[2][0, ratio + start_pos % ratio] = score.squeeze(1)
+                else:
+                    kv_state[3][0, ratio + start_pos % ratio] = kv.squeeze(1)
+                    kv_state[4][0, ratio + start_pos % ratio] = score.squeeze(1)
+                if should_compress:
+                    if kv.shape[-1]==1024:
+                        kv_state_tmp = torch.cat([kv_state[1][0, :ratio, :d], kv_state[1][0, ratio:, d:]], dim=1)
+                        score_state_tmp = torch.cat([kv_state[2][0, :ratio, :d], kv_state[2][0, ratio:, d:]], dim=1)
+                        kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
+                        kv_state[1][0, :ratio] = kv_state[1][0, ratio:]
+                        kv_state[2][0, :ratio] = kv_state[2][0, ratio:]
+                    else:
+                        kv_state_tmp = torch.cat([kv_state[3][0, :ratio, :d], kv_state[3][0, ratio:, d:]], dim=1)
+                        score_state_tmp = torch.cat([kv_state[4][0, :ratio, :d], kv_state[4][0, ratio:, d:]], dim=1)
+                        kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
+                        kv_state[3][0, :ratio] = kv_state[3][0, ratio:]
+                        kv_state[4][0, :ratio] = kv_state[4][0, ratio:]
+            else:
+                kv_state[1][0, start_pos % ratio] = kv.squeeze(1)
+                kv_state[2][0, start_pos % ratio] = score.squeeze(1)
+                if should_compress:
+                    kv = (kv_state[1][0] *  kv_state[2][0].softmax(dim=1)).sum(dim=1, keepdim=True)
         if self.rotate:
             kv = rotate_activation(kv)
         if not should_compress:
-            return kv
+            return
         kv = self.norm(kv.to(dtype))
         kv = kv.view(1, -1, 1, self.nope_head_dim+self.rope_head_dim)
         # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
