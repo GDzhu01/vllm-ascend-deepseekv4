@@ -522,6 +522,7 @@ class Compressor(nn.Module):
             start_pos: int,
             cos: torch.Tensor,
             sin: torch.Tensor,
+            freqs_cis: torch.Tensor = None,
             kv_state = None,
         )-> torch.Tensor:
         x= x.unsqueeze(0)
@@ -602,18 +603,21 @@ class Compressor(nn.Module):
         # kv = torch.cat([kv_nope, kv_pe], dim=-1)
         
         # offset = ratio if overlap else 0
-        
-        self.rope_theta = 10000.0
-        self.compress_rope_theta = 40000.0
-        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                         4, 32, 1)
-        should_compress = seqlen >= ratio
-        remainder = seqlen % ratio
-        cutoff = seqlen - remainder
-        freqs_cis = self.freqs_cis[:cutoff:ratio]
-        bsz = 1
-        seq = kv.shape[1]
+        if start_pos==0:
+            self.rope_theta = 10000.0
+            self.compress_rope_theta = 40000.0
+            self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
+                                            self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
+                                            4, 32, 1)
+            should_compress = seqlen >= ratio
+            remainder = seqlen % ratio
+            cutoff = seqlen - remainder
+            freqs_cis = self.freqs_cis[:cutoff:ratio]
+            bsz = 1
+            seq = kv.shape[1]
+        else:
+            seq = kv.shape[1]
+
         apply_rotary_emb(kv[..., -64:].view(1, seq, -1, self.rope_head_dim), freqs_cis)
         
         # kv=kv.squeeze(0)

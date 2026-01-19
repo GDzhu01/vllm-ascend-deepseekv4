@@ -1407,7 +1407,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
 
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
                         if self.compress_ratio ==4 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
@@ -1605,7 +1605,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         
 
         q = rotate_activation(q)
-        kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, kv_state)
+        kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, freqs_cis, kv_state)
         if kv is not None:
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
@@ -1715,7 +1715,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
 
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)).numel()!=0:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)).numel()!=0:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
                         if self.compress_ratio ==4 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
@@ -1733,14 +1733,14 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             swa_kv = kv_state[0][2][:128].unsqueeze(1)  # TODO
             if self.compress_ratio >1:
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
                     if self.compress_ratio ==4 and kv_compress.numel()!=0:
                         torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
                             kv_compress)
                     elif self.compress_ratio ==128 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
+                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[1][0].unsqueeze(-1),
                             kv_compress)
 
                 # self.compressor(x, start_pos, cos, sin, kv_state)
@@ -1823,7 +1823,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             
 
             q = rotate_activation(q)
-            kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, kv_state)
+            kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, freqs_cis, kv_state)
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                                 kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
@@ -1831,7 +1831,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
             # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
             # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
-            kv = kv_cache[1][1][:end_pos//4]  ## TODO
+            kv = kv_cache[1][1][:end_pos//4].unsqueeze(0).squeeze(2)  ## TODO
             index_score = torch.einsum("bshd,btd->bsht", q, kv)
             index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
             if start_pos == 0:
