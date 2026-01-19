@@ -575,14 +575,14 @@ class Compressor(nn.Module):
                     kv_state[4][0, ratio + start_pos % ratio] = score.squeeze(1)
                 if should_compress:
                     if kv.shape[-1]==1024:
-                        kv_state_tmp = torch.cat([kv_state[1][0, :ratio, :d], kv_state[1][0, ratio:, d:]], dim=1)
-                        score_state_tmp = torch.cat([kv_state[2][0, :ratio, :d], kv_state[2][0, ratio:, d:]], dim=1)
+                        kv_state_tmp = torch.cat([kv_state[1][0, :ratio, :d], kv_state[1][0, ratio:, d:]], dim=0).unsqueeze(0)
+                        score_state_tmp = torch.cat([kv_state[2][0, :ratio, :d], kv_state[2][0, ratio:, d:]], dim=0).unsqueeze(0)
                         kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
                         kv_state[1][0, :ratio] = kv_state[1][0, ratio:]
                         kv_state[2][0, :ratio] = kv_state[2][0, ratio:]
                     else:
-                        kv_state_tmp = torch.cat([kv_state[3][0, :ratio, :d], kv_state[3][0, ratio:, d:]], dim=1)
-                        score_state_tmp = torch.cat([kv_state[4][0, :ratio, :d], kv_state[4][0, ratio:, d:]], dim=1)
+                        kv_state_tmp = torch.cat([kv_state[3][0, :ratio, :d], kv_state[3][0, ratio:, d:]], dim=0).unsqueeze(0)
+                        score_state_tmp = torch.cat([kv_state[4][0, :ratio, :d], kv_state[4][0, ratio:, d:]], dim=0).unsqueeze(0)
                         kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
                         kv_state[3][0, :ratio] = kv_state[3][0, ratio:]
                         kv_state[4][0, :ratio] = kv_state[4][0, ratio:]

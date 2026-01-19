@@ -1394,7 +1394,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
         # print(f"=====================================in attention topkidx rank : {torch.distributed.get_rank()}, topkidx is {topk_idxs}")
         if self.compress_ratio > 1:
-            offset = kv.size(1) if start_pos == 0 else win
+            offset = kv.size(0) if start_pos == 0 else win # TODO zyl
             if self.indexer is not None:
                 compress_topk_idxs = self.indexer_select_single_op(x, qr, cos, sin,kv_cache, kv_state,attn_metadata,offset)
             else:
@@ -1733,14 +1733,24 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             swa_kv = kv_state[0][2][:128].unsqueeze(1)  # TODO
             if self.compress_ratio >1:
-                self.compressor(x, start_pos, cos, sin, kv_state)
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
+                    if self.compress_ratio ==4 and kv_compress.numel()!=0:
+                        torch_npu.npu_scatter_nd_update_(
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
+                            kv_compress)
+                    elif self.compress_ratio ==128 and kv_compress.numel()!=0:
+                            torch_npu.npu_scatter_nd_update_(
+                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
+                            kv_compress)
+
+                # self.compressor(x, start_pos, cos, sin, kv_state)
                 if self.compress_ratio ==4:
                     compress_kv = kv_cache[0][1][:end_pos//self.compress_ratio]
                     swa_kv = torch.cat([swa_kv, compress_kv], dim=0)
 
 
             
-            o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+            o = sparse_attn_torch(q, swa_kv, self.attn_sink, topk_idxs, self.softmax_scale)
             
             
 
@@ -1774,17 +1784,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             start_pos,
             offset=0, # (wy): start_pos=0
         ):
-            def is_all_zero(x: torch.Tensor) -> bool:
-                """
-                判断张量是否所有元素都为0
-                :param x: 输入张量
-                :return: 全0返回True，否则返回False
-                """
-                # 步骤1：先判断张量是否为None（可选，根据你的场景）
-                if x is None:
-                    return False  # 或根据需求返回True/抛出异常
-                # 步骤2：判断所有元素是否等于0（torch.eq返回布尔张量，torch.all判断所有元素为True）
-                return torch.all(x.eq(0)).item()
             start_pos = start_pos # (wy): start_pos=0
             seqlen, _ = x.size()
             bsz = 1
