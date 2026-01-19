@@ -13,7 +13,7 @@ def hc_split_sinkhorn_ref(mixes: torch.Tensor, # [b, s, mix_hc] => [b, s, (2 + h
     mixes_pre = mixes[:, :, :hc_mult]
     hc_scale_pre = hc_scale[0]
     hc_base_pre = hc_base[:hc_mult]
-    pre = F.sigmoid(hc_scale_pre * mixes_pre + hc_base_pre)
+    pre = F.sigmoid(hc_scale_pre * mixes_pre + hc_base_pre) + eps
     # get post
     mixes_post = mixes[:, :, hc_mult:2 * hc_mult]
     hc_scale_post = hc_scale[1]
