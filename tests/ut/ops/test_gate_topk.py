@@ -15,7 +15,6 @@
 
 import torch
 import torch_npu
-import custom_ops
 import torch.nn.functional as F
 
 from tests.ut.base import TestBase
@@ -68,22 +67,10 @@ class TestMoeGatingTopk(TestBase):
         else:
             bias = torch.empty(self.n_routed_experts, dtype=torch.float32).npu()
 
-        ns = torch.ops.custom
-        ops = [name for name in dir(ns) if not name.startswith("_")]
-        print(f'ops: {ops}')
-        for op_name in sorted(ops):
-            op = getattr(ns, op_name)
-            print(f"\n== custom::{op_name} ==")
-            # 有些对象能 dir 出 overload 名字
-            overloads = [n for n in dir(op) if not n.startswith("_")]
-            # 过滤掉一些明显不是 overload 的属性（经验规则，不保证 100%）
-            overloads = [n for n in overloads if n not in ("default",)]
-            if hasattr(op, "default"):
-                print("  - overload: default")
-            for ov in overloads:
-                print(f"  - overload: {ov}")
-        
-        weights, indices, _ = torch.ops.custom.npu_moe_gating_top_k(
+        so = "/mnt/share/m00663269/ds_new/vllm-ascend-deepseekv4/vllm_ascend/vllm_ascend_C.cpython-311-aarch64-linux-gnu.so"
+        torch.ops.load_library(so)
+        print(f'torch.ops._C_ascend.moe_gating_top_k:{torch.ops._C_ascend.moe_gating_top_k}')
+        weights, indices, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
             x=scores, 
             k=self.n_activated_experts,
             bias=bias,

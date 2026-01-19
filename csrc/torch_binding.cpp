@@ -1273,6 +1273,111 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k(
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y,expert_idx,out);
 }
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash(
+    const at::Tensor& x,
+    int64_t k,
+    const c10::optional<at::Tensor>& bias_opt,
+    const c10::optional<at::Tensor>& input_ids_opt,
+    const c10::optional<at::Tensor>& tid2eid_opt,
+    int64_t k_group,
+    int64_t group_count,
+    double routed_scaling_factor,
+    double eps,
+    int64_t group_select_mode,
+    int64_t renorm,
+    int64_t norm_type,
+    bool out_flag)
+{
+
+    TORCH_CHECK(x.dim() == 2, "x must be 2D, but got dim=", x.dim());
+    TORCH_CHECK(
+        x.scalar_type() == at::kHalf || x.scalar_type() == at::kFloat || x.scalar_type() == at::kBFloat16,
+        "x dtype must be float16/float32/bfloat16, but got ", x.scalar_type());
+
+    TORCH_CHECK(k > 0, "k must be > 0, but got k=", k);
+    TORCH_CHECK(k_group >= 1, "k_group must be >= 1, but got k_group=", k_group);
+    TORCH_CHECK(group_count >= 1, "group_count must be >= 1, but got group_count=", group_count);
+
+    TORCH_CHECK(group_select_mode == 0 || group_select_mode == 1,
+                "group_select_mode must be 0 or 1, but got ", group_select_mode);
+    TORCH_CHECK(renorm == 0,
+                "renorm can only be 0 currently, but got ", renorm);
+    TORCH_CHECK(norm_type == 0 || norm_type == 1 || norm_type ==2,
+                "norm_type must be 0 (softmax) or 1 (sigmoid) or 2 (softplus), but got ", norm_type);
+
+    TORCH_CHECK(eps > 0.0, "eps must be > 0, but got ", eps);
+    TORCH_CHECK(routed_scaling_factor > 0.0,
+                "routed_scaling_factor must be > 0, but got ", routed_scaling_factor);
+
+    const auto sizes = x.sizes();
+    const int64_t rows = sizes[0];
+    const int64_t expert_num = sizes[1];
+
+    TORCH_CHECK(expert_num > 0, "expert_num must be > 0");
+    TORCH_CHECK(expert_num <= 2048,
+                "expert_num (E) must be <= 2048, but got ", expert_num);
+
+    // bias: optional, 1D [E], dtype same as x
+    if (bias_opt.has_value() && bias_opt->defined()) {
+        const auto& bias = *bias_opt;
+        TORCH_CHECK(bias.dim() == 1, "bias must be 1D, but got dim=", bias.dim());
+        TORCH_CHECK(bias.size(0) == expert_num,
+                    "bias.size(0) must equal expert_num. bias.size(0)=",
+                    bias.size(0), ", expert_num=", expert_num);
+        TORCH_CHECK(bias.scalar_type() == x.scalar_type(),
+                    "bias dtype must equal x dtype. x=", x.scalar_type(),
+                    ", bias=", bias.scalar_type());
+    }
+
+    // input_ids: optional, int32/int64; numel must match rows（最稳的约束）
+    if (input_ids_opt.has_value() && input_ids_opt->defined()) {
+        const auto& input_ids = *input_ids_opt;
+        TORCH_CHECK(input_ids.scalar_type() == at::kInt || input_ids.scalar_type() == at::kLong,
+                    "input_ids dtype must be int32 or int64, but got ", input_ids.scalar_type());
+        TORCH_CHECK(input_ids.numel() == rows,
+                    "input_ids.numel() must equal x.size(0). input_ids.numel()=",
+                    input_ids.numel(), ", rows=", rows);
+    }
+
+    // tid2eid: optional, int32/int64;
+    if (tid2eid_opt.has_value() && tid2eid_opt->defined()) {
+        const auto& tid2eid = *tid2eid_opt;
+        TORCH_CHECK(tid2eid.scalar_type() == at::kInt || tid2eid.scalar_type() == at::kLong,
+                    "tid2eid dtype must be int32 or int64, but got ", tid2eid.scalar_type());
+        TORCH_CHECK(tid2eid.dim() >= 1, "tid2eid must have dim>=1, but got dim=", tid2eid.dim());
+    }
+
+
+    const at::Tensor& bias = c10::value_or_else(bias_opt, [] { return at::Tensor(); });
+    const at::Tensor& input_ids = c10::value_or_else(input_ids_opt, [] { return at::Tensor(); });
+    const at::Tensor& tid2eid = c10::value_or_else(tid2eid_opt, [] { return at::Tensor(); });
+
+    at::Tensor y = at::empty({rows, k}, x.options());
+    at::Tensor expert_idx = at::empty({rows, k}, x.options().dtype(at::kInt));
+    at::Tensor out = at::empty({rows, expert_num}, x.options().dtype(at::kFloat));
+
+
+    EXEC_NPU_CMD(aclnnMoeGatingTopKHash,
+                 x,
+                 bias,
+                 input_ids,
+                 tid2eid,
+                 k,
+                 k_group,
+                 group_count,
+                 routed_scaling_factor,
+                 eps,
+                 group_select_mode,
+                 renorm,
+                 norm_type,
+                 out_flag,
+                 y,
+                 expert_idx,
+                 out);
+
+    return {y, expert_idx, out};
+}
+
 } // namespace vllm_ascend
 
 TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
@@ -1438,4 +1543,24 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "-> (Tensor y ,Tensor expert_idx, Tensor out)"
         );
     ops.impl("moe_gating_top_k", torch::kPrivateUse1,&vllm_ascend::moe_gating_top_k);
+
+    // moe_gating_top_k_hash
+      ops.def(
+        "moe_gating_top_k_hash("
+        "Tensor x, "
+        "int k, "
+        "Tensor? bias=None, "
+        "Tensor? input_ids=None, "
+        "Tensor? tid2eid=None, "
+        "int k_group=1, "
+        "int group_count=1, "
+        "float routed_scaling_factor=1.0, "
+        "float eps=1e-20, "
+        "int group_select_mode=0, "
+        "int renorm=0, "
+        "int norm_type=0, "
+        "bool out_flag=False"
+        ") -> (Tensor y, Tensor expert_idx, Tensor out)"
+        );
+    ops.impl("moe_gating_top_k_hash", torch::kPrivateUse1,&vllm_ascend::moe_gating_top_k_hash);
 }

@@ -18,8 +18,6 @@
 import os
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
-import importlib.util
-import importlib
 
 import torch
 from vllm.logger import logger
@@ -126,14 +124,6 @@ class NPUPlatform(Platform):
                                 parser: Optional[FlexibleArgumentParser] = None
                                 ) -> None:
         # Adapt the global patch here.
-        pkg_name = 'custom_ops'
-        use_so = False
-        if importlib.util.find_spec(pkg_name) is not None:
-            custom_ops = importlib.import_module(pkg_name)  # 等价于 import numpy
-            print("import ok:", custom_ops)
-            use_so=True
-        else:
-            print("not found:", pkg_name)
         from vllm_ascend.utils import adapt_patch
         adapt_patch(is_global_patch=True)
 
@@ -380,34 +370,27 @@ class NPUPlatform(Platform):
         # from vllm_ascend.utils import enable_custom_op
         # enable_custom_op()
         # set custom ops path
-        pkg_name = 'custom_ops'
-        if importlib.util.find_spec(pkg_name) is not None:
-            custom_ops = importlib.import_module(pkg_name)  # 等价于 import numpy
-            print("import ok:", custom_ops)
-        else:
-            print("not found:", pkg_name)
         global _CUSTOM_OP_REGISTERED
         if _CUSTOM_OP_REGISTERED:
             return
         CUR_DIR = os.path.dirname(os.path.realpath(__file__))
         CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
                                        "vllm-ascend")
-        # if os.path.exists(CUSTOM_OPP_PATH):
-        #     current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
-        #                                            "")
-        #     current_cust_opp_ld_lib_path = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-        #                                "vllm-ascend","op_api","lib")
-        #     ld_lib_path = os.environ.get("LD_LIBRARY_PATH",
-        #                                            "")
-        #     if current_cust_opp_path:
-        #         os.environ[
-        #             "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
-        #         print(f'????????????????????????????????: {os.environ["ASCEND_CUSTOM_OPP_PATH"]}')
-        #     else:
-        #         os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
-        #     os.environ["LD_LIBRARY_PATH"]=f"{ld_lib_path}:{current_cust_opp_ld_lib_path}"
-        #     print(f'????????????????????????????????: {os.environ["LD_LIBRARY_PATH"]}')
-        # _CUSTOM_OP_REGISTERED = True
+        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+                                "vllm-ascend","op_api","lib")
+        if os.path.exists(CUSTOM_OPP_PATH):
+            current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
+                                                   "")
+            if current_cust_opp_path:
+                os.environ[
+                    "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
+            else:
+                os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
+                                        "")
+            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
+            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
+        _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):
