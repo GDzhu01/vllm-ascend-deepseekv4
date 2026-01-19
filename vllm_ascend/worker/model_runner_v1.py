@@ -2464,16 +2464,21 @@ class NPUModelRunner(GPUModelRunner):
             get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
 
     def initialize_kv_state(self):
-        if 0: # model_config is not dsk_v4
+        hf_config = self.model_config.hf_config
+        if hf_config.model_type != 'deepseek_v4':
             return
         kv_states: Dict[str, tuple[torch.Tensor]] = {}
-        # TODO get this from config file
-        c1_layers = [0, 1]
-        c4_layers = list(range(2, 43, 2))
-        c128_layers = list(range(3, 43, 2))
-        window_size = 128
-        head_dim = 512
-        indexer_head_dim = 128
+        compress_ratio_to_layers = {}
+        for layer_index, compress_ratio in enumerate(hf_config.compress_ratios):
+            if compress_ratio not in compress_ratio_to_layers:
+                compress_ratio_to_layers[compress_ratio] = []
+            compress_ratio_to_layers[compress_ratio].append(layer_index)
+        c1_layers = compress_ratio_to_layers[1]
+        c4_layers = compress_ratio_to_layers[4]
+        c128_layers = compress_ratio_to_layers[128]
+        window_size = hf_config.window_size
+        head_dim = hf_config.head_dim
+        indexer_head_dim = hf_config.index_head_dim
 
         def _get_aligned_tensor(size: torch.Size, dtype: torch.dtype, alignment: int = 1):
             tensor_size = size.numel() * dtype.itemsize
@@ -2537,22 +2542,19 @@ class NPUModelRunner(GPUModelRunner):
                         alignment,
                     )
                     kv_states[layer_name] = (sliding_window, c128_kv_state, c128_score_state)
-                else:
-                    assert layer_index in c1_layers, "layer_index out of range"
-                    kv_states[layer_name] = (sliding_window)
 
-        sliding_window0 = _get_aligned_tensor(
-                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
-                    torch.bfloat16,
-                    alignment,
-                )
-        sliding_window1 = _get_aligned_tensor(
-                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
-                    torch.bfloat16,
-                    alignment,
-                )
-        kv_states['model.layers.0.self_attn.attn'] = [(sliding_window0)]
-        kv_states['model.layers.1.self_attn.attn'] = [(sliding_window1)]
+        # layer 0,1 are removed from kv spec groups,
+        # get them from runner_only_attn_layers to init sliding window.
+        for layer_name in self.runner_only_attn_layers:
+            layer_index = extract_layer_index(layer_name)
+            assert layer_index in c1_layers, "layer_index out of range"
+            sliding_window = _get_aligned_tensor(
+                torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                torch.bfloat16,
+                alignment,
+            )
+            kv_states[layer_name] = (sliding_window)
+
         # bind kv cache to layers
         # TODO maybe move this to bind_kv_states in utils
         forward_context = self.compilation_config.static_forward_context

@@ -263,23 +263,25 @@ class NPUWorker(WorkerBase):
 
     @torch.inference_mode()
     def get_fix_memory(self) -> int:
-        if 0: # model_config is not dsk_v4
-            return 0
         hf_config = self.vllm_config.model_config.hf_text_config
+        if hf_config.model_type != 'deepseek_v4':
+            return 0
         max_num_reqs = self.scheduler_config.max_num_seqs
         head_dim = hf_config.head_dim
         index_head_dim = hf_config.index_head_dim
         window_size = hf_config.window_size
         num_layers = hf_config.n_layers
-        # TODO get from config
-        num_c4_layers = 21
-        num_c128_layers = 20
+        compress_ratios: list[int] = hf_config.compress_ratios
+        num_c4_layers = compress_ratios.count(4)
+        num_c128_layers = compress_ratios.count(128)
 
+        # Some args that are strongly related to dsv4 attn implementation
+        # and can not get from config file
         c4_coff = 2
         c4_compress_ratio = 4
         c128_coff = 1
         c128_compress_ratio = 128
-        dtype_size = 4  # torch.float32
+        dtype_size = 2  # torch.bfloat16
         sliding_window_multiple = 2
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]
