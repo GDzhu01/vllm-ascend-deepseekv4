@@ -2553,7 +2553,7 @@ class NPUModelRunner(GPUModelRunner):
                 torch.bfloat16,
                 alignment,
             )
-            kv_states[layer_name] = (sliding_window)
+            kv_states[layer_name] = (sliding_window,)
 
         # bind kv cache to layers
         # TODO maybe move this to bind_kv_states in utils
