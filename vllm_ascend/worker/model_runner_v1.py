@@ -47,6 +47,7 @@ from vllm.forward_context import get_forward_context
 from vllm.logger import logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
+from vllm.model_executor.models.utils import extract_layer_index
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.utils.import_utils import LazyLoader
@@ -60,6 +61,10 @@ from vllm.v1.kv_cache_interface import (AttentionSpec, CrossAttentionSpec,
                                         FullAttentionSpec, KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
+                                        CompressAttentionSpec,
+                                        Compress4AttentionSpec,
+                                        Compress128AttentionSpec,
+                                        CompressIndexerAttentionSpec,
                                         UniformTypeKVCacheSpecs)
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, AsyncModelRunnerOutput,
                              LogprobsLists, LogprobsTensors, ModelRunnerOutput,
@@ -2426,7 +2431,7 @@ class NPUModelRunner(GPUModelRunner):
                                               Optional[torch.Tensor]]] = {}
         # prefill disaggregation need the addr of cache tensor be aligned with 2M
         alignment = 2 * 1024 * 1024
-        for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
+        for group_id, kv_cache_tensor in enumerate(kv_cache_config.kv_cache_tensors):
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
                 layer_name = kv_cache_tensor.shared_by[idx]
@@ -2449,6 +2454,14 @@ class NPUModelRunner(GPUModelRunner):
                         # shared the kvcache between the self_attn specs in the same group
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
+                elif "attn" in layer_name and is_dsv4 and layer_name not in kv_cache_raw_tensors.keys(
+                ):
+                    tensor = torch.zeros(kv_cache_tensor.size,
+                                            dtype=torch.int8,
+                                            device=self.device)
+                    for layer_name_inner in kv_cache_tensor.shared_by:
+                        # shared the kvcache between the self_attn specs in the same group
+                        kv_cache_raw_tensors[layer_name_inner] = tensor
                 elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # NOTE: We need to init k cache tensor (nope cache tensor in mla) and
@@ -2554,13 +2567,30 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        kv_caches: Dict[str, torch.Tensor] = {}
+        kv_caches: Dict[str, tuple(torch.Tensor)] = defaultdict(tuple)
         for group in self._kv_cache_spec_attn_group_iterator():
             kv_cache_spec = group.kv_cache_spec
             attn_backend = group.backend
             for layer_name in group.layer_names:
                 if layer_name in self.runner_only_attn_layers:
                     continue
+
+                if isinstance(kv_cache_spec, CompressAttentionSpec) or \
+                    isinstance(kv_cache_spec, CompressIndexerAttentionSpec):
+                    dtype = kv_cache_spec.dtype
+
+                    kv_tensor = kv_cache_raw_tensors[layer_name]
+                    sum_page_size_bytes = kv_tensor.numel()
+
+                    num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                    assert num_blocks == kv_cache_config.num_blocks, f"num_blocks: {num_blocks} kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
+                    kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
+                    kv_cache = kv_tensor.view(kv_cache_spec.nope_dtype).view(kv_cache_shape)
+                    kv_caches[layer_name].add(kv_cache)
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
@@ -2829,11 +2859,8 @@ class NPUModelRunner(GPUModelRunner):
         self._check_and_update_cudagraph_mode(attention_backend_list,
                                               kv_cache_config.kv_cache_groups)
 
-        for i, kv_cache_group_spec in enumerate(
-                kv_cache_config.kv_cache_groups):
-            attn_backends = get_attn_backends_for_group(  # type: ignore
-                kv_cache_group_spec)
-            self.attn_groups.append(create_attn_groups(attn_backends[0], i))
+        for i, attn_backend_map in enumerate(attention_backend_maps):
+            self.attn_groups.append(create_attn_groups(attn_backend_map, i))
 
         # Calculate reorder batch threshold (if needed)
         self.calculate_reorder_batch_threshold()
@@ -2863,7 +2890,7 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         self.reorder_batch_threshold = reorder_batch_threshold_i  # noqa
 
-    def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
+    def get_kv_cache_spec(self) -> dict[str, list[KVCacheSpec]]:
         """
         Generates the KVCacheSpec by parsing the kv cache format from each
         Attention module in the static forward context.
@@ -2877,7 +2904,7 @@ class NPUModelRunner(GPUModelRunner):
 
         block_size = self.vllm_config.cache_config.block_size
         use_mla = self.vllm_config.model_config.use_mla
-        kv_cache_spec: dict[str, KVCacheSpec] = {}
+        kv_cache_spec_list: dict[str, list[KVCacheSpec]] = defaultdict(list)
         attn_layers = get_layers_from_vllm_config(self.vllm_config,
                                                   AttentionLayerBase)
         for layer_name, attn_module in attn_layers.items():
@@ -2898,41 +2925,112 @@ class NPUModelRunner(GPUModelRunner):
                 # TODO(lucas): move the attention specs into the model layers like
                 # the attention backends
                 if attn_module.attn_type == AttentionType.DECODER:
-                    kv_cache_spec[layer_name] = FullAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [FullAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=attn_module.num_kv_heads,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        dtype=self.kv_cache_dtype)]
                 elif attn_module.attn_type in (AttentionType.ENCODER,
                                                AttentionType.ENCODER_ONLY):
                     # encoder-only attention does not need KV cache.
                     continue
                 elif attn_module.attn_type == AttentionType.ENCODER_DECODER:
-                    kv_cache_spec[layer_name] = CrossAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [CrossAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=attn_module.num_kv_heads,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        dtype=self.kv_cache_dtype)]
                 else:
                     raise ValueError(
                         f"Unknown attention type: {attn_module.attn_type}")
 
             elif isinstance(attn_module, MLAAttention):
                 if use_mla and not self.use_sparse:
-                    kv_cache_spec[layer_name] = MLAAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [MLAAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype,
-                        cache_dtype_str=self.cache_config.cache_dtype)
+                        cache_dtype_str=self.cache_config.cache_dtype)]
                 else:
                     # TODO(cmq): This is a hack way to fix deepseek kvcache when
                     # using DSA. Fix the spec in vLLM is a finnal way.
-                    kv_cache_spec[layer_name] = FullAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [FullAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        dtype=self.kv_cache_dtype)]
+
+            elif isinstance(attn_module, DSAAttention):
+                if layer_id in [0, 1]:
+                    self.runner_only_attn_layers.add(layer_name)
+                elif layer_id % 2 == 0:
+                    # TODO(cmq): take scale into account
+                    if get_ascend_device_type() == AscendDeviceType.A5:
+                        # TODO(cmq): get the dim info from model config
+                        kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            nope_dytpe=torch.float8_e4m3fn,
+                            rope_dim=64,
+                            rope_dytpe=torch.bfloat16,
+                            scale_dim=7,
+                            scale_dytpe=torch.float8_e4m3fn,
+                            dtype=torch.float8_e4m3fn,
+                            compress_ratio=4,
+                        ))
+                        kv_cache_spec_list[layer_name].append(CompressIndexerAttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=128,
+                            dtype=torch.float8_e4m3fn,
+                        ))
+                    else:
+                        kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            rope_dim=64,
+                            scale_dim=0,
+                            dtype=torch.bfloat16,
+                            compress_ratio=4,
+                        ))
+                        kv_cache_spec_list[layer_name].append(CompressIndexerAttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=128,
+                            dtype=torch.int8,
+                        ))
+                elif layer_id % 2 != 0:
+                    if get_ascend_device_type() == AscendDeviceType.A5:
+                        # TODO(cmq): get the dim info from model config
+                        kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            nope_dytpe=torch.float8_e4m3fn,
+                            rope_dim=64,
+                            rope_dytpe=torch.bfloat16,
+                            scale_dim=7,
+                            scale_dytpe=torch.float8_e4m3fn,
+                            dtype=torch.bfloat16,
+                            compress_ratio=128,
+                        ))
+                    else:
+                        kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
+                            block_size=block_size,
+                            num_kv_heads=1,
+                            head_size=512,
+                            nope_dim=448,
+                            rope_dim=64,
+                            scale_dim=0,
+                            dtype=torch.bfloat16,
+                            compress_ratio=128,
+                        ))
 
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
         if len(mamba_layers) > 0:
@@ -2952,7 +3050,7 @@ class NPUModelRunner(GPUModelRunner):
             # Set block_size to max_model_len, so that mamba model will always
             # have only one block in the KV cache.
             for layer_name, mamba_module in mamba_layers.items():
-                kv_cache_spec[layer_name] = MambaSpec(
+                kv_cache_spec_list[layer_name] = [MambaSpec(
                     shapes=mamba_module.get_state_shape(),
                     dtypes=mamba_module.get_state_dtype(),
                     block_size=max_model_len,
@@ -2961,9 +3059,9 @@ class NPUModelRunner(GPUModelRunner):
                     num_speculative_blocks=(
                         self.speculative_config.num_speculative_tokens
                         if self.speculative_config else 0),
-                )
+                )]
 
-        return kv_cache_spec
+        return kv_cache_spec_list
 
     def _check_and_update_cudagraph_mode(
         self,
