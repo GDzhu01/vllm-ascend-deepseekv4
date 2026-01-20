@@ -2503,22 +2503,22 @@ class NPUModelRunner(GPUModelRunner):
                     coff = 2
                     compress_ratio = 4
                     c4_kv_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
                     c4_score_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
                     c4_indexer_kv_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * indexer_head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
                     c4_indexer_score_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * indexer_head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * indexer_head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
@@ -2527,12 +2527,12 @@ class NPUModelRunner(GPUModelRunner):
                     coff = 1
                     compress_ratio = 128
                     c128_kv_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
                     c128_score_state = _get_aligned_tensor(
-                        torch.Size([self.max_num_reqs, coff * compress_ratio, coff * head_dim]),
+                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
                         torch.bfloat16,
                         alignment,
                     )
@@ -2627,6 +2627,19 @@ class NPUModelRunner(GPUModelRunner):
         # prefill disaggregation need the addr of cache tensor be aligned with 2M
         alignment = 2 * 1024 * 1024
 
+        def _get_aligned_tensor(size: torch.Size, dtype: torch.dtype, alignment: int = 1):
+            tensor_size = size.numel() * dtype.itemsize
+            original_tensor = torch.zeros(
+                tensor_size + alignment,
+                dtype=torch.int8,
+                device=self.device
+            )
+            aligned_tensor = self._align_memory(
+                original_tensor,
+                alignment
+            )[:tensor_size]
+            return aligned_tensor.view(dtype).view(size)
+        
         is_dsv4 = True
         # 按照已有逻辑，给每一层分配不同大小的 buffer
         # (c4_kv_tensor, indexer_kv_tensor)
@@ -2667,31 +2680,56 @@ class NPUModelRunner(GPUModelRunner):
                     print(f"c4_spec.indexer_scale_size_bytes: {num_blocks*c4_spec.indexer_scale_size_bytes/1024/1024}")
 
                     if exact_layer_id % 2 == 0:
-                        c4_kv_tensor = torch.zeros(
-                            num_blocks * c4_spec.compress_kv_size_bytes,
-                            dtype=torch.int8,
-                            device=self.device,
-                        )
-                        indexer_k_tensor = torch.zeros(
-                            num_blocks * c4_spec.indexer_k_size_bytes,
-                            dtype=torch.int8,
-                            device=self.device,
-                        )
-                        indexer_scale_tensor = torch.zeros(
-                            num_blocks * c4_spec.indexer_scale_size_bytes,
-                            dtype=torch.int8,
-                            device=self.device,
-                        )
+                        if self.vllm_config.kv_transfer_config is None:
+                            c4_kv_tensor = torch.zeros(
+                                num_blocks * c4_spec.compress_kv_size_bytes,
+                                dtype=torch.int8,
+                                device=self.device,
+                            )
+                            indexer_k_tensor = torch.zeros(
+                                num_blocks * c4_spec.indexer_k_size_bytes,
+                                dtype=torch.int8,
+                                device=self.device,
+                            )
+                            indexer_scale_tensor = torch.zeros(
+                                num_blocks * c4_spec.indexer_scale_size_bytes,
+                                dtype=torch.int8,
+                                device=self.device,
+                            )
+                        else:
+                            c4_kv_tensor = _get_aligned_tensor(
+                                torch.Size([num_blocks * c4_spec.compress_kv_size_bytes]),
+                                torch.int8,
+                                alignment
+                            )
+                            indexer_k_tensor = _get_aligned_tensor(
+                                torch.Size([num_blocks * c4_spec.indexer_k_size_bytes]),
+                                torch.int8,
+                                alignment
+                            )
+                            indexer_scale_tensor = _get_aligned_tensor(
+                                torch.Size([num_blocks * c4_spec.indexer_scale_size_bytes]),
+                                torch.int8,
+                                alignment
+                            )
+
 
                         kv_cache_raw_tensors[layer_name] = (c4_kv_tensor, indexer_k_tensor, indexer_scale_tensor)
                         print(f"c4_kv_tensor: {c4_kv_tensor.shape}, indexer_k_tensor: {indexer_k_tensor.shape}, indexer_scale_tensor: {indexer_scale_tensor.shape}")
 
                     elif exact_layer_id % 2 != 0:
-                        c128_kv_tensor = torch.zeros(
-                            kv_cache_tensor.size,
-                            dtype=torch.int8,
-                            device=self.device,
-                        )
+                        if self.vllm_config.kv_transfer_config is None:
+                            c128_kv_tensor = torch.zeros(
+                                kv_cache_tensor.size,
+                                dtype=torch.int8,
+                                device=self.device,
+                            )
+                        else:
+                            c128_kv_tensor = _get_aligned_tensor(
+                                torch.Size([kv_cache_tensor.size]),
+                                torch.int8,
+                                alignment
+                            )
                         kv_cache_raw_tensors[layer_name] = c128_kv_tensor
 
                 elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(

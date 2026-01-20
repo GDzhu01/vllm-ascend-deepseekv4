@@ -1415,7 +1415,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_compress)
                         elif self.compress_ratio ==128 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
                             kv_compress)
 
                         kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
@@ -1723,7 +1723,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_compress)
                         elif self.compress_ratio ==128 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
                             kv_compress)
 
                         kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
@@ -1740,7 +1740,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_compress)
                     elif self.compress_ratio ==128 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[1][0].unsqueeze(-1),
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[1][0].unsqueeze(-1),
                             kv_compress)
 
                 # self.compressor(x, start_pos, cos, sin, kv_state)
