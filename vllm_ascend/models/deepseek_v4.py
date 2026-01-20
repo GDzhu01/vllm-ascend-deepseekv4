@@ -106,6 +106,7 @@ elif current_platform.is_xpu():
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.pypto import npu_hc_pre,npu_hc_post,HC_PRE,HC_POST
+from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 
 logger = init_logger(__name__)
 
@@ -523,7 +524,6 @@ class Compressor(nn.Module):
             start_pos: int,
             cos: torch.Tensor,
             sin: torch.Tensor,
-            freqs_cis: torch.Tensor = None,
             kv_state = None,
         )-> torch.Tensor:
         x= x.unsqueeze(0)
@@ -537,8 +537,6 @@ class Compressor(nn.Module):
             should_compress = seqlen >= ratio
             remainder = seqlen % ratio
             cutoff = seqlen - remainder
-            # freqs_cis = freqs_cis[:cutoff:ratio]
-            # print(f'cutoff:{cutoff},ratio:{ratio}')
             cos = cos[:,:,:cutoff:ratio,:]
             sin = sin[:,:,:cutoff:ratio,:]
             offset = ratio if overlap else 0
@@ -599,29 +597,17 @@ class Compressor(nn.Module):
             return
         kv = self.norm(kv.to(dtype))
         kv = kv.view(1, -1, 1, self.nope_head_dim+self.rope_head_dim)
-        # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # kv_pe = self.rope_single(kv_pe, cos, sin)
-        # kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        
-        # offset = ratio if overlap else 0
+
         if start_pos==0:
-            self.rope_theta = 10000.0
-            self.compress_rope_theta = 40000.0
-            self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                            self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                            4, 32, 1)
             should_compress = seqlen >= ratio
             remainder = seqlen % ratio
             cutoff = seqlen - remainder
-            freqs_cis = self.freqs_cis[:cutoff:ratio]
-            bsz = 1
-            seq = kv.shape[1]
-        else:
-            seq = kv.shape[1]
+            cos = cos[:cutoff:ratio]
+            sin = sin[:cutoff:ratio]
 
-        apply_rotary_emb(kv[..., -64:].view(1, seq, -1, self.rope_head_dim), freqs_cis)
-        
-        # kv=kv.squeeze(0)
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
         return kv # s b n d
     
     def rope_single(
@@ -631,14 +617,22 @@ class Compressor(nn.Module):
         sin: torch.Tensor,
         inverse: bool = False,
     ) -> torch.Tensor:
+        dtype= x.dtype
         if inverse:
             sin = sin * -1
-        B, N, D = x.shape
-        S = 1
-        x = x.view(B, N, S, D)
-        # print(f'x.shape: {x.shape}, cos.shape: {cos.shape}')
-        x = torch_npu.npu_interleave_rope(x, cos, sin)
-        return x.view(B, N, D)
+        tnd_layout = 1
+        if len(x.shape)==3:
+            num_tokens,num_heads,rotary_dim = x.shape
+        else:
+            tnd_layout=0
+            _,num_tokens,num_heads,rotary_dim = x.shape
+        print(f'cos.shape: {cos.shape}, x.shape: {x.shape}')
+        x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
+        if tnd_layout:
+            x = x_rot.reshape(num_tokens, -1, rotary_dim)
+        else:
+            x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
+        return x.to(dtype)
 
 class DeepseekV4Attention(nn.Module):
     def __init__(
@@ -716,34 +710,25 @@ class DeepseekV4Attention(nn.Module):
             return_bias=False,
         )
         self.compress_ratio = config.compress_ratios[layer_idx]
-        if config.rope_parameters["rope_type"] != "default":
-            config.rope_parameters["rope_type"] = (
-                "deepseek_yarn"
-                if config.rope_parameters.get("apply_yarn_scaling", True)
-                else "deepseek_llama_scaling"
-            )
 
-        self.compress_ratio = config.compress_ratios[layer_idx]
         if self.compress_ratio >1:
             config.rope_parameters['rope_theta'] = 40000
 
-        self.rotary_emb = get_rope(
-            self.rope_head_dim,
-            max_position=max_position_embeddings,
-            rope_parameters=config.rope_parameters,
+        self.rotary_emb = ComplexExpRotaryEmbedding(
+            vllm_config=vllm_config,
+            layername=f'{prefix}.attn',
+            head_size=self.rope_head_dim,
+            rotary_dim=self.rope_head_dim,
+            max_position_embeddings=max_position_embeddings,
             is_neox_style=False,
+            scaling_factor=config.rope_parameters['factor'],
+            base=config.rope_parameters['rope_theta'],
+            beta_fast=config.rope_parameters['beta_fast'],
+            beta_slow=config.rope_parameters['beta_slow'],
         )
-        # print(f'self.rotary_emb: {self.rotary_emb}')
+
         self.scaling = self.head_dim**-0.5
 
-        # if (
-        #     config.rope_parameters["rope_type"] != "default"
-        #     and config.rope_parameters["rope_type"] == "deepseek_yarn"
-        # ):
-        #     mscale_all_dim = config.rope_parameters.get("mscale_all_dim", False)
-        #     scaling_factor = config.rope_parameters["factor"]
-        #     mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
-        #     self.scaling = self.scaling * mscale * mscale
         
         if self.compress_ratio > 1:
             self.compressor = Compressor(vllm_config,config, self.compress_ratio, self.head_dim,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor",)
