@@ -626,7 +626,6 @@ class Compressor(nn.Module):
         else:
             tnd_layout=0
             _,num_tokens,num_heads,rotary_dim = x.shape
-        print(f'cos.shape: {cos.shape}, x.shape: {x.shape}')
         x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
