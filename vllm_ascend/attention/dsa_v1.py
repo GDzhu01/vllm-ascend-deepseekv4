@@ -1723,8 +1723,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
 
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-        k = self.compress_forward(x, kv_cache)
-        kv = torch.ops.custom.npu_compressor(
+        # k = self.compress_forward(x, kv_cache)
+        k = torch.ops.custom.npu_compressor(
             x,
             self.indexcom_wkv,
             self.indexcom_wgate,
