@@ -36,7 +36,7 @@ from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
 from vllm_ascend.compilation.acl_graph import (
     get_draft_graph_params, get_graph_params,
     update_draft_graph_params_workspaces, update_graph_params_workspaces)
-from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
+from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
@@ -47,68 +47,6 @@ if TYPE_CHECKING:
 
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
-
-
-def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
-    """
-    Precomputes frequency-based complex exponential values for rotary positional embeddings.
-
-    Args:
-        args (ModelArgs): Model arguments containing positional embedding parameters.
-
-    Returns:
-        torch.Tensor: Precomputed complex exponential values for positional embeddings.
-    """
-
-    def find_correction_dim(num_rotations, dim, base, max_seq_len):
-        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
-
-    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
-        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
-        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
-        return max(low, 0), min(high, dim-1)
-
-    def linear_ramp_factor(min, max, dim):
-        if min == max:
-            max += 0.001
-        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-        ramp_func = torch.clamp(linear_func, 0, 1)
-        return ramp_func
-
-    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-    if original_seq_len > 0:
-        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
-        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
-        freqs = freqs / factor * (1 - smooth) + freqs * smooth
-
-    t = torch.arange(seqlen)
-    freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs_cis
-
-def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
-    """
-    Applies rotary positional embeddings to the input tensor.
-
-    Args:
-        x (torch.Tensor): Input tensor with positional embeddings to be applied.
-        freqs_cis (torch.Tensor): Precomputed complex exponential values for positional embeddings.
-
-    Returns:
-        torch.Tensor: Tensor with rotary embeddings applied.
-    """
-    y = x
-    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
-    if inverse:
-        freqs_cis = freqs_cis.conj()
-    if x.ndim == 3:
-        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
-    else:
-        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    # print(x.device, freqs_cis.to("npu"))
-    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
-    y.copy_(x)
-    return y
 
 
 def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int):
@@ -123,30 +61,6 @@ def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int
             matrix = torch.where(matrix > base, -1, matrix)
             return matrix
     return _get_window_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
-
-
-# def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
-#     """
-#     Applies rotary positional embeddings to the input tensor.
-
-#     Args:
-#         x (torch.Tensor): Input tensor with positional embeddings to be applied.
-#         freqs_cis (torch.Tensor): Precomputed complex exponential values for positional embeddings.
-
-#     Returns:
-#         torch.Tensor: Tensor with rotary embeddings applied.
-#     """
-#     y = x
-#     x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
-#     if inverse:
-#         freqs_cis = freqs_cis.conj()
-#     if x.ndim == 3:
-#         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
-#     else:
-#         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-#     x = torch.view_as_real(x * freqs_cis).flatten(-2)
-#     y.copy_(x)
-#     return y
 
 
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
@@ -169,42 +83,6 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     return hadamard_transform_ref(x, scale=hidden_size ** -0.5)
 import math
 
-def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
-    """
-    Precomputes frequency-based complex exponential values for rotary positional embeddings.
-
-    Args:
-        args (ModelArgs): Model arguments containing positional embedding parameters.
-
-    Returns:
-        torch.Tensor: Precomputed complex exponential values for positional embeddings.
-    """
-
-    def find_correction_dim(num_rotations, dim, base, max_seq_len):
-        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
-
-    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
-        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
-        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
-        return max(low, 0), min(high, dim-1)
-
-    def linear_ramp_factor(min, max, dim):
-        if min == max:
-            max += 0.001
-        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-        ramp_func = torch.clamp(linear_func, 0, 1)
-        return ramp_func
-
-    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-    if original_seq_len > 0:
-        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
-        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
-        freqs = freqs / factor * (1 - smooth) + freqs * smooth
-
-    t = torch.arange(seqlen)
-    freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs_cis
 
 def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, offset: int):
     def _get_compress_topk_idxs():
@@ -699,9 +577,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                                          )
         self.state_ids = common_attn_metadata.state_ids[:num_reqs]
         if self.num_prefills:
-            cos, sin = get_cos_and_sin_mla(input_positions)
+            cos, sin = get_cos_and_sin_dsa(input_positions)
         else:
-            cos, sin = get_cos_and_sin_mla(input_positions, True)
+            cos, sin = get_cos_and_sin_dsa(input_positions, True)
 
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
@@ -791,19 +669,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             reqs_start:] - query_start_loc[reqs_start]
 
         prefill_input_positions = input_positions[tokens_start:]
-        cos, sin = get_cos_and_sin_mla(prefill_input_positions)
-
-        # compress cos and sin
-        compress_condition_c4 = ((prefill_input_positions+1) % 4) == 0
-        compress_result_c4 = (prefill_input_positions+1) // 4
-        compress_c4_position = compress_result_c4[compress_condition_c4]
-
-        compress_condition_c128 = ((prefill_input_positions+1) % 128) == 0
-        compress_result_c128 = (prefill_input_positions+1) // 128
-        compress_c128_position = compress_result_c128[compress_condition_c128]
-
-        cos_c4, sin_c4 = get_cos_and_sin_mla(compress_c4_position)
-        cos_c128, sin_c128 = get_cos_and_sin_mla(compress_c128_position)
+        cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
 
         # tmp swa_block
         # [8,129,257]
@@ -894,19 +760,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cp_seq_len, batch_seq_mask = None, None
 
-        cos, sin = get_cos_and_sin_mla(input_positions, use_cache=True)
-
-        # compress cos and sin
-        compress_condition_c4 = ((input_positions+1) % 4) == 0
-        compress_result_c4 = (input_positions+1) // 4
-        compress_c4_position = compress_result_c4[compress_condition_c4]
-
-        compress_condition_c128 = ((input_positions+1) % 128) == 0
-        compress_result_c128 = (input_positions+1) // 128
-        compress_c128_position = compress_result_c128[compress_condition_c128]
-
-        cos_c4, sin_c4 = get_cos_and_sin_mla(compress_c4_position)
-        cos_c128, sin_c128 = get_cos_and_sin_mla(compress_c128_position)
+        cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
 
         # slotmapping
         decode_slot_mapping_list = []
@@ -1086,7 +940,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                          x):
         return None
     
+    # TODO: cast to bfloat16 to speed up
     def rope_single(self, x,cos,sin,inverse=False):
+        dtype= x.dtype
         if inverse:
             sin = sin * -1
         tnd_layout = 1
@@ -1095,16 +951,13 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             tnd_layout=0
             _,num_tokens,num_heads,rotary_dim = x.shape
-        x_rot = torch_npu.npu_interleave_rope(
-            x.reshape(num_tokens, num_heads, 1, rotary_dim),
-            cos,
-            sin,
-        )
+        print(f'cos.shape: {cos.shape}, x.shape: {x.shape}')
+        x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
         else:
             x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
-        return x
+        return x.to(dtype)
     
     def get_compress_topk_idxs(
         self,
@@ -1134,6 +987,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_cache,
                 attn_metadata,
                 kv_state,
+                layer_name
             )
         elif attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
             output[...]  =  self._forward_single_op_decode(
@@ -1141,6 +995,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_cache,
                 attn_metadata,
                 kv_state,
+                layer_name
             )
         return output_padded
 
@@ -1547,55 +1402,31 @@ class AscendDSAImpl(DSAAttentionImpl):
         kv_cache,
         attn_metadata,
         kv_state,
+        layer_name
     ):     
-        self.rope_theta = 10000.0
-        self.compress_rope_theta = 40000.0
-        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                         4, 32, 1)
-        # freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        
-        cos = attn_metadata.prefill.cos
-        sin = attn_metadata.prefill.sin
-        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, sin shape is {sin.shape}")
-        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, cos shape is {cos.shape}")
+        cos = attn_metadata.prefill.cos[layer_name]
+        sin = attn_metadata.prefill.sin[layer_name]
         
         seqlen, _ = hidden_states.size()
         bsz = 1
         start_pos = 0
         win = self.window_size
         ratio = self.compress_ratio
-        rd = self.rope_head_dim
-        # if self.compress_ratio > 1 and self.compressor.kv_cache is None:
-        #     self.compressor.kv_cache = kv_cache[0][:, win:]
         # q
         x = hidden_states
         qr = q = self.q_norm(self.wq_a(x))
-        # print(f"=====================================in attention qr rank : {torch.distributed.get_rank()}, q is {qr}, mean is {qr.mean()}")
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        # print(f"=====================================in attention q after wqb rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
         q_dtype = q.dtype
         q *= torch.rsqrt(q.to(torch.float32).square().mean(-1, keepdim=True) + self.eps)
-        # print("*****************", self.eps)
         q = q.to(q_dtype)
-        # print(f"=====================================in attention q after rsqt rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
         
         
+        # qq = q.clone()
+        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
         
-        # q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # q_pe = self.rope_single(q_pe, cos, sin)
-        # print(f"=====================================in attention cos rank : {torch.distributed.get_rank()}, cos is {cos}")
-        # print(f"=====================================in attention sin rank : {torch.distributed.get_rank()}, sin is {sin}")
-        # q = torch.cat([q_nope, q_pe], dim=-1)
-        # print(f"=====================================in attention q rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
-        
-        
-        freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
-        
-        
-        
-        
+
         # win kv & topk_idxs
         kv = self.wkv(x)
         # print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
@@ -1604,11 +1435,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         
         
-        # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # kv_pe = self.rope_single(kv_pe, cos, sin)
-        # kv = torch.cat([kv_nope, kv_pe], dim=-1)
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
         
-        apply_rotary_emb(kv[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
+
+        # print(f'kv max_abs:{max_abs}, rmse:{rmse}, rel_l2:{rel_l2}, cossim:{cossim}')
         torch_npu.npu_scatter_nd_update_(
                         kv_state[0].view(-1, kv.shape[-1]), attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
                         kv)
@@ -1630,7 +1462,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
 
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
                         if self.compress_ratio ==4 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
@@ -1645,32 +1477,17 @@ class AscendDSAImpl(DSAAttentionImpl):
                     
             # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
             o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
-        # print(f"=====================================in attention o1 rank : {torch.distributed.get_rank()}, o1 is {o}")
-        # else:
-        #     self.kv_cache[:bsz, start_pos % win] = kv.squeeze(1)
-        #     if self.compress_ratio > 1:
-        #         self.compressor(x, start_pos, cos, sin)
-        #     o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
-        # TODO: O inverse is True
-        
-        
-        
-        # o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # o_pe = self.rope_single(o_pe, cos, sin, True)
-        # o = torch.cat([o_nope, o_pe], dim=-1)
-        
-        apply_rotary_emb(o[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis, True)
-        
-        # topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+
+        o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        o_pe = self.rope_single(o_pe, cos, sin, True)
+        o = torch.cat([o_nope, o_pe], dim=-1)
 
         # o
         o = o.view(bsz, seqlen, self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        # print(f"=====================================in attention o2 rank : {torch.distributed.get_rank()}, o2 is {o}")
         o=o.flatten(2).squeeze(0)
         x = self.wo_b(o)
-        # print(f"=====================================in attention attn out rank : {torch.distributed.get_rank()}, attn out is {x}")
         
         return x
 
@@ -1696,31 +1513,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q process in new stream
         q, _ = self.wq_b(qr)  # [b,s,1536] @ [1536,64*128] = [b,s,64*128]
         q = q.view(-1, self.n_head, self.head_dim)  # [n_toks,64,128]
-        
-        ## rope
-        cos_q, sin_q = cos, sin
-        cos = cos.view(-1, 1, 1, self.rope_head_dim)
-        sin = sin.view(-1, 1, 1, self.rope_head_dim)
 
-        q_pe, q_nope = torch.split(
-            q,
-            [self.rope_head_dim, self.head_dim - self.rope_head_dim],
-            dim=-1)  # [b,s,64,64+64]
-
-        # q_pe = q_pe.unsqueeze(2)
-        # q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
-        # q_pe = q_pe.squeeze(2)
-        # q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
-        ## rope
-        
-        self.rope_theta = 10000.0
-        self.compress_rope_theta = 40000.0
-        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                         4, 32, 1)
-        freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        
-        apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
+        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
 
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
         # k = self.compress_forward(x, kv_cache)
@@ -1781,27 +1577,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
         return sparse_indices
     
-    def rope_single_2(self,
-                      x,cos,sin,inverse=False):
-        if inverse:
-            sin = sin * -1
-        tnd_layout = 1
-        if len(x.shape)==3:
-            num_tokens,num_heads,rotary_dim = x.shape
-        else:
-            tnd_layout=0
-            _,num_tokens,num_heads,rotary_dim = x.shape
-        x_rot = torch_npu.npu_interleave_rope(
-            x.reshape(num_tokens, num_heads, 1, rotary_dim),
-            cos,
-            sin,
-        )
-        if tnd_layout:
-            x = x_rot.reshape(num_tokens, -1, rotary_dim)
-        else:
-            x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
-        return x
-       
     def indexer_select_single_op(
         self,
         x: torch.Tensor,
@@ -1817,42 +1592,19 @@ class AscendDSAImpl(DSAAttentionImpl):
         seqlen, _ = x.size()
         bsz = 1
         ratio = self.compress_ratio
-        rd = self.rope_head_dim
         end_pos = start_pos + seqlen
-        # if self.indexer.compressor.kv_cache is None:
-        #     self.indexer.compressor.kv_cache = self.indexer.kv_cache
         q = self.inderxer_wq_b(qr)
         # print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
         q = q.view(bsz, seqlen, self.indexer_heads, self.indexcom_head_dim)
         ## rope
-        cos_q, sin_q = cos, sin
-        cos_q = cos_q.view(1, 1, -1, self.rope_head_dim)
-        sin_q = sin_q.view(1, 1, -1, self.rope_head_dim)
 
-        q_pe, q_nope = torch.split(
-            q,
-            [self.rope_head_dim, self.indexcom_head_dim - self.rope_head_dim],
-            dim=-1)  # [b,s,64,64+64]
-
-        # q_pe = q_pe.unsqueeze(2)
-        q_pe = q_pe.transpose(1,2)
-        # print(f'q_pe.shape: {q_pe.shape},cos_q: {cos_q.shape}')
-        # q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
-        # q_pe = q_pe.transpose(1,2)
-        # q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
-        
-        self.rope_theta = 10000.0
-        self.compress_rope_theta = 40000.0
-        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                         4, 32, 1)
-        freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        
-        apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
+        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
         
 
         q = rotate_activation(q)
-        kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, freqs_cis, kv_state)
+        kv = self.indexer.compressor(x, start_pos, cos, sin, kv_state)
         if kv is not None:
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
@@ -1878,18 +1630,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         hidden_states,
         kv_cache,
         attn_metadata,
-        kv_state):
-        self.rope_theta = 10000.0
-        self.compress_rope_theta = 40000.0
-        self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                         self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                         4, 32, 1)
-        # freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        
-        cos = attn_metadata.decode.cos
-        sin = attn_metadata.decode.sin
-        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, sin shape is {sin.shape}")
-        # print(f"=====================================in attention pe shape rank : {torch.distributed.get_rank()}, cos shape is {cos.shape}")
+        kv_state,
+        layer_name):
+        cos = attn_metadata.decode.cos[layer_name]
+        sin = attn_metadata.decode.sin[layer_name]
         
         seqlen, _ = hidden_states.size()
         bsz = 1
@@ -1897,57 +1641,31 @@ class AscendDSAImpl(DSAAttentionImpl):
         end_pos = int(attn_metadata.decode.seq_lens)
         win = self.window_size
         ratio = self.compress_ratio
-        rd = self.rope_head_dim
-        # if self.compress_ratio > 1 and self.compressor.kv_cache is None:
-        #     self.compressor.kv_cache = kv_cache[0][:, win:]
-        # q
         x = hidden_states
         qr = q = self.q_norm(self.wq_a(x))
-        # print(f"=====================================in attention qr rank : {torch.distributed.get_rank()}, q is {qr}, mean is {qr.mean()}")
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        # print(f"=====================================in attention q after wqb rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
         q_dtype = q.dtype
         q *= torch.rsqrt(q.to(torch.float32).square().mean(-1, keepdim=True) + self.eps)
-        # print("*****************", self.eps)
         q = q.to(q_dtype)
-        # print(f"=====================================in attention q after rsqt rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
-        
-        
-        
-        # q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # q_pe = self.rope_single(q_pe, cos, sin)
-        # print(f"=====================================in attention cos rank : {torch.distributed.get_rank()}, cos is {cos}")
-        # print(f"=====================================in attention sin rank : {torch.distributed.get_rank()}, sin is {sin}")
-        # q = torch.cat([q_nope, q_pe], dim=-1)
-        # print(f"=====================================in attention q rank : {torch.distributed.get_rank()}, q is {q}, mean is {q.mean()}")
-        
-        
-        freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-        apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
-        
-        
-        
-        
+
+        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
         # win kv & topk_idxs
         kv = self.wkv(x)
-        # print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim) # 5 512
+
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
         
-        
-        
-        # kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        # kv_pe = self.rope_single(kv_pe, cos, sin)
-        # kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        
-        apply_rotary_emb(kv[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
         torch_npu.npu_scatter_nd_update_(
                         kv_state[0].view(-1, kv.shape[-1]), attn_metadata.decode.swa_slot_mapping.unsqueeze(-1),
                         kv)
         
-        # print(f"=====================================in attention kv rank : {torch.distributed.get_rank()}, kv is {kv}, mean is {kv.mean()}")
         topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
-        # print(f"=====================================in attention topkidx rank : {torch.distributed.get_rank()}, topkidx is {topk_idxs}")
         if self.compress_ratio > 1:
             offset = kv.size(1) if start_pos == 0 else win
             if self.indexer is not None:
@@ -1962,7 +1680,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
 
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)).numel()!=0:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)).numel()!=0:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
                         if self.compress_ratio ==4 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
@@ -1980,7 +1698,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             swa_kv = kv_state[0][2][:128].unsqueeze(1)  # TODO
             if self.compress_ratio >1:
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
                     if self.compress_ratio ==4 and kv_compress.numel()!=0:
                         torch_npu.npu_scatter_nd_update_(
                             kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
@@ -1990,7 +1708,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[1][0].unsqueeze(-1),
                             kv_compress)
 
-                # self.compressor(x, start_pos, cos, sin, kv_state)
                 if self.compress_ratio ==4:
                     compress_kv = kv_cache[0][1][:end_pos//self.compress_ratio]
                     swa_kv = torch.cat([swa_kv, compress_kv], dim=0)
@@ -2002,11 +1719,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             
 
 
-
-        
-        apply_rotary_emb(o[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis, True)
-        
-        # topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+        o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        o_pe = self.rope_single(o_pe, cos, sin, True)
+        o = torch.cat([o_nope, o_pe], dim=-1)
 
         # o
         o = o.view(bsz, seqlen, self.n_local_groups, -1)
@@ -2035,7 +1750,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             seqlen, _ = x.size()
             bsz = 1
             ratio = self.compress_ratio
-            rd = self.rope_head_dim
             end_pos = start_pos + seqlen
             # if self.indexer.compressor.kv_cache is None:
             #     self.indexer.compressor.kv_cache = self.indexer.kv_cache
@@ -2047,30 +1761,12 @@ class AscendDSAImpl(DSAAttentionImpl):
             cos_q = cos_q.view(1, 1, -1, self.rope_head_dim)
             sin_q = sin_q.view(1, 1, -1, self.rope_head_dim)
 
-            # q_pe, q_nope = torch.split(
-            #     q,
-            #     [self.rope_head_dim, self.indexcom_head_dim - self.rope_head_dim],
-            #     dim=-1)  # [b,s,64,64+64]
-
-            # # q_pe = q_pe.unsqueeze(2)
-            # q_pe = q_pe.transpose(1,2)
-            # # print(f'q_pe.shape: {q_pe.shape},cos_q: {cos_q.shape}')
-            # # q_pe = torch_npu.npu_interleave_rope(q_pe, cos_q, sin_q)
-            # # q_pe = q_pe.transpose(1,2)
-            # # q = torch.cat([q_pe, q_nope], dim=-1)  # [b*s,64,128]
-            
-            self.rope_theta = 10000.0
-            self.compress_rope_theta = 40000.0
-            self.freqs_cis = precompute_freqs_cis_cpu(self.rope_head_dim, 4096, 65536,
-                                            self.compress_rope_theta if self.compress_ratio > 1 else self.rope_theta,
-                                            4, 32, 1)
-            freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
-            
-            apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
-            
+            q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+            q_pe = self.rope_single(q_pe, cos, sin)
+            q = torch.cat([q_nope, q_pe], dim=-1)
 
             q = rotate_activation(q)
-            kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, freqs_cis, kv_state)
+            kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, kv_state)
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                                 kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
