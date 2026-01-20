@@ -2544,6 +2544,7 @@ class NPUModelRunner(GPUModelRunner):
             assert layer_index in c1_layers, "layer_index out of range"
             sliding_window = get_aligned_tensor_for_pd(
                 torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                self.device,
                 torch.bfloat16,
                 alignment,
             )
