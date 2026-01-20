@@ -1243,7 +1243,7 @@ def get_compressed_pos_and_indices(
 
 def get_aligned_tensor_for_pd(size: torch.Size, device: torch.device, dtype: torch.dtype, alignment: int = 1):
 
-    def _align_memory(self, tensor: torch.Tensor,
+    def _align_memory(tensor: torch.Tensor,
                       alignment: int) -> torch.Tensor:
         data_ptr = tensor.data_ptr()
         aligned_addr = (data_ptr + alignment - 1) // alignment * alignment
