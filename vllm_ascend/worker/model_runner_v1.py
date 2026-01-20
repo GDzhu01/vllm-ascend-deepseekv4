@@ -114,7 +114,8 @@ from vllm_ascend.spec_decode.mtp_proposer import MtpProposer
 from vllm_ascend.utils import (AscendDeviceType, ProfileExecuteDuration,
                                enable_sp, get_ascend_device_type, is_moe_model,
                                lmhead_tp_enable, maybe_trans_nz,
-                               set_weight_prefetch_method, vllm_version_is)
+                               set_weight_prefetch_method, vllm_version_is,
+                               get_compressed_pos_and_indices)
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.worker.pcp_utils import PCPManager
 
@@ -549,29 +550,19 @@ class NPUModelRunner(GPUModelRunner):
                arange,
                out=positions_np)
 
-        positions_compress = []
-        positions_len_compress = []
-        compress_ratios = [4, 128]
         print(30*"=")
-        for compress_ratio in compress_ratios:
-            positions_compress_element, positions_len_compress_element = self.batch_get_compressed_pos(
-                    self.input_batch.num_computed_tokens_cpu[:num_reqs],
-                    num_scheduled_tokens[:num_reqs],
-                    compress_ratio
-                )
-            positions_compress.append(positions_compress_element)
-            positions_len_compress.append(positions_len_compress_element)
-        print(f"num_computed_tokens_cpu: {self.input_batch.num_computed_tokens_cpu[:num_reqs]} \num_scheduled_tokens: {num_scheduled_tokens[:num_reqs]}, \npositions_len_compress: {positions_len_compress}")
+        positions_compressed_list, req_indices_compressed_list = get_compressed_pos_and_indices(
+            self.input_batch.num_computed_tokens_cpu[:num_reqs],
+            num_scheduled_tokens[:num_reqs],
+            self.arange_np[:num_reqs]
+        )
+        print(f"num_computed_tokens_cpu: {self.input_batch.num_computed_tokens_cpu[:num_reqs]} \nnum_scheduled_tokens: {num_scheduled_tokens[:num_reqs]}")
 
-        print(f"req_indices: {req_indices} \npositions_np: {positions_np} \npositions_compress: {positions_compress}")
-        req_indices_compress4 = np.repeat(self.arange_np[:num_reqs],
-                                positions_len_compress[0])
-        req_indices_compress128 = np.repeat(self.arange_np[:num_reqs],
-                                positions_len_compress[1])
-        req_indices_compress = [req_indices_compress4, req_indices_compress128]
+        print(f"req_indices: {req_indices} \npositions_np: {positions_np} \npositions_compressed: {positions_compressed_list}")
         print(30*"=")
+
         self.input_batch.block_table.compute_slot_mapping(
-            req_indices, positions_np, positions_compress, req_indices_compress)
+            req_indices, positions_np, positions_compressed_list, req_indices_compressed_list)
         self.input_batch.block_table.commit_slot_mapping(
             total_num_scheduled_tokens)
         # for pcp, prefill mtp should use origin scheduleroutput ,
@@ -977,7 +968,8 @@ class NPUModelRunner(GPUModelRunner):
                 slot_mapping_list = []
                 for blk_table in blk_table_list:
                     blk_table_tensor_list.append(blk_table.get_device_tensor(num_reqs))
-
+                    print(f"blk_table.slot_mapping.gpu: {blk_table.slot_mapping.gpu} "
+                          f"blk_table.slot_mapping.gpu_shape: {blk_table.slot_mapping.gpu.shape}")
                     slot_mapping = blk_table.slot_mapping.gpu[:
                                                         maybe_pcp_full_tokens]
                     if self.pcp_size == 1:
