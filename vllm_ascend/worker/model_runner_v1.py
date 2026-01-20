@@ -2762,7 +2762,7 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        kv_caches: Dict[str, Tuple[torch.Tensor]] = defaultdict(tuple)
+        kv_caches: Dict[str, list[torch.Tensor]] = defaultdict(list)
         for group in self._kv_cache_spec_attn_group_iterator():
             kv_cache_spec = group.kv_cache_spec
             attn_backend = group.backend
@@ -2788,8 +2788,8 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_spec.num_kv_heads,
                         kv_cache_spec.head_size)
                     # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
-                    kv_cache = kv_tensor.view(kv_cache_spec.nope_dtype).view(kv_cache_shape)
-                    kv_caches[layer_name].add(kv_cache)
+                    kv_cache = kv_tensor.view(kv_cache_spec.dtype).view(kv_cache_shape)
+                    kv_caches[layer_name].append(kv_cache)
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
@@ -3186,6 +3186,7 @@ class NPUModelRunner(GPUModelRunner):
                             num_kv_heads=1,
                             head_size=128,
                             dtype=torch.float8_e4m3fn,
+                            compress_ratio=4,
                         ))
                     else:
                         kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
@@ -3203,6 +3204,7 @@ class NPUModelRunner(GPUModelRunner):
                             num_kv_heads=1,
                             head_size=128,
                             dtype=torch.int8,
+                            compress_ratio=4,
                         ))
                 elif layer_id % 2 != 0:
                     if get_ascend_device_type() == AscendDeviceType.A5:
