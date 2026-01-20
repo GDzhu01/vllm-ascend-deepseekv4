@@ -1233,3 +1233,25 @@ def get_compressed_pos_and_indices(
         req_indices_compressed_list.append(req_indices_compressed)
         positions_compressed_list.append(compressed_pos_ids)
     return positions_compressed_list, req_indices_compressed_list
+
+
+def get_aligned_tensor_for_pd(size: torch.Size, device: torch.device, dtype: torch.dtype, alignment: int = 1):
+
+    def _align_memory(self, tensor: torch.Tensor,
+                      alignment: int) -> torch.Tensor:
+        data_ptr = tensor.data_ptr()
+        aligned_addr = (data_ptr + alignment - 1) // alignment * alignment
+        offset = (aligned_addr - data_ptr) // tensor.element_size()
+        return tensor[int(offset):]
+
+    tensor_size = size.numel() * dtype.itemsize
+    original_tensor = torch.zeros(
+        tensor_size + alignment,
+        dtype=torch.int8,
+        device=device
+    )
+    aligned_tensor = _align_memory(
+        original_tensor,
+        alignment
+    )[:tensor_size]
+    return aligned_tensor.view(dtype).view(size)
