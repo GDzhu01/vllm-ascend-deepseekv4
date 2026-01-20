@@ -2,6 +2,7 @@ from typing import Optional, Union
 
 import numpy as np
 import torch
+from vllm.config import get_current_vllm_config
 from vllm.distributed import get_dcp_group, get_pcp_group
 from vllm.utils.math_utils import cdiv
 from vllm.v1.utils import CpuGpuBuffer
@@ -258,7 +259,6 @@ class MultiGroupBlockTable:
                  block_sizes: list[int],
                  num_speculative_tokens: int = 0,
                  kernel_sizes: Optional[list[list[int]]] = None,
-                 compress_ratios:list[int]=[1],
                  cp_kv_cache_interleave_size: int = 1) -> None:
         # Note(hc): each dcp rank only store
         # (max_model_len//dcp_world_size) tokens in kvcache,
@@ -282,6 +282,13 @@ class MultiGroupBlockTable:
                 f"kernel_sizes length ({len(kernel_sizes)}) must match "
                 f"block_sizes length ({len(block_sizes)})")
 
+        vllm_config = get_current_vllm_config()
+        use_compress = hasattr(vllm_config.model_config.hf_config,
+                               "compress_ratios")
+        compress_ratios = vllm_config.model_config.hf_config.compress_ratios if use_compress else [1]
+        compress_ratios = list(set(compress_ratios))
+        compress_ratios = sorted([compress_ratio for compress_ratio in compress_ratios if compress_ratio > 1])
+
         # Use zip to pair block_sizes with kernel_sizes one-to-one
         self.block_tables = [
             BlockTable(
@@ -292,7 +299,8 @@ class MultiGroupBlockTable:
                     1 + num_speculative_tokens), max_num_batched_tokens,
                 pin_memory, device, kernel_size_list,
                 cp_kv_cache_interleave_size, num_speculative_tokens, compress_ratio)
-            for block_size, kernel_size_list, compress_ratio in zip(block_sizes * len(compress_ratios), kernel_sizes * len(compress_ratios), compress_ratios)
+            for block_size, kernel_size_list, compress_ratio in
+            zip(block_sizes * len(compress_ratios), kernel_sizes * len(compress_ratios), compress_ratios)
         ]
 
     def append_row(self, block_ids: tuple[list[int], ...],

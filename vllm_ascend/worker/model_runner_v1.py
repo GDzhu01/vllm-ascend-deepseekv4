@@ -335,7 +335,6 @@ class NPUModelRunner(GPUModelRunner):
             vocab_size=self.model_config.get_vocab_size(),
             block_sizes=[self.block_size],
             kernel_block_sizes=[[self.cache_config.block_size]],
-            compress_ratios = [4, 128],
             is_spec_decode=bool(self.vllm_config.speculative_config),
             logitsprocs=build_logitsprocs(
                 self.vllm_config, self.device, self.pin_memory,
@@ -554,7 +553,8 @@ class NPUModelRunner(GPUModelRunner):
         positions_compressed_list, req_indices_compressed_list = get_compressed_pos_and_indices(
             self.input_batch.num_computed_tokens_cpu[:num_reqs],
             num_scheduled_tokens[:num_reqs],
-            self.arange_np[:num_reqs]
+            self.arange_np[:num_reqs],
+            self.use_compress
         )
         print(f"num_computed_tokens_cpu: {self.input_batch.num_computed_tokens_cpu[:num_reqs]} \nnum_scheduled_tokens: {num_scheduled_tokens[:num_reqs]}")
 
@@ -2633,11 +2633,7 @@ class NPUModelRunner(GPUModelRunner):
                 alignment
             )[:tensor_size]
             return aligned_tensor.view(dtype).view(size)
-        
-        is_dsv4 = True
-        # 按照已有逻辑，给每一层分配不同大小的 buffer
-        # (c4_kv_tensor, indexer_kv_tensor)
-        # c128_kv_tensor
+
         for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
@@ -2662,7 +2658,7 @@ class NPUModelRunner(GPUModelRunner):
                         # shared the kvcache between the self_attn specs in the same group
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
-                elif "attn" in layer_name and is_dsv4:
+                elif "attn" in layer_name and self.use_compress:
                     c4_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
                     num_blocks = kv_cache_config.num_blocks
                     print(30*"=", f"kv_cache_tensor: {kv_cache_tensor}")
@@ -3090,7 +3086,6 @@ class NPUModelRunner(GPUModelRunner):
                     self.vllm_config.speculative_config.num_speculative_tokens
                     if self.vllm_config.speculative_config else 0),
                 kernel_block_sizes=kernel_block_sizes,
-                compress_ratios = [4, 128],
             )
 
     def initialize_attn_backend(self, kv_cache_config: KVCacheConfig) -> None:
