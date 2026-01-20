@@ -1680,6 +1680,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr: torch.Tensor,
         kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         attn_metadata: M,
+        kv_state: Tuple,
         cos: torch.Tensor,
         sin: torch.Tensor,
         actual_seq_lengths_query: torch.Tensor,
@@ -1690,6 +1691,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         seqlen, _ = x.size()
         bsz = 1
         rd = self.rope_head_dim
+        (_, _, _,
+             c4_indexer_kv_state, c4_indexer_score_state) = kv_state
         # q process in new stream
         q, _ = self.wq_b(qr)  # [b,s,1536] @ [1536,64*128] = [b,s,64*128]
         q = q.view(-1, self.n_head, self.head_dim)  # [n_toks,64,128]
@@ -1719,7 +1722,29 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         apply_rotary_emb(q[..., -rd:].view(bsz, seqlen, -1, self.rope_head_dim), freqs_cis)
 
+        seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
         k = self.compress_forward(x, kv_cache)
+        kv = torch.ops.custom.npu_compressor(
+            x,
+            self.indexcom_wkv,
+            self.indexcom_wgate,
+            c4_indexer_kv_state,
+            c4_indexer_score_state,
+            self.indexcom_ape,
+            self.indexcom_norm, 
+            sin,
+            cos,
+            kv_block_table = attn_metadata.state_ids,
+            score_block_table = attn_metadata.state_ids,
+            cu_seqlens = actual_seq_lengths_query,
+            seqused = actual_seq_lengths_key,
+            start_pos = actual_seq_lengths_key - seq_lens_q,
+            rope_head_dim = self.rope_head_dim,
+            cmp_ratio = self.compress_ratio,
+            coff = 0 if self.compressor_overlap else 1,
+            norm_eps = self.compressor_norm_eps,
+            rotary_mode = 2
+        )
 
         weights, _ = self.weights_proj(x)
 
