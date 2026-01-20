@@ -1127,22 +1127,22 @@ class AscendDSAImpl(DSAAttentionImpl):
             # Profiling run.
             return output.fill_(0)
 
-        output_padded = output
-        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
-            output[...]  =  self._forward_single_op_prefill(
-                hidden_states,
-                kv_cache,
-                attn_metadata,
-                kv_state,
-            )
-        elif attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
-            output[...]  =  self._forward_single_op_decode(
-                hidden_states,
-                kv_cache,
-                attn_metadata,
-                kv_state,
-            )
-        return output_padded
+        # output_padded = output
+        # if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+        #     output[...]  =  self._forward_single_op_prefill(
+        #         hidden_states,
+        #         kv_cache,
+        #         attn_metadata,
+        #         kv_state,
+        #     )
+        # elif attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
+        #     output[...]  =  self._forward_single_op_decode(
+        #         hidden_states,
+        #         kv_cache,
+        #         attn_metadata,
+        #         kv_state,
+        #     )
+        # return output_padded
 
 
         has_prefill = attn_metadata.num_prefills > 0
