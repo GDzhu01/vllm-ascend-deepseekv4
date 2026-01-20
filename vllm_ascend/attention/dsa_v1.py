@@ -791,12 +791,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     def get_block_table_size(
             self, common_attn_metadata: AscendCommonAttentionMetadata,
             build_metadata_step: int):
-        # if build_metadata_step == BUILD_METADATA_STEP_PREFILL:
+        if build_metadata_step == BUILD_METADATA_STEP_PREFILL:
             # If graph_pad_size > -1, mean is running in fullgraph mode.
             # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
             # if self.graph_pad_size > common_attn_metadata.num_reqs and self.speculative_config.disable_padded_drafter_batch:
             #     return self.graph_pad_size
-            # return common_attn_metadata.num_reqs
+            return common_attn_metadata.num_reqs
         return self.num_decodes
 
 
@@ -1466,12 +1466,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
                         if self.compress_ratio ==4 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
-                            kv_compress)
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv_compress.squeeze(0))
                         elif self.compress_ratio ==128 and kv_compress.numel()!=0:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
-                            kv_compress)
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1].unsqueeze(-1),
+                            kv_compress.squeeze(0))
 
                         kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
                     
@@ -1607,7 +1607,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         kv = self.indexer.compressor(x, start_pos, cos, sin, kv_state)
         if kv is not None:
             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
+                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
                             kv.view(kv.shape[1], kv.shape[-1]))
         weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
         # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
@@ -1680,16 +1680,16 @@ class AscendDSAImpl(DSAAttentionImpl):
             # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
             if self.compress_ratio > 1:
 
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)).numel()!=0:
+                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
                     # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
-                        if self.compress_ratio ==4 and kv_compress.numel()!=0:
+                        if self.compress_ratio ==4:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0][0].unsqueeze(-1),
-                            kv_compress)
-                        elif self.compress_ratio ==128 and kv_compress.numel()!=0:
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv_compress.squeeze(0))
+                        elif self.compress_ratio ==128:
                             torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1][0].unsqueeze(-1),
-                            kv_compress)
+                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1].unsqueeze(-1),
+                            kv_compress.squeeze(0))
 
                         kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
                     
