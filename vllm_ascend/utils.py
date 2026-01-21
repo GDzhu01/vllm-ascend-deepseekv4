@@ -1197,7 +1197,7 @@ def get_compressed_pos_and_indices(
         num_scheduled_tokens: np.ndarray,
         arrange_np: np.ndarray,
         use_compress: bool
-) -> tuple[List[np.ndarray], List[np.ndarray]]:
+) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
     """
     Batch generate compressed position ids for multi-requests on DSv4.
     Calculate compressed position ids independently for each single request.
@@ -1212,7 +1212,7 @@ def get_compressed_pos_and_indices(
             2. Length of compressed position ids for each individual request
     """
     if not use_compress:
-        return None, None
+        return None, None, None
     # Assert input validity
     assert num_computed_tokens.shape == num_scheduled_tokens.shape, "num_computed_tokens and num_scheduled_tokens must have the same shape"
     assert np.all(num_computed_tokens >= 0) and np.all(
@@ -1220,6 +1220,7 @@ def get_compressed_pos_and_indices(
 
     positions_compressed_list = []
     req_indices_compressed_list = []
+    num_scheduled_tokens_compressed_list = []
     compress_ratios = [4, 128]
     for compress_ratio in compress_ratios:
         # Calculate compressed length of historical & total tokens
@@ -1237,4 +1238,5 @@ def get_compressed_pos_and_indices(
         req_indices_compressed = np.repeat(arrange_np, num_new_compressed_pos)
         req_indices_compressed_list.append(req_indices_compressed)
         positions_compressed_list.append(compressed_pos_ids)
-    return positions_compressed_list, req_indices_compressed_list
+        num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+    return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list
