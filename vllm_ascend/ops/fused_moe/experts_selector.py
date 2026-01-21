@@ -19,6 +19,7 @@ from typing import Callable, Optional
 import torch
 import torch.nn.functional as F
 from vllm_ascend.utils import get_weight_prefetch_method
+from vllm.forward_context import get_forward_context
 
 
 def select_experts(hidden_states: torch.Tensor,
@@ -271,6 +272,7 @@ def _select_experts_with_fusion_ops(
             # input_ids_cpu = input_ids.cpu()
             print('2222')
             # topk_ids = tid2eid_cpu[input_ids_cpu].to(scores.device)
+            input_ids = get_forward_context().input_ids
             topk_ids = tid2eid[input_ids]
             print(f'hi')
         else:

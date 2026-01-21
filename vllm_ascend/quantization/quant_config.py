@@ -164,7 +164,7 @@ class AscendQuantConfig(QuantizationConfig):
         return prefix
 
     def get_quant_method(self, layer: torch.nn.Module,
-                         prefix: str) -> Optional["QuantizeMethodBase"]:
+                         prefix: str, tid2eid=None) -> Optional["QuantizeMethodBase"]:
         vllm_config = get_current_vllm_config()
         model_type = vllm_config.model_config.hf_text_config.model_type
 
@@ -202,7 +202,7 @@ class AscendQuantConfig(QuantizationConfig):
                                             self.packed_modules_mapping):
                 return AscendUnquantizedFusedMoEMethod(layer.moe_config)
             return AscendFusedMoEMethod(self, prefix,
-                                        self.packed_modules_mapping, layer)
+                                        self.packed_modules_mapping, layer, tid2eid=tid2eid)
         elif isinstance(layer, VocabParallelEmbedding):
             if self.is_layer_skipped_ascend(prefix,
                                             self.packed_modules_mapping):
@@ -570,13 +570,14 @@ class AscendFusedMoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quant_config: AscendQuantConfig, prefix: str,
                  packed_modules_mapping: Dict[str,
-                                              Any], layer: torch.nn.Module):
+                                              Any], layer: torch.nn.Module, tid2eid=None):
         super().__init__(layer.moe_config)
         self.quant_method = get_quant_method(quant_config.quant_description,
                                              prefix,
                                              "moe",
                                              packed_modules_mapping,
-                                             layer=layer)
+                                             layer=layer,
+                                             tid2eid=tid2eid)
 
     def create_weights(
         self,

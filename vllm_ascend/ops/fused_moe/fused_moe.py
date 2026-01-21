@@ -172,18 +172,15 @@ class AscendFusedMoE(FusedMoE):
 
         self._expert_map = None
         self.log2phy = None
-        
-        if use_hash:
-            self.tid2eid = tid2eid
-        else:
-            self.tid2eid = None
+
+        self.tid2eid = tid2eid
 
         if self.quant_config is None:
             self.quant_method = AscendUnquantizedFusedMoEMethod(
                 self.moe_config,tid2eid=self.tid2eid)
         else:
             self.quant_method = self.quant_config.get_quant_method(
-                self, self.layer_name)
+                self, self.layer_name, tid2eid=self.tid2eid)
 
         assert self.quant_method is not None
 
