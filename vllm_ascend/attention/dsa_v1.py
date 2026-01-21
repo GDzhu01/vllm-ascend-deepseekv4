@@ -1736,8 +1736,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table_list[0]
         else:
-            # qlens = attn_metadata.decode.query_start_loc[1:].to(q.device)
-            qlens = torch.Tensor([1]).to(torch.int32).to(q.device)
+            qlens = attn_metadata.decode.query_start_loc[1:].to(q.device)
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table_list[0]
 
