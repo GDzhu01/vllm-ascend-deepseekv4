@@ -42,6 +42,7 @@ from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.ops.pypto import AttentionPostV4
+from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
