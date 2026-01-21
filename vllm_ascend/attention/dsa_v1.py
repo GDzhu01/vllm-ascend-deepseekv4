@@ -676,7 +676,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         max_query_len = self.query_lens[reqs_start:].max().item()
         max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:num_reqs].max().item()
         prefill_query_start_loc = query_start_loc[
-            reqs_start+1:] - query_start_loc[reqs_start+1]
+            reqs_start:] - query_start_loc[reqs_start]
 
         prefill_input_positions = input_positions[tokens_start:]
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
