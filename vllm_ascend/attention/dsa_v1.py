@@ -274,6 +274,10 @@ class AscendDSAPrefillMetadata:
     chunked_context: Optional[ChunkedContextMetadata] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
+    c4_sin: torch.Tensor = None
+    c4_cos: torch.Tensor = None
+    c128_sin: torch.Tensor = None
+    c128_cos: torch.Tensor = None
 
 @dataclass
 class AscendDSADecodeMetadata:
@@ -296,6 +300,10 @@ class AscendDSADecodeMetadata:
     attn_mask: Optional[torch.Tensor] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
+    c4_sin: torch.Tensor = None
+    c4_cos: torch.Tensor = None
+    c128_sin: torch.Tensor = None
+    c128_cos: torch.Tensor = None
     cp_seq_len: torch.Tensor = None
     batch_seq_mask: torch.Tensor = None
 
@@ -662,14 +670,32 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             common_prefix_len, common_attn_metadata)
         reqs_start = self.num_decodes  # prefill_start
         tokens_start = self.num_decode_tokens
+
         
         max_query_len = self.query_lens[reqs_start:].max().item()
         max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:num_reqs].max().item()
         prefill_query_start_loc = query_start_loc[
-            reqs_start:] - query_start_loc[reqs_start]
+            reqs_start+1:] - query_start_loc[reqs_start+1]
 
         prefill_input_positions = input_positions[tokens_start:]
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
+
+        # c4 rope
+        c4_mask = ((prefill_input_positions+1) % 4) == 0
+        c4_input_positions = prefill_input_positions[c4_mask]
+        c4_target_shape = (min(self.num_prefill_tokens, len(prefill_input_positions) // 4 + self.num_prefills),)
+        pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
+        c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
+        c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
+
+
+        # c128 rope
+        c128_mask = ((prefill_input_positions+1) % 128) == 0
+        c128_input_positions = prefill_input_positions[c128_mask]
+        c128_target_shape = (min(self.num_prefill_tokens, len(prefill_input_positions) // 128 + self.num_prefills),)
+        pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
+        c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
+        c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
 
         # tmp swa_block
         # [8,129,257]
@@ -705,6 +731,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_block_table_list = []
         for block_table in self.block_table_list:
             prefill_block_table_list.append(block_table[reqs_start:, ...])
+
         return AscendDSAPrefillMetadata(
             attn_mask=self.attn_mask_builder.get_final_mla_mask(
                 self.model_config),
@@ -723,6 +750,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             chunked_context=chunked_context_metadata,
             sin=sin,
             cos=cos,
+            c4_sin=c4_sin,
+            c4_cos=c4_cos,
+            c128_sin=c128_sin,
+            c128_cos=c128_cos,
             state_ids = self.state_ids[reqs_start:, ...]
         )
 
@@ -737,13 +768,13 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         input_positions = common_attn_metadata.positions[:self.
                                                          num_actual_tokens].long(
                                                          )
+        input_positions = input_positions[:self.num_decode_tokens]
 
         # Notice that num_decodes != num_decode_tokens in SpecDecoding Scenario
         # actual_seq_lengths_q = query_start_loc_cpu[1:self.num_decodes +
         #                                            1].tolist()
-        query_start_loc = query_start_loc_cpu[:self.num_decodes]
+        query_start_loc = query_start_loc_cpu[:self.num_decodes+1]
         max_seq_lens = common_attn_metadata.seq_lens_cpu[:self.num_decodes].max().item()
-        input_positions = input_positions[:self.num_decode_tokens]
 
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
@@ -769,6 +800,25 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
 
 
+        decode_input_positions = input_positions
+        # c4 rope
+        c4_mask = ((decode_input_positions+1) % 4) == 0
+        c4_input_positions = decode_input_positions[c4_mask]
+        c4_target_shape = (min(self.num_prefill_tokens, len(decode_input_positions) // 4 + self.num_prefills),)
+        pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
+        c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
+        c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
+
+
+        # c128 rope
+        c128_mask = ((decode_input_positions+1) % 128) == 0
+        c128_input_positions = decode_input_positions[c128_mask]
+        c128_target_shape = (min(self.num_prefill_tokens, len(decode_input_positions) // 128 + self.num_prefills),)
+        pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
+        c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
+        c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
+
+
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
             block_table=None,
@@ -784,6 +834,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             state_ids=self.state_ids[:block_table_size],
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
+            c4_sin=c4_sin,
+            c4_cos=c4_cos,
+            c128_sin=c128_sin,
+            c128_cos=c128_cos,
             cp_seq_len=cp_seq_len,
             batch_seq_mask=batch_seq_mask)
         return decode_metadata
