@@ -3,6 +3,7 @@ from typing import (TYPE_CHECKING, ClassVar, NamedTuple, Optional, Tuple, Type,
                     TypeVar)
 
 import numpy as np
+import math
 import torch
 import torch_npu
 import torch.nn.functional as F
@@ -1639,6 +1640,135 @@ class AscendDSAImpl(DSAAttentionImpl):
             layout_key="PA_BSND",
         )
         return sparse_indices
+
+    def indexer_select_qli(
+        self,
+        x: torch.Tensor,
+        qr: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        kv_cache,
+        kv_state,
+        attn_metadata,
+        start_pos,
+        offset=0, # (wy): start_pos=0
+    ):
+        seqlen, _ = x.size()  # [T, H]
+        bsz = 1
+        ratio = self.compress_ratio
+        rd = self.rope_head_dim
+        end_pos = start_pos + seqlen
+        q = self.inderxer_wq_b(qr)
+        q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
+        ## rope
+        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        q = rotate_activation(q)
+        kv = self.indexer.compressor(x, start_pos, cos, sin, kv_state)
+
+        # print(f"indexer kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
+
+        # if kv is not None:
+        #     torch_npu.npu_scatter_nd_update_(
+        #                     kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+        #                     kv.view(kv.shape[1], kv.shape[-1]))
+        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
+
+        soc_version = get_ascend_device_type()
+        dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
+
+        if kv is not None:
+            print(f'q kv in indexer: {q.shape=}, {kv.shape=}, {weights.shape=}')
+
+        q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
+        if kv is not None:
+            kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
+
+        if soc_version not in {AscendDeviceType.A5}:
+            q_scale = q_scale.to(torch.float16)
+            if kv is not None:
+                kv_scale = kv_scale.to(torch.float16)
+
+        if start_pos == 0:
+            print(f"indexer prefill kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
+            print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
+            if kv is not None:
+                torch_npu.npu_scatter_nd_update_(
+                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv.view(kv.shape[1], kv.shape[-1]))
+                torch_npu.npu_scatter_nd_update_(
+                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv_scale.view(-1, kv_scale.shape[-1]))
+        else:
+            print(f"indexer decode kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.decode.slot_mapping_list=}\n{attn_metadata.decode.block_table_list=}")
+            print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_start_loc=}")
+            if kv is not None:
+                torch_npu.npu_scatter_nd_update_(
+                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping_list[0].unsqueeze(-1),
+                            kv.view(kv.shape[1], kv.shape[-1]))
+                torch_npu.npu_scatter_nd_update_(
+                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping_list[0].unsqueeze(-1),
+                            kv_scale.view(-1, kv_scale.shape[-1]))
+
+        metadata = torch.zeros((2048), dtype = torch.int32)
+        usedCoreNum = 24 
+        mBaseSize = 256
+        s2BaseSize = 2048
+        metadata[:3] = torch.tensor([usedCoreNum, mBaseSize, s2BaseSize], dtype=torch.int32)
+        metadata[3:27] = torch.zeros((usedCoreNum), dtype = torch.int32) #bN2End 每个核处理数据的BN2结束点
+        metadata[27:51] = torch.zeros((usedCoreNum), dtype = torch.int32) #mEnd 每个核处理数据的M结束点
+        metadata[51:75] = torch.zeros((usedCoreNum), dtype = torch.int32) #s2End 每个核处理数据的S2结束点
+        metadata = metadata.to(q.device)
+
+        if kv is not None:
+            print(f"input info:\n{kv.shape=}\n{kv_scale.shape=}")
+            print(f"input info:\n{kv.dtype=}\n{kv_scale.dtype=}")
+        print(f"input info:\n{q.shape=}\n{weights.shape=}\n{q_scale.shape=}\n{torch.Tensor([q.shape[1]])=}")
+        print(f"input info:\n{q.dtype=}\n{weights.dtype=}\n{q_scale.dtype=}\n{torch.Tensor([q.shape[1]])=}")
+        # print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
+        # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_lens=}\n{attn_metadata.decode.query_start_loc=}")
+
+        if start_pos == 0:
+            qlens = attn_metadata.prefill.query_start_loc[1:].to(q.device)
+            kvlens = attn_metadata.prefill.seq_lens
+            block_table = attn_metadata.prefill.block_table_list[0]
+        else:
+            # qlens = attn_metadata.decode.query_start_loc[1:].to(q.device)
+            qlens = torch.Tensor([1]).to(torch.int32).to(q.device)
+            kvlens = attn_metadata.decode.seq_lens
+            block_table = attn_metadata.decode.block_table_list[0]
+
+        topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
+            query=q,
+            key=kv_cache[1],
+            weights=weights.to(torch.float16),
+            query_dequant_scale=q_scale,
+            key_dequant_scale=kv_cache[2],
+            actual_seq_lengths_query=qlens,
+            actual_seq_lengths_key=kvlens,
+            block_table=block_table,
+            metadata=metadata,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            layout_query="TND",
+            layout_key="PA_BSND", 
+            sparse_count=512,
+            sparse_mode=3,
+            pre_tokens = (1<<63)-1,
+            next_tokens = (1<<63)-1,
+            cmp_ratio = 4,
+            return_value = False
+        )
+        # return None
+        # topk_idxs [b, s, N, k]
+        topk_idxs = topk_idxs[..., :math.floor(kvlens.sum() / 4)].unsqueeze(0).squeeze(2)  # TODO 多序列需要修改
+        mask = topk_idxs == -1
+        topk_idxs = torch.where(mask, -1, topk_idxs + offset)
+        # if start_pos == 0:
+        #     mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
+        return topk_idxs
     
     def indexer_select_single_op(
         self,
