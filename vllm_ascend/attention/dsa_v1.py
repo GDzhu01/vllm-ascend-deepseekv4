@@ -1162,18 +1162,22 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.compress_ratio > 1:
             if self.compress_ratio == 4:
                 # slot_mapping = attn_metadata.slot_mapping_list[0][num_decode_tokens:]
+                compress_cos = attn_metadata.prefill.c4_cos
+                compress_sin = attn_metadata.prefill.c4_sin
                 compress_topk_idxs = self.indexer_select(x=hidden_states,
                                                     qr=qr,
                                                     kv_cache=kv_cache,
                                                     kv_state=kv_state,
                                                     attn_metadata=attn_metadata,
-                                                    cos=cos,
-                                                    sin=sin,
+                                                    cos=compress_cos,
+                                                    sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key)
             elif self.compress_ratio == 128:
                 # slot_mapping = attn_metadata.slot_mapping_list[1][num_decode_tokens:]
                 compress_topk_idxs = None
+                compress_cos = attn_metadata.prefill.c128_cos
+                compress_sin = attn_metadata.prefill.c128_sin
 
             # compressor
             compressed_kv = torch.ops.custom.npu_compressor(
@@ -1184,8 +1188,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm, 
-                sin,
-                cos,
+                compress_sin,
+                compress_cos,
                 kv_block_table = state_ids,
                 score_block_table = state_ids,
                 cu_seqlens = actual_seq_lengths_query,
@@ -1343,19 +1347,24 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.compress_ratio > 1:
             if self.compress_ratio == 4:
                 # slot_mapping = attn_metadata.decode.slot_mapping_list[0][:num_decode_tokens]
+                compress_cos = attn_metadata.decode.c4_cos
+                compress_sin = attn_metadata.decode.c4_sin
                 compress_topk_idxs = self.indexer_select(x=hidden_states,
                                                     qr=qr,
                                                     kv_cache=kv_cache,
                                                     kv_state=kv_state,
                                                     attn_metadata=attn_metadata,
-                                                    cos=cos,
-                                                    sin=sin,
+                                                    cos=compress_cos,
+                                                    sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key)
+
                 
             elif self.compress_ratio == 128:
                 # slot_mapping = attn_metadata.decode.slot_mapping_list[1][:num_decode_tokens]
                 compress_topk_idxs = None
+                compress_cos = attn_metadata.decode.c128_cos
+                compress_sin = attn_metadata.decode.c128_sin
 
             # compressor
             compressed_kv = torch.ops.custom.npu_compressor(
@@ -1366,8 +1375,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm, 
-                sin,
-                cos,
+                compress_sin,
+                compress_cos,
                 kv_block_table = state_ids,
                 score_block_table = state_ids,
                 cu_seqlens = actual_seq_lengths_query,
