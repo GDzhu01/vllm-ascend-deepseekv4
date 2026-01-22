@@ -3310,7 +3310,7 @@ class NPUModelRunner(GPUModelRunner):
                             compress_ratio=4,
                             indexer_head_size=128,
                             # TOOOOOOOOOOOOOOOOOOOOOOOOODO
-                            indexer_dtype=torch.bfloat16, 
+                            indexer_dtype=torch.int8, 
                             indexer_scale_dim=1,
                             indexer_scale_dtype=torch.float16,
                         )
