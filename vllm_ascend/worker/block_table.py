@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from vllm.distributed import get_dcp_group, get_pcp_group
 from vllm.utils.math_utils import cdiv
-from vllm.v1.utils import CpuGpuBuffer
 from vllm.v1.kv_cache_interface import KVCacheGroupSpec
+from vllm.v1.utils import CpuGpuBuffer
 
 
 class BlockTable:
@@ -105,7 +105,6 @@ class BlockTable:
         if not block_ids:
             return
         block_ids = np.array(block_ids)
-
         if self.use_hybrid_blocks:
             block_ids = self._convert_physical_to_logical_blocks(block_ids)
 
@@ -323,8 +322,6 @@ class MultiGroupBlockTable:
     def add_row(self, block_ids: tuple[list[int], ...], row_idx: int) -> None:
         for i, block_table in enumerate(self.block_tables):
             block_table.add_row(block_ids[i], row_idx)
-            # NOTE first simple kv route, only 1 kv manager and 1 block_id in scheduler_output,
-            # but 2 block_tables for C4/C128. Try to find a better implementation.
 
     def move_row(self, src: int, tgt: int) -> None:
         for block_table in self.block_tables:

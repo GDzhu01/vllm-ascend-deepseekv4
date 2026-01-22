@@ -21,6 +21,7 @@ import numpy as np
 import torch
 from vllm.lora.request import LoRARequest
 from vllm.pooling_params import PoolingParams
+from vllm.v1.kv_cache_interface import KVCacheGroupSpec
 from vllm.v1.outputs import LogprobsTensors
 from vllm.v1.pool.metadata import PoolingStates
 from vllm.v1.sample.logits_processor import (BatchUpdateBuilder,
