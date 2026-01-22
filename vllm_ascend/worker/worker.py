@@ -272,8 +272,9 @@ class NPUWorker(WorkerBase):
         window_size = hf_config.window_size
         num_layers = hf_config.n_layers
         compress_ratios: list[int] = hf_config.compress_ratios
-        num_c4_layers = compress_ratios.count(4)
-        num_c128_layers = compress_ratios.count(128)
+        num_c4_layers = compress_ratios[:num_layers].count(4)
+        num_c128_layers = compress_ratios[:num_layers].count(128)
+        block_size = self.cache_config.block_size
 
         # Some args that are strongly related to dsv4 attn implementation
         # and can not get from config file
@@ -281,21 +282,23 @@ class NPUWorker(WorkerBase):
         c4_compress_ratio = 4
         c128_coff = 1
         c128_compress_ratio = 128
-        dtype_size = 2  # torch.bfloat16
-        sliding_window_multiple = 2
+        swa_dtype_size = 2 # torch.bfloat16
+        state_dtype_size = 4 # torch.float32
+        state_block_multiple = 2
+        block_num = (max_num_reqs + 1) * state_block_multiple
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]
-        swa_memory = (max_num_reqs + 1) * sliding_window_multiple * window_size * head_dim * dtype_size * num_layers
+        swa_memory = block_num * block_size * head_dim * swa_dtype_size * num_layers
         
         # compress: [args.max_batch_size, coff * compress_ratio, coff * self.head_dim], dtype=torch.float32
         # C4 compressor memory
-        c4_kv_state = max_num_reqs * c4_coff * c4_compress_ratio * c4_coff * head_dim * dtype_size
+        c4_kv_state = block_num * block_size * c4_coff * head_dim * state_dtype_size
         c4_score_state = c4_kv_state
-        c4_indexer_kv_state = max_num_reqs * c4_coff * c4_compress_ratio * c4_coff * index_head_dim * dtype_size
+        c4_indexer_kv_state = block_num * block_size * c4_coff * index_head_dim * state_dtype_size
         c4_indexer_score_state = c4_indexer_kv_state
         c4_memory = (c4_kv_state + c4_score_state + c4_indexer_kv_state + c4_indexer_score_state) * num_c4_layers
         # C128 compressor memory
-        c128_kv_state = max_num_reqs * c128_coff * c128_compress_ratio * c128_coff * head_dim * dtype_size
+        c128_kv_state = block_num * block_size * c128_coff * head_dim * state_dtype_size
         c128_score_state = c128_kv_state
         c128_memory = (c128_kv_state + c128_score_state) * num_c128_layers
 

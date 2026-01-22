@@ -362,9 +362,13 @@ class NPUModelRunner(GPUModelRunner):
         self.intermediate_tensors: IntermediateTensors | None = None
         self.reorder_batch_threshold: int | None = None
         self.long_seq_metadata = None
-        self.sliding_window_multiple = 2
+        # Since compressor kernel need PA format input,
+        # and write backward blocks instead of overwrite in one block,
+        # we need to initialize two blocks and simulate writing backward
+        # by exchanging order of this two blocks.
+        self.state_block_multiple = 2
         self.swa_slot_mapping = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
-        self.swa_block_table = self._make_buffer((self.max_num_reqs, self.sliding_window_multiple), dtype=torch.int32)
+        self.swa_block_table = self._make_buffer((self.max_num_reqs, self.state_block_multiple), dtype=torch.int32)
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -2471,6 +2475,11 @@ class NPUModelRunner(GPUModelRunner):
         window_size = hf_config.window_size
         head_dim = hf_config.head_dim
         indexer_head_dim = hf_config.index_head_dim
+        # Since compressor kernel need PA format input,
+        # we initialize KV state buffer with the size of block_size
+        # instead of its actual size.
+        block_size = self.vllm_config.cache_config.block_size
+        block_num = (self.max_num_reqs + 1) * self.state_block_multiple
 
         def _get_aligned_tensor(size: torch.Size, dtype: torch.dtype, alignment: int = 1):
             tensor_size = size.numel() * dtype.itemsize
@@ -2492,7 +2501,7 @@ class NPUModelRunner(GPUModelRunner):
             for layer_name in group.layer_names:
                 layer_index = extract_layer_index(layer_name)
                 sliding_window = _get_aligned_tensor(
-                    torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                    torch.Size([block_num, block_size, head_dim]),
                     torch.bfloat16,
                     alignment,
                 )
@@ -2500,23 +2509,23 @@ class NPUModelRunner(GPUModelRunner):
                     coff = 2
                     compress_ratio = 4
                     c4_kv_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     c4_score_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     c4_indexer_kv_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * indexer_head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * indexer_head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     c4_indexer_score_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * indexer_head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * indexer_head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     kv_states[layer_name] = (sliding_window, c4_kv_state, c4_score_state, c4_indexer_kv_state, c4_indexer_score_state)
@@ -2524,13 +2533,13 @@ class NPUModelRunner(GPUModelRunner):
                     coff = 1
                     compress_ratio = 128
                     c128_kv_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     c128_score_state = _get_aligned_tensor(
-                        torch.Size([(self.max_num_reqs + 1), coff * compress_ratio, coff * head_dim]),
-                        torch.bfloat16,
+                        torch.Size([block_num, block_size, coff * head_dim]),
+                        torch.float32,
                         alignment,
                     )
                     kv_states[layer_name] = (sliding_window, c128_kv_state, c128_score_state)
@@ -2541,7 +2550,7 @@ class NPUModelRunner(GPUModelRunner):
             layer_index = extract_layer_index(layer_name)
             assert layer_index in c1_layers, "layer_index out of range"
             sliding_window = _get_aligned_tensor(
-                torch.Size([(self.max_num_reqs + 1) * self.sliding_window_multiple, window_size, head_dim]),
+                torch.Size([block_num, block_size, head_dim]),
                 torch.bfloat16,
                 alignment,
             )
@@ -3471,38 +3480,38 @@ class NPUModelRunner(GPUModelRunner):
 
         """
         num_reqs = state_ids.shape[0]
-        window_size = 128
-        window_multiple = self.sliding_window_multiple # 2 * window_size for each req
+        block_size = self.vllm_config.cache_config.block_size
+        block_multiple = self.state_block_multiple # 2 block for each req
 
         # similar to kv_cache slot_mapping,
         # slot = base (of block_id) + offset (inside block)
-        base = state_ids.repeat(query_lens) * window_size * window_multiple
-        offset = positions % (window_size * window_multiple)
+        base = state_ids.repeat(query_lens) * block_size * block_multiple
+        offset = positions % (block_size * block_multiple)
         swa_slot_mapping = base + offset
 
         # set slot of out of window tokens of prefill to -1
         # if kernel support overwrite, we can remove this
         out_of_window_mask_list = []
         for query_len in query_lens:
-            if query_len <= window_size:
+            if query_len <= block_size:
                 out_of_window_mask_list.append(np.repeat(0, query_len))
             else:
-                out_of_window_mask_list.append(np.repeat(1, query_len - window_size))
-                out_of_window_mask_list.append(np.repeat(0, window_size))
+                out_of_window_mask_list.append(np.repeat(1, query_len - block_size))
+                out_of_window_mask_list.append(np.repeat(0, block_size))
         out_of_window_mask = np.concatenate(out_of_window_mask_list)
         swa_slot_mapping = np.where(out_of_window_mask, -1, swa_slot_mapping)
 
         # generate state table
         query_end_index = query_lens.cumsum() - 1
         query_end_position = positions[query_end_index]
-        swa_block_table = np.zeros([num_reqs, window_multiple], dtype=np.int32)
+        swa_block_table = np.zeros([num_reqs, block_multiple], dtype=np.int32)
         for i in range(num_reqs):
-            base_block = state_ids[i] * window_multiple
-            if query_end_position[i] < window_size:
+            base_block = state_ids[i] * block_multiple
+            if query_end_position[i] < block_size:
                 swa_block_table[i][0] = base_block
             else:
-                tail_block_offset = query_end_position[i] // window_size % window_multiple
-                head_block_offset = (tail_block_offset + 1) % window_multiple
+                tail_block_offset = query_end_position[i] // block_size % block_multiple
+                head_block_offset = (tail_block_offset + 1) % block_multiple
                 swa_block_table[i][0] = base_block + head_block_offset
                 swa_block_table[i][1] = base_block + tail_block_offset
 
