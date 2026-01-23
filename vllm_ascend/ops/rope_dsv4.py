@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from typing import Dict, Tuple, Optional, Union
+from typing import Dict, Tuple, Union, List, Optional
 from vllm.platforms import current_platform
 from vllm.config import VllmConfig
 
@@ -14,95 +14,149 @@ import torch_npu
 
 class RopeGlobalState:
     def __init__(self):
-        # 静态全量表: {config_key: (cos_full, sin_full)} [MaxSeq, 1, 1, Dim]
+        # 1. 静态计算表 (只跟数学参数有关): {config_key: (cos_full, sin_full)}
         self.static_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         
-        # 运行时固定Buffer (CUDA Graph专用): {config_key: (cos_buf, sin_buf)} [MaxBatch, 1, 1, Dim]
-        self.runtime_buffer: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
+        # 2. 运行时固定 Buffer (跟 Group 有关): 
+        # {config_key: {group_name: (cos_buf, sin_buf)}}
+        self.runtime_buffer: Dict[str, Dict[str, Tuple[torch.Tensor, torch.Tensor]]] = {}
         
-        # 层级映射: {layername: config_key}
-        self.layer_map: Dict[str, str] = {}
+        # 3. 层级注册信息: {layername: (config_key, [required_groups])}
+        self.layer_info: Dict[str, Tuple[str, List[str]]] = {}
+        
+        # 4. 辅助统计: 记录某个 Config 下注册了哪些 Group，防止重复分配
+        # {config_key: Set(group_names)}
+        self.registry_summary: Dict[str, set] = {}
 
-# 实例化全局单例
 _ROPE_STATE = RopeGlobalState()
 
-# =========================================================================
-# 2. 智能代理类 (Proxy Class)
-# =========================================================================
-
 class RopeDataProxy:
-    """
-    通用代理类。
-    它可以存储 {key: Tensor} 或 {key: (Tensor, Tensor)}，
-    并对其中的 value 进行透传切片。
-    """
-    def __init__(self, data_map):
+    def __init__(self, data_map, is_cos=True):
+        # data_map 结构: {config_key: {group_name: (cos, sin)}}
         self._data = data_map
+        self.idx = 0 if is_cos else 1 
 
     def __getitem__(self, index):
-        # 场景 A: 按层取值 (Forward 阶段) -> 传入 layername (str)
-        if isinstance(index, str):
-            layername = index
-            key = _ROPE_STATE.layer_map.get(layername)
-            if key is None:
-                raise KeyError(f"Layer {layername} uses RoPE but was not registered.")
-            
-            # 直接返回对应的数据 (可能是 Tensor，也可能是 Tuple，取决于初始化时存的啥)
-            return self._data[key]
-        
-        # 场景 B: 切片操作 (Metadata Build 阶段) -> 传入 slice/tuple
-        else:
+        # === 场景 A: Metadata Build 阶段 (切片) ===
+        # 输入: slice 或 tuple ([:num_tokens, ...])
+        if not isinstance(index, str):
             new_map = {}
-            # 修正点：不要强制解包 (c, s)，而是直接作为 item 处理
-            for key, item in self._data.items():
-                # 如果 item 是 Tensor，直接切片
-                if isinstance(item, torch.Tensor):
-                    new_map[key] = item[index]
-                # 如果 item 是 Tuple/List (防御性编程，万一以后你想存 tuple)，则分别切片
-                elif isinstance(item, (tuple, list)):
-                    new_map[key] = type(item)(x[index] for x in item)
-                else:
-                    raise TypeError(f"Unsupported type in RopeDataProxy: {type(item)}")
+            for config_k, groups_map in self._data.items():
+                new_map[config_k] = {}
+                for group_name, item in groups_map.items():
+                    # item 是 (cos_tensor, sin_tensor) 或 单个 tensor (如果是多次切片后)
+                    # 为了稳健，我们总是假设 data_map 存的是原始的 tuple 结构
+                    c_val = item[0][index]
+                    s_val = item[1][index]
+                    new_map[config_k][group_name] = (c_val, s_val)
             
-            return RopeDataProxy(new_map)
+            # 返回一个新的 Proxy，保持内部结构不变
+            return RopeDataProxy(new_map, is_cos=(self.idx == 0))
 
-# =========================================================================
-# 3. 核心功能函数
-# =========================================================================
-
-def get_cos_and_sin_dsa(positions: torch.Tensor, use_cache: bool = False):
-    batch_map = {} # 这里暂存 {key: (cos, sin)}
-    num_tokens = positions.size(0)
-
-    for key, (static_cos, static_sin) in _ROPE_STATE.static_cache.items():
-        if static_cos.device != positions.device:
-            static_cos = static_cos.to(positions.device)
-            static_sin = static_sin.to(positions.device)
-
-        current_cos = static_cos[positions]
-        current_sin = static_sin[positions]
-
-        if use_cache:
-            if key not in _ROPE_STATE.runtime_buffer:
-                raise RuntimeError(f"RoPE buffer for key {key} not initialized.")
-            
-            buf_cos, buf_sin = _ROPE_STATE.runtime_buffer[key]
-            
-            # In-place copy
-            buf_cos[:num_tokens].copy_(current_cos)
-            buf_sin[:num_tokens].copy_(current_sin)
-            
-            # 存入 View
-            batch_map[key] = (buf_cos[:num_tokens], buf_sin[:num_tokens])
+        # === 场景 B: Forward 阶段 (按层取值) ===
+        # 输入: layername (str)
         else:
-            batch_map[key] = (current_cos, current_sin)
+            layername = index
+            info = _ROPE_STATE.layer_info.get(layername)
+            if info is None:
+                raise KeyError(f"Layer {layername} not registered.")
+            
+            config_key, required_groups = info
+            
+            # 获取该配置下的所有 group 数据
+            config_data = self._data.get(config_key, {})
+            
+            # 收集该层需要的数据
+            layer_result = {}
+            for grp in required_groups:
+                if grp in config_data:
+                    # config_data[grp] 是 (cos, sin)，根据 self.idx 取一个
+                    layer_result[grp] = config_data[grp][self.idx]
+                else:
+                    # 如果这层要 "special_group" 但输入没给，可能需要处理异常或留空
+                    pass
+            
+            # === 关键体验优化 ===
+            # 如果该层只注册了 1 个 Group (绝大多数情况)，直接返回 Tensor
+            # 这样你原本的代码 cos = metadata.cos[layername] 依然跑得通
+            if len(layer_result) == 1:
+                return list(layer_result.values())[0]
+            
+            # 如果注册了多个 Group，返回字典 {'default': t1, 'special': t2}
+            return layer_result
 
-    # 拆分成两个独立的 map，这样 cos_proxy 内部存的就是 {key: cos_tensor}
-    cos_map = {k: v[0] for k, v in batch_map.items()}
-    sin_map = {k: v[1] for k, v in batch_map.items()}
+# =========================================================================
+# get_cos_and_sin_dsa for get all sin and cos
+# =========================================================================
 
-    # 返回两个代理对象，分别管理 cos 和 sin
-    return RopeDataProxy(cos_map), RopeDataProxy(sin_map)
+def get_cos_and_sin_dsa(
+    positions: Union[torch.Tensor, Dict[str, torch.Tensor]], 
+    use_cache: bool = False
+):
+    """
+    Args:
+        positions: 
+            - 如果是单个 Tensor，默认视为 {"default": tensor}
+            - 如果是 Dict，则格式为 {"group_name": tensor}
+    """
+    # 1. 规范化输入
+    if isinstance(positions, torch.Tensor):
+        pos_map = {"default": positions}
+    else:
+        pos_map = positions
+
+    # 结果容器: {config_key: {group_name: (cos, sin)}}
+    batch_result = {}
+
+    # 遍历所有存在的 Config Key
+    for config_key, registered_groups in _ROPE_STATE.registry_summary.items():
+        
+        # 获取该 Config 的全量静态数学表
+        if config_key not in _ROPE_STATE.static_cache:
+            continue
+        static_cos, static_sin = _ROPE_STATE.static_cache[config_key]
+        
+        batch_result[config_key] = {}
+
+        # 遍历当前 batch 提供的所有 Group 数据
+        for group_name, pos_tensor in pos_map.items():
+            
+            # 优化：如果这个 Config 根本没注册过这个 Group，直接跳过
+            if group_name not in registered_groups:
+                continue
+            
+            #  to device
+            if static_cos.device != pos_tensor.device:
+                static_cos = static_cos.to(pos_tensor.device)
+                static_sin = static_sin.to(pos_tensor.device)
+            
+            curr_cos = static_cos[pos_tensor]
+            curr_sin = static_sin[pos_tensor]
+            
+            # --- 2. ACLGraph Buffer 处理 ---
+            if use_cache:
+                # 找到那个固定的坑位
+                group_buffers = _ROPE_STATE.runtime_buffer.get(config_key, {}).get(group_name)
+                
+                if group_buffers is None:
+                    # 这种情况通常是初始化漏了，或者是用了未注册的 group name
+                    # TODO: 加warning或者删掉？
+                    continue
+                
+                buf_cos, buf_sin = group_buffers
+                num_tokens = pos_tensor.size(0)
+                
+                # In-place Copy (固定地址写入)
+                buf_cos[:num_tokens].copy_(curr_cos)
+                buf_sin[:num_tokens].copy_(curr_sin)
+                
+                # 保存 View
+                batch_result[config_key][group_name] = (buf_cos[:num_tokens], buf_sin[:num_tokens])
+            else:
+                batch_result[config_key][group_name] = (curr_cos, curr_sin)
+
+    # 返回 Proxy，分开 Cos 和 Sin
+    return RopeDataProxy(batch_result, is_cos=True), RopeDataProxy(batch_result, is_cos=False)
 
 
 # =========================================================================
@@ -119,6 +173,7 @@ class ComplexExpRotaryEmbedding(nn.Module):
         max_position_embeddings: int, # 用于计算静态数学表
         base: int,
         scaling_factor: float,
+        rope_groups: List[str] = ("default",),
         **extra_kwargs,
     ) -> None:
         super().__init__()
@@ -129,17 +184,23 @@ class ComplexExpRotaryEmbedding(nn.Module):
         # 1. 生成 Config Key
         beta_fast = extra_kwargs.get("beta_fast", 32)
         beta_slow = extra_kwargs.get("beta_slow", 1)
-        # Key 包含了所有影响数值计算的参数
+        # Key 包含了所有影响数值计算的参数，不能包含layername和group
         config_key = (f"rotary_dim{rotary_dim}_max_position_embeddings{max_position_embeddings}_"
                       f"base{base}_scaling_factor{scaling_factor}_beta_fast{beta_fast}_beta_slow{beta_slow}")
-        # print(f'config_key: {config_key}')
-        # 2. 注册 Layer -> Key
-        _ROPE_STATE.layer_map[layername] = config_key
 
-        # 3. 初始化静态数学表 (如果该 Key 尚未初始化)
-        # 这里实现了“多层复用”：只有第一个遇到该配置的层会执行计算
+        print(f'config_key: {config_key}')
+        # 2. 注册 Layer 信息 (记录这层需要哪些 Group)
+        _ROPE_STATE.layer_info[layername] = (config_key, rope_groups)
+
+        # 3. 更新全局 Group 注册表
+        if config_key not in _ROPE_STATE.registry_summary:
+            _ROPE_STATE.registry_summary[config_key] = set()
+        for grp in rope_groups:
+            _ROPE_STATE.registry_summary[config_key].add(grp)
+
+        # 4. 初始化静态表
         if config_key not in _ROPE_STATE.static_cache:
-            # print(f"[RoPE] Initializing Static Cache for key: {config_key}")
+                        # print(f"[RoPE] Initializing Static Cache for key: {config_key}")
             complex_cis = self.precompute_freqs_cis(
                 rotary_dim, max_position_embeddings, max_position_embeddings,
                 base, scaling_factor, beta_fast, beta_slow
@@ -157,25 +218,20 @@ class ComplexExpRotaryEmbedding(nn.Module):
                 cos.unsqueeze(1).unsqueeze(1), 
                 sin.unsqueeze(1).unsqueeze(1)
             )
-
-        # 4. 初始化 Runtime Buffer (如果该 Key 尚未初始化)
-        # 这就是你要的 "init_rope_buffers" 逻辑，现在移到了这里
-        if config_key not in _ROPE_STATE.runtime_buffer:
-            # print(f"[RoPE] Allocating CUDA Buffer for key: {config_key}, size: {max_batch_size}")
-            # 确保 buffer 在正确的 device 上
-            target_device = current_platform.device_type
-            max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
-
-            buffer_cos = torch.ones(
-                max_num_batched_tokens, 1, 1, rotary_dim,
-                dtype=dtype, device=target_device
-            )
-            buffer_sin = torch.zeros(
-                max_num_batched_tokens, 1, 1, rotary_dim,
-                dtype=dtype, device=target_device
-            )
             
-            _ROPE_STATE.runtime_buffer[config_key] = (buffer_cos, buffer_sin)
+        # 5. 初始化 Runtime Buffer (按 Group 分配)
+        if config_key not in _ROPE_STATE.runtime_buffer:
+            _ROPE_STATE.runtime_buffer[config_key] = {}
+        
+        target_device = current_platform.device_type
+        max_batch_size = vllm_config.scheduler_config.max_num_batched_tokens
+        # 遍历这层需要的 Group，如果没有 Buffer 就分配
+        for grp in rope_groups:
+            if grp not in _ROPE_STATE.runtime_buffer[config_key]:
+                # print(f"Allocating Buffer for Key={config_key}, Group={grp}")
+                buf_cos = torch.ones(max_batch_size, 1, 1, rotary_dim, dtype=dtype, device=target_device)
+                buf_sin = torch.zeros(max_batch_size, 1, 1, rotary_dim, dtype=dtype, device=target_device)
+                _ROPE_STATE.runtime_buffer[config_key][grp] = (buf_cos, buf_sin)
 
     @staticmethod
     def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow):

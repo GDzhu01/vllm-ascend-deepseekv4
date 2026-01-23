@@ -714,7 +714,9 @@ class DeepseekV4Attention(nn.Module):
 
         if self.compress_ratio >1:
             config.rope_parameters['rope_theta'] = 40000
-
+            rope_groups = ['default', f'c{self.compress_ratio}']
+        else: 
+            rope_groups = ['default']
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
             layername=f'{prefix}.attn',
@@ -726,6 +728,7 @@ class DeepseekV4Attention(nn.Module):
             base=config.rope_parameters['rope_theta'],
             beta_fast=config.rope_parameters['beta_fast'],
             beta_slow=config.rope_parameters['beta_slow'],
+            rope_groups=rope_groups
         )
 
         self.scaling = self.head_dim**-0.5

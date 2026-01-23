@@ -811,8 +811,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         c4_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 4 + self.num_decodes),)
         pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
         c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
-        c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
-
+        # c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
+        c4_cos, c4_sin = get_cos_and_sin_dsa({"c4": c4_pad_positions},use_cache=True)
 
         # c128 rope
         c128_mask = ((decode_input_positions+1) % 128) == 0
@@ -820,7 +820,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         c128_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 128 + self.num_decodes),)
         pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
         c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
-        c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
+        # c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
+        c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions},use_cache=True)
 
 
         decode_metadata = AscendDSADecodeMetadata(
