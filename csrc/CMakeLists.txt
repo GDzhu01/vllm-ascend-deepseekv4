@@ -21,6 +21,17 @@ include(cmake/config.cmake)
 include(cmake/func.cmake)
 include(cmake/intf.cmake)
 
+option(ENABLE_AICPU              "Enable aicpu kernel/json packaging" ON)
+
+if (ENABLE_AICPU)
+    include(cmake/symbol.cmake)
+endif()
+
+add_library(vllm_ascend_aicpu_headers INTERFACE)
+
+
+
+
 if (BUILD_OPEN_PROJECT)
     set(_op_host_aclnn_link
             $<BUILD_INTERFACE:intf_pub>
@@ -36,6 +47,14 @@ if (BUILD_OPEN_PROJECT)
     set(CMAKE_PREFIX_PATH 
         ${CMAKE_PREFIX_PATH} 
         ${ASCEND_CANN_PACKAGE_PATH}
+    )
+
+    target_include_directories(vllm_ascend_aicpu_headers INTERFACE
+        ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/include/aicpu
+        ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc
+        ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/aicpu_common/context/common
+        ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/aicpu_common/context/utils
+        ${ASCEND_CANN_PACKAGE_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/pkg_inc/base
     )
 
     find_package(alog MODULE REQUIRED)
@@ -245,6 +264,11 @@ op_add_depend_directory(
 foreach (OP_DEPEND_DIR ${OP_DEPEND_DIR_LIST})
     add_subdirectory(${OP_DEPEND_DIR}/op_host)
 endforeach ()
+
+if (ENABLE_AICPU)
+    gen_cust_aicpu_json_symbol()
+    gen_cust_aicpu_kernel_symbol()
+endif()
 
 # ------------------------------------------------ aclnn ------------------------------------------------
 get_target_property(base_aclnn_srcs op_host_aclnn SOURCES)
@@ -643,3 +667,75 @@ if (BUILD_OPEN_PROJECT)
     set(CPACK_EXTERNAL_BUILT_PACKAGES ${CPACK_PACKAGE_DIRECTORY}/_CPack_Packages/Linux/External/${CPACK_PACKAGE_FILE_NAME}/${CPACK_PACKAGE_FILE_NAME})
     include(CPack)
 endif ()
+
+# ------------------------------ aicpu----------------------------------------
+message(STATUS "we run here")
+foreach (op_dir ${OP_DIR_LIST})
+    get_filename_component(_op_name "${op_dir}" NAME)
+
+    file(GLOB KERNEL_FILES
+        ${op_dir}/op_kernel/*.cpp
+        ${op_dir}/op_kernel/*.h
+    )
+    if (KERNEL_FILES)
+        install(FILES ${KERNEL_FILES}
+            DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${_op_name}
+            OPTIONAL
+        )
+    endif()
+    set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
+    message(STATUS "we run here")
+    message(STATUS "global op_dir is ${op_dir}")
+    foreach (arch_dir arch32 arch35 arch38)
+        if (EXISTS "${op_dir}/op_kernel/${arch_dir}")
+            message(STATUS "We found archdir: ${op_dir}/op_kernel/${arch_dir}")
+            install(DIRECTORY ${op_dir}/op_kernel/${arch_dir}/
+                DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${_op_name}/${arch_dir}
+                OPTIONAL
+            )
+        endif()
+    endforeach()
+
+    # 4) 兜底：如果 metadata.h 不在上述目录（比如直接散落在 op_dir 下），补一手
+    file(GLOB TOP_LEVEL_META_HEADERS
+        ${op_dir}/*metadata*.h
+        ${op_dir}/op_kernel/*metadata*.h
+    )
+    if (TOP_LEVEL_META_HEADERS)
+        install(FILES ${TOP_LEVEL_META_HEADERS}
+            DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${_op_name}
+            OPTIONAL
+        )
+    endif()
+endforeach()
+
+if (DEFINED ${_op_name}_depends)
+  foreach (dep_dir ${${_op_name}_depends})
+    set(dep_abs "${CMAKE_CURRENT_SOURCE_DIR}/${dep_dir}")
+    if (EXISTS "${dep_abs}")
+      get_filename_component(dep_name "${dep_abs}" NAME)
+
+      foreach (arch_dir arch32 arch35 arch38)
+        if (EXISTS "${dep_abs}/${arch_dir}")
+          install(DIRECTORY ${dep_abs}/${arch_dir}/
+                  DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${dep_name}/${arch_dir}
+                  OPTIONAL)
+        endif()
+      endforeach()
+
+        file(GLOB_RECURSE dep_meta_headers
+          "${dep_abs}/*metadata*.h"
+        )
+        if (dep_meta_headers)
+          install(FILES ${dep_meta_headers}
+                DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${dep_name}
+                OPTIONAL)
+        endif()
+      if (dep_meta_headers)
+        install(FILES ${dep_meta_headers}
+                DESTINATION ${IMPL_INSTALL_DIR}/ascendc/${dep_name}
+                OPTIONAL)
+      endif()
+    endif()
+  endforeach()
+endif()

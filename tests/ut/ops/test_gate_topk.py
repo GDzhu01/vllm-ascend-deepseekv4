@@ -18,7 +18,8 @@ import torch_npu
 import torch.nn.functional as F
 
 from tests.ut.base import TestBase
-
+from vllm_ascend.utils import enable_custom_op
+enable_custom_op()
 
 def gating_topk_ref(scores, topk, bias, input_ids, tid2eid, route_scale, norm_type="softplus"):
     if norm_type == "softmax":
@@ -67,11 +68,9 @@ class TestMoeGatingTopk(TestBase):
         else:
             bias = torch.empty(self.n_routed_experts, dtype=torch.float32).npu()
 
-        so = "/mnt/share/m00663269/ds_new/vllm-ascend-deepseekv4/vllm_ascend/vllm_ascend_C.cpython-311-aarch64-linux-gnu.so"
-        torch.ops.load_library(so)
         print(f'torch.ops._C_ascend.moe_gating_top_k:{torch.ops._C_ascend.moe_gating_top_k}')
         weights, indices, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
-            x=scores, 
+            x=scores,
             k=self.n_activated_experts,
             bias=bias,
             input_ids=input_ids,

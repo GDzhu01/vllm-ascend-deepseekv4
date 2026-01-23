@@ -209,6 +209,8 @@ class build_and_install_aclnn(Command):
     def run(self):
         try:
             print("Running bash build_aclnn.sh ...")
+            print("================ROOT_DIR is", ROOT_DIR)
+            print("================soc version is ", envs.SOC_VERSION)
             subprocess.check_call(
                 ["bash", "csrc/build_aclnn.sh", ROOT_DIR, envs.SOC_VERSION])
             print("buid_aclnn.sh executed successfully!")
