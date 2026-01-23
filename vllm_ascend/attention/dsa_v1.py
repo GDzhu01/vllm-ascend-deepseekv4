@@ -272,6 +272,7 @@ class AscendDSAPrefillMetadata:
     slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
+    state_block_table: torch.Tensor
 
     chunked_context: Optional[ChunkedContextMetadata] = None
     sin: torch.Tensor = None
@@ -297,6 +298,7 @@ class AscendDSADecodeMetadata:
     slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
+    state_block_table: torch.Tensor
 
     query_start_loc: torch.tensor = None
     attn_mask: Optional[torch.Tensor] = None
@@ -336,6 +338,7 @@ class AscendDSAMetadata:
     slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
+    state_block_table: torch.Tensor
 
 
     # New for MLA (compared to FlashAttention)
@@ -653,6 +656,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             state_ids=self.state_ids,
             swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
             swa_block_table=common_attn_metadata.swa_block_table,
+            state_block_table=common_attn_metadata.state_block_table,
         )
     
     def build_prefill_metadata(
@@ -748,6 +752,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             slot_mapping_list=prefill_slot_mapping_list,
             swa_slot_mapping=prefill_swa_slot_mapping,
             swa_block_table=common_attn_metadata.swa_block_table[reqs_start:, ...],
+            state_block_table=common_attn_metadata.state_block_table[reqs_start:, ...],
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,

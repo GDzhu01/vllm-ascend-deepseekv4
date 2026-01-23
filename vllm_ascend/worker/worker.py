@@ -284,7 +284,7 @@ class NPUWorker(WorkerBase):
         c128_compress_ratio = 128
         swa_dtype_size = 2 # torch.bfloat16
         state_dtype_size = 4 # torch.float32
-        state_block_multiple = 2
+        state_block_multiple = 3
         block_num = (max_num_reqs + 1) * state_block_multiple
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]

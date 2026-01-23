@@ -364,11 +364,16 @@ class NPUModelRunner(GPUModelRunner):
         self.long_seq_metadata = None
         # Since compressor kernel need PA format input,
         # and write backward blocks instead of overwrite in one block,
-        # we need to initialize two blocks and simulate writing backward
-        # by exchanging order of this two blocks.
-        self.state_block_multiple = 2
+        # we need to initialize three blocks and simulate writing backward
+        # by exchanging order of these blocks.
+        # (Two for swa, one extra reserved for mtp)
+        self.state_block_multiple = 3
         self.swa_slot_mapping = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
         self.swa_block_table = self._make_buffer((self.max_num_reqs, self.state_block_multiple), dtype=torch.int32)
+        self.state_block_table = self._make_buffer(
+            (self.max_num_reqs, cdiv(self.max_num_tokens, self.block_size)),
+            dtype=torch.int32,
+        )
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -623,11 +628,14 @@ class NPUModelRunner(GPUModelRunner):
         state_ids_np = np.array(
             [self.requests[req_id].state_id for req_id in req_ids],
         )
-        swa_slot_mapping, swa_block_table = self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
+        swa_slot_mapping, swa_block_table, state_block_table = \
+            self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
         self.swa_slot_mapping.np[:total_num_scheduled_tokens] = swa_slot_mapping
         self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
         self.swa_block_table.np[:num_reqs] = swa_block_table
         self.swa_block_table.copy_to_gpu(num_reqs)
+        self.state_block_table.np[:num_reqs] = state_block_table
+        self.state_block_table.copy_to_gpu(num_reqs)
 
         # Get info across DP ranks.
         # NOTE: maybe_padded_num_tokens is only used when using TorchAir with DP,
@@ -1067,6 +1075,7 @@ class NPUModelRunner(GPUModelRunner):
                 state_ids=state_ids,
                 swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
                 swa_block_table=self.swa_block_table.gpu[:num_reqs],
+                state_block_table=self.state_block_table.gpu[:num_reqs],
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
@@ -3468,29 +3477,29 @@ class NPUModelRunner(GPUModelRunner):
         query_lens: np.ndarray,
     ):
         """
-        sliding_window: [(max_num_reqs + 1) * window_multiple(2), window_size(128), dim(512)]
-        Each request will be allocated to one state containing two continuous blocks.
-        Similar to kv_cache blocks, state 0 (block 0 & 1) keeps empty.
+        sliding_window: [(max_num_reqs + 1) * window_multiple(3), window_size(128), dim(512)]
+        Each request will be allocated to one state containing three continuous blocks.
+        Similar to kv_cache blocks, state 0 (block 0, 1, 2) keeps empty.
         For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
-        [req0 -> state 2 (block 4, 5), req1 -> state 4 (block 8, 9)]
+        [req0 -> state 2 (block 6, 7, 8), req1 -> state 4 (block 12, 13, 14)]
 
-                    |<-------- 128 -------->|<-------- 128 -------->|
-                    -------------------------------------------------
-        (state_0)   | block0 (keeps empty)  | block1 (keeps empty)  |
-                    -------------------------------------------------
-        (state_1)   | block2                | block3                |
-                    -------------------------------------------------
-        (state_2)   | block4 req0           | block5 req0           |
-                    -------------------------------------------------
-        (state_3)   | block6                | block7                |
-                    -------------------------------------------------
-        (state_4)   | block8 req1           | block9 req1           |
-                    -------------------------------------------------
+                    |<-------- 128 -------->|<-------- 128 -------->|<-------- 128 -------->|
+                    -------------------------------------------------------------------------
+        (state_0)   | block_0 (keeps empty) | block_1 (keeps empty) | block_2 (keeps empty) |
+                    -------------------------------------------------------------------------
+        (state_1)   | block_3               | block_4               | block_5               |
+                    -------------------------------------------------------------------------
+        (state_2)   | block_6  req0         | block_7  req0         | block_8  req0         |
+                    -------------------------------------------------------------------------
+        (state_3)   | block_9               | block_10              | block_11              |
+                    -------------------------------------------------------------------------
+        (state_4)   | block_12 req1         | block_13 req1         | block_14 req1         |
+                    -------------------------------------------------------------------------
 
         """
         num_reqs = state_ids.shape[0]
         block_size = self.vllm_config.cache_config.block_size
-        block_multiple = self.state_block_multiple # 2 block for each req
+        block_multiple = self.state_block_multiple # currently 3 blocks for each req
 
         # similar to kv_cache slot_mapping,
         # slot = base (of block_id) + offset (inside block)
@@ -3510,21 +3519,38 @@ class NPUModelRunner(GPUModelRunner):
         out_of_window_mask = np.concatenate(out_of_window_mask_list)
         swa_slot_mapping = np.where(out_of_window_mask, -1, swa_slot_mapping)
 
-        # generate state table
+        # generate swa and state block_table
+        # TODO implement in np batch processing, and in-place compute in block_table buffer
         query_end_index = query_lens.cumsum() - 1
         query_end_position = positions[query_end_index]
         swa_block_table = np.zeros([num_reqs, block_multiple], dtype=np.int32)
+        state_block_table = np.zeros([num_reqs, cdiv(self.max_num_tokens, block_size)], dtype=np.int32)
         for i in range(num_reqs):
             base_block = state_ids[i] * block_multiple
-            if query_end_position[i] < block_size:
-                swa_block_table[i][0] = base_block
+            block_num_total = query_end_position[i] // block_size + 1
+            if query_end_position[i] < block_size * (block_multiple - 1):
+                block_num_in_use = block_num_total
+                for j in range(block_num_in_use):
+                    swa_block_table[i][j] = base_block + j
             else:
+                block_num_in_use = block_multiple
                 tail_block_offset = query_end_position[i] // block_size % block_multiple
                 head_block_offset = (tail_block_offset + 1) % block_multiple
-                swa_block_table[i][0] = base_block + head_block_offset
-                swa_block_table[i][1] = base_block + tail_block_offset
+                for j in range(block_multiple):
+                    swa_block_table[i][j] = base_block + (head_block_offset + j) % block_multiple
+            # state block_id needs padding in front to actual seq_len
+            # according to requirement of compressor kernel
+            block_num_pad = block_num_total - block_num_in_use
+            state_block_table[i][block_num_pad : block_num_pad + block_num_in_use] = \
+                swa_block_table[i][:block_num_in_use]
 
-        return swa_slot_mapping, swa_block_table
+        return swa_slot_mapping, swa_block_table, state_block_table
+    
+    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
+        super()._update_states(scheduler_output)
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            req_id = new_req_data.req_id
+            self.requests[req_id].state_id = new_req_data.state_id
 
 
 @contextmanager
