@@ -95,6 +95,8 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
 
     graph_pad_size: int = -1
 
+    state_block_table: torch.Tensor = None
+
     # num_input_tokens refers to total number of tokens including
     # padding tokens. It is used to handle some padding operations.
     num_input_tokens: int = 0

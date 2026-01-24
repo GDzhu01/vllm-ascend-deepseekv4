@@ -834,6 +834,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             block_table=None,
             block_table_list=self.block_table_list,
             swa_block_table=common_attn_metadata.swa_block_table[:block_table_size, ...],
+            state_block_table=common_attn_metadata.state_block_table[:block_table_size, ...],
             slot_mapping_list=decode_slot_mapping_list,
             swa_slot_mapping=decode_swa_slot_mapping,
             seq_lens=self.seq_lens[:self.num_decodes],
@@ -1232,8 +1233,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 self.compressor_norm.weight, 
                 compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
                 compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
-                kv_block_table = attn_metadata.prefill.swa_block_table,
-                score_block_table = attn_metadata.prefill.swa_block_table,
+                kv_block_table = attn_metadata.prefill.state_block_table,
+                score_block_table = attn_metadata.prefill.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
                 seqused = None, #actual_seq_lengths_key,
                 start_pos = start_pos,
@@ -1533,8 +1534,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 self.compressor_norm.weight, 
                 compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
                 compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
-                kv_block_table = attn_metadata.decode.swa_block_table,
-                score_block_table = attn_metadata.decode.swa_block_table,
+                kv_block_table = attn_metadata.decode.state_block_table,
+                score_block_table = attn_metadata.decode.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
                 seqused = None, #actual_seq_lengths_key,
                 start_pos = start_pos,
@@ -1916,11 +1917,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         start_pos = actual_seq_lengths_key - seq_lens_q
         
         if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
-            kv_block_table = attn_metadata.prefill.swa_block_table
-            score_block_table = attn_metadata.prefill.swa_block_table
+            kv_block_table = attn_metadata.prefill.state_block_table
+            score_block_table = attn_metadata.prefill.state_block_table
         else:
-            kv_block_table = attn_metadata.decode.swa_block_table
-            score_block_table = attn_metadata.decode.swa_block_table
+            kv_block_table = attn_metadata.decode.state_block_table
+            score_block_table = attn_metadata.decode.state_block_table
 
         kv = torch.ops.custom.npu_compressor(
             x,

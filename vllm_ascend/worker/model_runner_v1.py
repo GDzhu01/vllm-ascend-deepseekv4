@@ -2920,7 +2920,7 @@ class NPUModelRunner(GPUModelRunner):
                             kv_cache_spec.head_size)
                         # print(30*"=", f"before 128 view")
                         c128_kv_cache = c128_kv_tensor.view(dtype).view(c128_kv_cache_shape)
-                        kv_caches[layer_name] = c128_kv_cache
+                        kv_caches[layer_name] = (c128_kv_cache,)
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
