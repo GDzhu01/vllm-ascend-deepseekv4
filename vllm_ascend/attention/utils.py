@@ -102,6 +102,10 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
 
+    # the block table is a list cause the different compress ratios need different one
+    block_table_tensor_list: List[torch.Tensor] = None
+    slot_mapping_list: List[torch.Tensor] = None
+
     swa_slot_mapping: torch.Tensor = None
     swa_block_table: torch.Tensor = None
 

@@ -26,7 +26,6 @@ from vllm.v1.pool.metadata import PoolingStates
 from vllm.v1.sample.logits_processor import (BatchUpdateBuilder,
                                              LogitsProcessors)
 from vllm.v1.worker.gpu_input_batch import InputBatch
-from vllm.v1.kv_cache_interface import KVCacheGroupSpec
 
 from vllm_ascend.worker.block_table import MultiGroupBlockTable
 
@@ -49,7 +48,6 @@ class NPUInputBatch(InputBatch):
         is_pooling_model: bool = False,
         num_speculative_tokens: int = 0,
         cp_kv_cache_interleave_size: int = 1,
-        kv_cache_groups: list[KVCacheGroupSpec] = None
     ):
         self.is_pooling_model = is_pooling_model
         self.is_spec_decode = is_spec_decode
@@ -106,7 +104,6 @@ class NPUInputBatch(InputBatch):
             num_speculative_tokens=num_speculative_tokens,
             kernel_sizes=kernel_block_sizes,
             cp_kv_cache_interleave_size=cp_kv_cache_interleave_size,
-            kv_cache_groups=kv_cache_groups
         )
 
         # Sampling-related.
