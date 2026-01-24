@@ -8,18 +8,6 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-if((NOT DEFINED ASCEND_DIR) OR ("${ASCEND_DIR}" STREQUAL ""))
-  if(DEFINED CUSTOM_ASCEND_CANN_PACKAGE_PATH AND NOT "${CUSTOM_ASCEND_CANN_PACKAGE_PATH}" STREQUAL "")
-    set(ASCEND_DIR "${CUSTOM_ASCEND_CANN_PACKAGE_PATH}")
-  elseif(DEFINED ASCEND_CANN_PACKAGE_PATH AND NOT "${ASCEND_CANN_PACKAGE_PATH}" STREQUAL "")
-    set(ASCEND_DIR "${ASCEND_CANN_PACKAGE_PATH}")
-  else()
-    message(FATAL_ERROR "ASCEND_DIR is empty and no CUSTOM_ASCEND_CANN_PACKAGE_PATH/ASCEND_CANN_PACKAGE_PATH provided")
-  endif()
-endif()
-message(STATUS "ASCEND_DIR=${ASCEND_DIR}")
-
-
 function(gen_common_symbol)
   install(DIRECTORY ${OPS_TRANSFORMER_COMMON_INC_HEADERS}
     DESTINATION ${COMMON_INC_INSTALL_DIR}
@@ -96,8 +84,8 @@ function(gen_opgraph_symbol)
 endfunction()
 
 function(gen_opapi_symbol)
-  # opapi shared
-  add_library(${OPAPI_NAME} SHARED
+  # opapi shared	
+  add_library(${OPAPI_NAME} SHARED	
     $<$<TARGET_EXISTS:${OPHOST_NAME}_opapi_obj>:$<TARGET_OBJECTS:${OPHOST_NAME}_opapi_obj>>
     $<$<TARGET_EXISTS:opbuild_gen_aclnn_all>:$<TARGET_OBJECTS:opbuild_gen_aclnn_all>>
   )
@@ -219,7 +207,7 @@ function(gen_cust_aicpu_json_symbol)
   set(MERGED_JSON ${CMAKE_BINARY_DIR}/cust_aicpu_kernel.json)
   add_custom_command(
     OUTPUT ${MERGED_JSON}
-    COMMAND bash ${CMAKE_SOURCE_DIR}/cmake/scripts/merge_aicpu_info_json.sh ${CMAKE_SOURCE_DIR} ${MERGED_JSON} ${ALL_AICPU_JSON_FILES}
+    COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/util/merge_aicpu_info_json.sh ${CMAKE_SOURCE_DIR} ${MERGED_JSON} ${ALL_AICPU_JSON_FILES}
     DEPENDS ${ALL_AICPU_JSON_FILES}
     COMMENT "Merging Json files into ${MERGED_JSON}"
     VERBATIM
@@ -233,17 +221,12 @@ function(gen_cust_aicpu_json_symbol)
 endfunction()
 
 function(gen_cust_aicpu_kernel_symbol)
-  get_property(AICPU_CUST_OBJ_TARGETS GLOBAL PROPERTY AICPU_CUST_OBJ_TARGETS)
-
   if(NOT AICPU_CUST_OBJ_TARGETS)
     message(STATUS "No aicpu cust obj targets found, skipping.")
     return()
   endif()
 
-  if (NOT DEFINED ARM_CXX_COMPILER)
-    set(ARM_CXX_COMPILER "aarch64-linux-gnu-g++")
-  endif()
-  message(STATUS "ARM_CXX_COMPILER=${ARM_CXX_COMPILER}")
+  set(ARM_CXX_COMPILER ${ASCEND_DIR}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++)
   set(ARM_SO_OUTPUT ${CMAKE_BINARY_DIR}/libtransformer_aicpu_kernels.so)
 
   set(ALL_OBJECTS "")
@@ -255,17 +238,13 @@ function(gen_cust_aicpu_kernel_symbol)
   message(STATUS "Objects: ${ALL_OBJECTS}")
   message(STATUS "Output: ${ARM_SO_OUTPUT}")
 
-  if(EXISTS ${ASCEND_DIR}/aarch64-linux/lib64/libaicpu_context.a)
-    set(LIBAICPU_CONTEXT_PATH ${ASCEND_DIR}/aarch64-linux/lib64/libaicpu_context.a)
-  elseif(EXISTS ${ASCEND_DIR}/ops_base/lib64/libaicpu_context.a)
+  if(EXISTS ${ASCEND_DIR}/ops_base/lib64/libaicpu_context.a)
     set(LIBAICPU_CONTEXT_PATH ${ASCEND_DIR}/ops_base/lib64/libaicpu_context.a)
   else()
     set(LIBAICPU_CONTEXT_PATH ${ASCEND_DIR}/lib64/libaicpu_context.a)
   endif()
 
-  if(EXISTS ${ASCEND_DIR}/aarch64-linux/lib64/libbase_ascend_protobuf.a)
-    set(LIBBASE_ASCEND_PROTOBUF_PATH ${ASCEND_DIR}/aarch64-linux/lib64/libbase_ascend_protobuf.a)
-  elseif(EXISTS ${ASCEND_DIR}/ops_base/lib64/libbase_ascend_protobuf.a)
+  if(EXISTS ${ASCEND_DIR}/ops_base/lib64/libbase_ascend_protobuf.a)
     set(LIBBASE_ASCEND_PROTOBUF_PATH ${ASCEND_DIR}/ops_base/lib64/libbase_ascend_protobuf.a)
   else()
     set(LIBBASE_ASCEND_PROTOBUF_PATH ${ASCEND_DIR}/lib64/libbase_ascend_protobuf.a)
