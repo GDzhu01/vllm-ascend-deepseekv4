@@ -267,7 +267,6 @@ class AscendDSAPrefillMetadata:
     slot_mapping: torch.Tensor
     max_query_len: int
     max_seq_lens: int
-    state_ids: torch.Tensor
 
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
@@ -291,7 +290,6 @@ class AscendDSADecodeMetadata:
     seq_lens_list: list[int]
     max_seq_lens: int
     slot_mapping: torch.Tensor
-    state_ids: torch.Tensor
 
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
@@ -351,7 +349,6 @@ class AscendDSAMetadata:
     attn_mask: torch.Tensor = None
     # chunked prefill by default if no attn_states passed
     attn_state: AscendAttentionState = AscendAttentionState.ChunkedPrefill
-    state_ids: torch.Tensor = None
 
     decode: Optional[AscendDSADecodeMetadata] = None
     prefill: Optional[AscendDSAPrefillMetadata] = None
@@ -591,7 +588,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         input_positions = common_attn_metadata.positions[:
                                                          num_input_tokens].long(
                                                          )
-        self.state_ids = common_attn_metadata.state_ids[:num_reqs]
         if self.num_prefills:
             cos, sin = get_cos_and_sin_dsa(input_positions)
         else:
@@ -641,7 +637,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens,
             cos=cos,
             sin=sin,
-            state_ids=self.state_ids,
             swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
             swa_block_table=common_attn_metadata.swa_block_table,
             state_block_table=common_attn_metadata.state_block_table,
@@ -745,7 +740,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             c4_cos=c4_cos,
             c128_sin=c128_sin,
             c128_cos=c128_cos,
-            state_ids = self.state_ids[reqs_start:, ...]
         )
 
     def build_decode_metadata(
@@ -817,7 +811,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seq_lens=max_seq_lens,
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
-            state_ids=self.state_ids[:block_table_size],
             state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
@@ -861,7 +854,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         attn_metadata.attn_state = attn_state
         return attn_metadata
-    
+
 
 class AscendDSAImpl(DSAAttentionImpl):
     """
@@ -1127,8 +1120,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.compress_ratio==128:
             (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
 
-        # states shape: [max_num_reqs, xxx]
-        state_ids = attn_metadata.state_ids # size: [num_reqs]
         # if torch.distributed.get_rank() == 0 and '.0' in layer_name:
         #     logger.info(f'>>>>> mla fwd, layer_name={layer_name}, hidden_states={hidden_states.shape}, state_ids={state_ids}, kv_state={kv_state.shape}')
         # forward_context = get_forward_context()
@@ -1434,8 +1425,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.compress_ratio==128:
             (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
 
-        # states shape: [max_num_reqs, xxx]
-        state_ids = attn_metadata.state_ids # size: [num_reqs]
         # if torch.distributed.get_rank() == 0 and '.0' in layer_name:
         #     logger.info(f'>>>>> mla fwd, layer_name={layer_name}, hidden_states={hidden_states.shape}, state_ids={state_ids}, kv_state={kv_state.shape}')
         # forward_context = get_forward_context()
