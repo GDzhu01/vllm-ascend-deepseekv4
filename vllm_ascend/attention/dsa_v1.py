@@ -287,6 +287,8 @@ class AscendDSADecodeMetadata:
     input_positions: torch.Tensor
     block_table: torch.Tensor
     seq_lens: torch.Tensor
+    max_seqlen_kv: int
+    max_seqlen_q: int
     seq_lens_list: list[int]
     max_seq_lens: int
     slot_mapping: torch.Tensor
@@ -798,6 +800,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
         c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions},use_cache=True)
 
+        max_seqlen_kv = torch.max(query_start_loc).item()
+        max_seqlen_q = torch.max(self.seq_lens[:self.num_decodes]).item()
 
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
@@ -808,6 +812,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens[:self.num_decodes],
             seq_lens_list=seq_lens_list,
             max_seq_lens=max_seq_lens,
+            max_seqlen_kv=max_seqlen_kv,
+            max_seqlen_q=max_seqlen_q,
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
             state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
@@ -1432,9 +1438,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query = attn_metadata.decode.query_start_loc
         actual_seq_lengths_key = attn_metadata.decode.seq_lens
         num_decode_tokens = attn_metadata.num_decode_tokens
-        max_seqlen_kv = torch.max(actual_seq_lengths_key).item()
+        max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-        max_seqlen_q = torch.max(seq_lens_q).item()
+        max_seqlen_q = attn_metadata.decode.max_seqlen_q
         compressed_kv_block_table = attn_metadata.decode.block_table
         compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping
 
