@@ -132,7 +132,7 @@ class ComplexExpRotaryEmbedding(nn.Module):
         # Key 包含了所有影响数值计算的参数
         config_key = (f"rotary_dim{rotary_dim}_max_position_embeddings{max_position_embeddings}_"
                       f"base{base}_scaling_factor{scaling_factor}_beta_fast{beta_fast}_beta_slow{beta_slow}")
-        print(f'config_key: {config_key}')
+        # print(f'config_key: {config_key}')
         # 2. 注册 Layer -> Key
         _ROPE_STATE.layer_map[layername] = config_key
 

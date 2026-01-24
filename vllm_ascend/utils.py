@@ -1219,6 +1219,7 @@ def get_compressed_pos_and_indices(
         num_scheduled_tokens >= 0), "Token count cannot be negative value"
 
     positions_compressed_list = []
+    num_scheduled_tokens_compressed_list = []
     req_indices_compressed_list = []
     compress_ratios = [4, 128]
     for compress_ratio in compress_ratios:
@@ -1236,5 +1237,5 @@ def get_compressed_pos_and_indices(
 
         req_indices_compressed = np.repeat(arrange_np, num_new_compressed_pos)
         req_indices_compressed_list.append(req_indices_compressed)
-        positions_compressed_list.append(compressed_pos_ids)
-    return positions_compressed_list, req_indices_compressed_list
+        num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+    return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list

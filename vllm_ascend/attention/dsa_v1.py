@@ -683,18 +683,20 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
 
         # c4 rope
-        c4_mask = ((prefill_input_positions) % 4) == 0
+        c4_mask = ((prefill_input_positions+1) % 4) == 0
         c4_input_positions = prefill_input_positions[c4_mask]
-        c4_target_shape = (min(self.num_prefill_tokens, len(prefill_input_positions) // 4 + self.num_prefills),)
+        c4_input_positions = (c4_input_positions + 1) - 4
+        c4_target_shape = (min(self.num_prefill_tokens, self.num_prefill_tokens // 4 + self.num_prefills),)
         pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
         c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
         c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
 
 
         # c128 rope
-        c128_mask = ((prefill_input_positions) % 128) == 0
+        c128_mask = ((prefill_input_positions+1) % 128) == 0
         c128_input_positions = prefill_input_positions[c128_mask]
-        c128_target_shape = (min(self.num_prefill_tokens, len(prefill_input_positions) // 128 + self.num_prefills),)
+        c128_input_positions = (c128_input_positions + 1) - 128
+        c128_target_shape = (min(self.num_prefill_tokens, self.num_prefill_tokens // 128 + self.num_prefills),)
         pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
         c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
         c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
@@ -804,18 +806,18 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         decode_input_positions = input_positions
         # c4 rope
-        c4_mask = ((decode_input_positions) % 4) == 0
+        c4_mask = ((decode_input_positions+1) % 4) == 0
         c4_input_positions = decode_input_positions[c4_mask]
-        c4_target_shape = (min(self.num_prefill_tokens, len(decode_input_positions) // 4 + self.num_prefills),)
+        c4_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 4 + self.num_decodes),)
         pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
         c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
         c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
 
 
         # c128 rope
-        c128_mask = ((decode_input_positions) % 128) == 0
+        c128_mask = ((decode_input_positions+1) % 128) == 0
         c128_input_positions = decode_input_positions[c128_mask]
-        c128_target_shape = (min(self.num_prefill_tokens, len(decode_input_positions) // 128 + self.num_prefills),)
+        c128_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 128 + self.num_decodes),)
         pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
         c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
         c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
@@ -1113,10 +1115,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         # print(f"================={self.n_local_groups=}")
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("tgd,grd->tgr", o, wo_a)
-        print(f"attn Inner einsum {o=}")
+        # print(f"attn Inner einsum {o=}")
         o = o.reshape(num_tokens, -1)
         output[...] = self.wo_b(o)
-        print(f"attn Inner einsum {output[:o.shape[0]]=}")
+        # print(f"attn Inner einsum {output[:o.shape[0]]=}")
 
         return output_padded
     
@@ -1157,21 +1159,21 @@ class AscendDSAImpl(DSAAttentionImpl):
         max_seqlen_q = torch.max(seq_lens_q).item()
         compressed_kv_block_table = attn_metadata.prefill.block_table_list[0] \
             if self.compress_ratio == 4 else attn_metadata.prefill.block_table_list[1]
-        compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping_list[0][0] \
-            if self.compress_ratio == 4 else attn_metadata.prefill.slot_mapping_list[1][0]
+        compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping_list[0] \
+            if self.compress_ratio == 4 else attn_metadata.prefill.slot_mapping_list[1]
 
         # mlaprolog
         # q
         qr = self.q_norm(self.wq_a(hidden_states)) # bs
-        print(f"attn Inner {qr=}, {qr.mean()=}")
+        # print(f"attn Inner {qr=}, {qr.mean()=}")
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
-        print(f"attn Inner {q=}, {q.mean()=}")
+        # print(f"attn Inner {q=}, {q.mean()=}")
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
-        print(f"attn Inner rsqrt {q=}, {q.mean()=}")
+        # print(f"attn Inner rsqrt {q=}, {q.mean()=}")
         q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         q_pe = self.rope_single(q_pe, cos, sin)
         q = torch.cat([q_nope, q_pe], dim=-1)
-        print(f"attn Inner {q=}, {q.mean()=}")
+        # print(f"attn Inner {q=}, {q.mean()=}")
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
@@ -1179,7 +1181,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         kv_pe = self.rope_single(kv_pe, cos, sin)
         kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        print(f"attn Inner {kv=}")
+        # print(f"attn Inner {kv=}")
 
         # swa exec kv
         torch_npu.npu_scatter_nd_update_(
@@ -1238,9 +1240,9 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
-            elif self.compressor.rotate:
-                compressed_kv = rotate_activation(compressed_kv)
-            print(f"prefill {compressed_kv=}, {self.compress_ratio}, {coff=}, {start_pos=}")
+            # elif self.compressor.rotate:
+            #     compressed_kv = rotate_activation(compressed_kv)
+            # print(f"prefill {compressed_kv=}, {self.compress_ratio}, {coff=}, {start_pos=}")
 
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
@@ -1285,8 +1287,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         sliding_window_kv_padded = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
         # sliding_window_kv_padded = torch.cat([sliding_window_kv_padded, sliding_window_kv_padded], dim=0)
-        print(f"prefill {q=}, {q.shape=} {sliding_window_kv_padded=} {sliding_window_kv_padded.shape=}, {attn_metadata.prefill.block_table=}, {self.attn_sink=}")
-        print(f"prefill {max_seqlen_q=} {max_seqlen_kv=}, {actual_seq_lengths_key=}, {actual_seq_lengths_query=}, {self.num_heads=}, {self.head_dim=}, {sliding_window_state=}")
+        # print(f"prefill {q=}, {q.shape=} {sliding_window_kv_padded=} {sliding_window_kv_padded.shape=}, {attn_metadata.prefill.block_table=}, {self.attn_sink=}")
+        # print(f"prefill {max_seqlen_q=} {max_seqlen_kv=}, {actual_seq_lengths_key=}, {actual_seq_lengths_query=}, {self.num_heads=}, {self.head_dim=}, {sliding_window_state=}")
         if self.compress_ratio == 1:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.num_heads,
@@ -1320,7 +1322,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND"
             )
-            print(f"metadata {metadata=}, {metadata.mean()=}")
+            # print(f"metadata {metadata=}, {metadata.mean()=}")
         elif self.compress_ratio == 4:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.num_heads,
@@ -1346,7 +1348,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 q,
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
-                cmp_sparse_indices=compress_topk_idxs,
+                cmp_sparse_indices=compress_topk_idxs, # B T D 
                 ori_block_table=attn_metadata.prefill.block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
@@ -1426,7 +1428,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         #     layout_kv="PA_ND"
         # )
 
-        print(f"attn_output {attn_output=}, {attn_output.shape=}, {attn_output.mean()=}")
+        # print(f"attn_output {attn_output=}, {attn_output.shape=}, {attn_output.mean()=}")
         return attn_output
 
     def _forward_decode(
@@ -1463,8 +1465,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         max_seqlen_q = torch.max(seq_lens_q).item()
         compressed_kv_block_table = attn_metadata.decode.block_table_list[0] \
             if self.compress_ratio == 4 else attn_metadata.decode.block_table_list[1]
-        compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping_list[0][0] \
-            if self.compress_ratio == 4 else attn_metadata.decode.slot_mapping_list[1][0]
+        compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping_list[0] \
+            if self.compress_ratio == 4 else attn_metadata.decode.slot_mapping_list[1]
 
         # q
         qr = q = self.wq_a(hidden_states) # bs
@@ -1566,7 +1568,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         #     sparse_mode=3,
         # )
 
-        print(f"=====================> {actual_seq_lengths_query=}, {actual_seq_lengths_key=}, {max_seqlen_q=}, {max_seqlen_kv=}")
+        # print(f"=====================> {actual_seq_lengths_query=}, {actual_seq_lengths_key=}, {max_seqlen_q=}, {max_seqlen_kv=}")
         if self.compress_ratio == 1:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.num_heads,
@@ -1576,6 +1578,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
+                batch_size=len(actual_seq_lengths_key),
                 ori_mask_mode=4, # 4:sliding window
                 cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.window_size - 1,
@@ -1584,6 +1587,21 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
+            )
+            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+                q,
+                ori_kv=kv_state[0].unsqueeze(2),
+                ori_block_table=attn_metadata.decode.swa_block_table,
+                cu_seqlens_q=actual_seq_lengths_query,
+                seqused_kv=actual_seq_lengths_key,
+                sinks=self.attn_sink,
+                metadata=metadata,
+                softmax_scale=self.softmax_scale,
+                ori_mask_mode=4, # 4:sliding window
+                ori_win_left=self.window_size - 1,
+                ori_win_right=0,
+                layout_q="TND",
+                layout_kv="PA_ND"
             )
         elif self.compress_ratio == 4:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
@@ -1594,8 +1612,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
-                topk=None if self.compress_ratio != 4 else self.index_topk, #
-                cmp_ratio=None if self.compress_ratio == 1 else self.compress_ratio, #
+                batch_size=len(actual_seq_lengths_key),
+                topk=self.index_topk, #
+                cmp_ratio=self.compress_ratio, #
                 ori_mask_mode=4, # 4:sliding window
                 cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.window_size - 1,
@@ -1604,6 +1623,26 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
+            )
+            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+                q,
+                ori_kv=kv_state[0].unsqueeze(2),
+                cmp_kv=kv_cache[0],
+                cmp_sparse_indices=compress_topk_idxs,
+                ori_block_table=attn_metadata.decode.swa_block_table,
+                cmp_block_table=compressed_kv_block_table,
+                cu_seqlens_q=actual_seq_lengths_query,
+                seqused_kv=actual_seq_lengths_key,
+                sinks=self.attn_sink,
+                metadata=metadata,
+                softmax_scale=self.softmax_scale,
+                cmp_ratio=self.compress_ratio, #
+                ori_mask_mode=4, # 4:sliding window
+                cmp_mask_mode=3, # 3:causal
+                ori_win_left=self.window_size - 1,
+                ori_win_right=0,
+                layout_q="TND",
+                layout_kv="PA_ND"
             )
         else:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
@@ -1614,7 +1653,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
-                cmp_ratio=None if self.compress_ratio == 1 else self.compress_ratio, #
+                batch_size=len(actual_seq_lengths_key),
+                cmp_ratio=self.compress_ratio, #
                 ori_mask_mode=4, # 4:sliding window
                 cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.window_size - 1,
@@ -1624,46 +1664,25 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-
-        print(f"self.compress_ratio {self.compress_ratio=}")
-        # print(f"=====================> {kv_state[0].unsqueeze(2).shape=}, {attn_metadata.decode.swa_block_table.shape=}, {attn_metadata.decode.swa_block_table=}")
-        # if self.compress_ratio != 1:
-        #     print(f"{compressed_kv_block_table.shape=}, {compress_topk_idxs.shape=}")
-        # attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
-        #     q,
-        #     ori_kv=kv_state[0].unsqueeze(2),
-        #     cmp_kv=None if self.compress_ratio == 1 else kv_cache[0],
-        #     cmp_sparse_indices= None if self.compress_ratio == 1 else compress_topk_idxs,
-        #     ori_block_table=attn_metadata.decode.swa_block_table,
-        #     cmp_block_table=None if self.compress_ratio == 1 else compressed_kv_block_table,
-        #     cu_seqlens_q=actual_seq_lengths_query,
-        #     seqused_kv=actual_seq_lengths_key,
-        #     sinks=self.attn_sink,
-        #     metadata=metadata,
-        #     softmax_scale=self.softmax_scale,
-        #     cmp_ratio=self.compress_ratio, #
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND"
-        # )
-        attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
-            q,
-            ori_kv=kv_state[0].unsqueeze(2),
-            ori_block_table=attn_metadata.decode.swa_block_table,
-            cu_seqlens_q=actual_seq_lengths_query,
-            seqused_kv=actual_seq_lengths_key,
-            sinks=self.attn_sink,
-            metadata=metadata,
-            softmax_scale=self.softmax_scale,
-            ori_mask_mode=4, # 4:sliding window
-            ori_win_left=self.window_size - 1,
-            ori_win_right=0,
-            layout_q="TND",
-            layout_kv="PA_ND"
-        )
+            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+                q,
+                ori_kv=kv_state[0].unsqueeze(2),
+                cmp_kv=kv_cache[0],
+                ori_block_table=attn_metadata.decode.swa_block_table,
+                cmp_block_table=compressed_kv_block_table,
+                cu_seqlens_q=actual_seq_lengths_query,
+                seqused_kv=actual_seq_lengths_key,
+                sinks=self.attn_sink,
+                metadata=metadata,
+                softmax_scale=self.softmax_scale,
+                cmp_ratio=self.compress_ratio, #
+                ori_mask_mode=4, # 4:sliding window
+                cmp_mask_mode=3, # 3:causal
+                ori_win_left=self.window_size - 1,
+                ori_win_right=0,
+                layout_q="TND",
+                layout_kv="PA_ND"
+            )
         return attn_output 
 
     def _forward_single_op_prefill(
@@ -1795,8 +1814,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         state_ids = attn_metadata.state_ids.view(1, 1)
         coff = 2 if self.compressor_overlap else 1
         start_pos = actual_seq_lengths_key - seq_lens_q
-        print(f"================> indexer_select_qli:  {x.shape=},\n {start_pos=},\n {c4_indexer_kv_state.shape=},\n {state_ids=},\n {actual_seq_lengths_query=},\n {actual_seq_lengths_key=}")
-        print(f"================> indexer_select_qli:  {self.indexcom_ape.shape=},\n {self.rope_head_dim=},\n {self.compress_ratio=},\n {coff=},\n {self.compressor_norm_eps=},\n {self.indexcom_wgate.weight.shape=}")
+        # print(f"================> indexer_select_qli:  {x.shape=},\n {start_pos=},\n {c4_indexer_kv_state.shape=},\n {state_ids=},\n {actual_seq_lengths_query=},\n {actual_seq_lengths_key=}")
+        # print(f"================> indexer_select_qli:  {self.indexcom_ape.shape=},\n {self.rope_head_dim=},\n {self.compress_ratio=},\n {coff=},\n {self.compressor_norm_eps=},\n {self.indexcom_wgate.weight.shape=}")
         # k = self.compress_forward(x, kv_cache)
         k = torch.ops.custom.npu_compressor(
             x,
@@ -1889,8 +1908,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         # state_ids = attn_metadata.state_ids.view(1, 1)
         coff = 2 if self.compressor_overlap else 1
         start_pos = actual_seq_lengths_key - seq_lens_q
-        # print(f"================> indexer_select_qli:  {x.shape=},\n {start_pos=},\n {c4_indexer_kv_state.shape=},\n {state_ids=},\n {actual_seq_lengths_query=},\n {actual_seq_lengths_key=}")
-        # print(f"================> indexer_select_qli:  {self.indexcom_ape.shape=},\n {self.rope_head_dim=},\n {self.compress_ratio=},\n {coff=},\n {self.compressor_norm_eps=},\n {self.indexcom_wgate.weight.shape=}")
         
         if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
             kv_block_table = attn_metadata.prefill.swa_block_table
@@ -1923,8 +1940,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if kv.numel() == 0:
             kv = None
-        elif self.indexer.compressor.rotate:
-            kv = rotate_activation(kv)
+        # elif self.indexer.compressor.rotate:
+        #     kv = rotate_activation(kv)
 
         # print(f"indexer kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
 
@@ -1937,8 +1954,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
 
-        if kv is not None:
-            print(f'q kv in indexer: {q.shape=}, {kv.shape=}, {weights.shape=}')
+        # if kv is not None:
+        #     print(f'q kv in indexer: {q.shape=}, {kv.shape=}, {weights.shape=}')
 
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
         if kv is not None:
@@ -1948,6 +1965,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             q_scale = q_scale.to(torch.float16)
             if kv is not None:
                 kv_scale = kv_scale.to(torch.float16)
+                kv_scale = kv_scale.unsqueeze(-1)
 
         if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
             # print(f"indexer prefill kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")

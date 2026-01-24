@@ -22,8 +22,10 @@ class BlockTable:
                  num_speculative_tokens: int = 0,
                  compress_ratio: int = 1):
         self.max_num_reqs = max_num_reqs
-        self.max_num_blocks_per_req = max_num_blocks_per_req // compress_ratio
+        self.max_num_blocks_per_req = max(max_num_blocks_per_req // compress_ratio, 1)
         self.max_num_batched_tokens = max_num_batched_tokens // compress_ratio
+        max_num_blocks_per_req = max(max_num_blocks_per_req // compress_ratio, 1)
+        max_num_batched_tokens = max_num_batched_tokens // compress_ratio
         self.pin_memory = pin_memory
         self.device = device
         self.physical_block_size = block_size
@@ -310,7 +312,7 @@ class MultiGroupBlockTable:
 
     def add_row(self, block_ids: tuple[list[int], ...], row_idx: int) -> None:
         for i, block_table in enumerate(self.block_tables):
-            block_table.add_row(block_ids[0], row_idx)
+            block_table.add_row(block_ids[i], row_idx)
             # NOTE first simple kv route, only 1 kv manager and 1 block_id in scheduler_output,
             # but 2 block_tables for C4/C128. Try to find a better implementation.
 

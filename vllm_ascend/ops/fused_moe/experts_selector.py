@@ -94,9 +94,9 @@ def select_experts(hidden_states: torch.Tensor,
             tid2eid = tid2eid,
             input_ids = input_ids,
         )
-        if torch.distributed.get_rank() == 0:
-            print(f"=====================================topk_weights :  topk_weights is {topk_weights}")
-            print(f"=====================================topk_ids :  topk_ids is {topk_ids}")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"=====================================topk_weights :  topk_weights is {topk_weights}")
+        #     print(f"=====================================topk_ids :  topk_ids is {topk_ids}")
     else:
         topk_weights, topk_ids = _native_select_experts(
             hidden_states=hidden_states,
@@ -270,21 +270,21 @@ def _select_experts_with_fusion_ops(
             # tid2eid_cpu = tid2eid.detach().cpu()
             # print(f'1111 fc rank: {torch.distributed.get_rank()}')
             # input_ids_cpu = input_ids.cpu()
-            print('2222')
+            # print('2222')
             # topk_ids = tid2eid_cpu[input_ids_cpu].to(scores.device)
             input_ids = get_forward_context().input_ids
             topk_ids = tid2eid[input_ids]
-            print(f'hi')
+            # print(f'hi')
         else:
             topk_ids = scores.topk(top_k, dim=-1)[1]
-        print('hiiiii')
-        print(f'topk_ids.shape: {topk_ids.shape},original_scores.shape: {original_scores.shape}')
+        # print('hiiiii')
+        # print(f'topk_ids.shape: {topk_ids.shape},original_scores.shape: {original_scores.shape}')
         weights = original_scores.gather(1, topk_ids)
-        print('fuck')
+        # print('fuck')
         weights /= weights.sum(dim=-1, keepdim=True)
-        print('off')
+        # print('off')
         weights *= routed_scaling_factor
-        print("============================================", routed_scaling_factor)
+        # print("============================================", routed_scaling_factor)
         
 
         return weights, topk_ids.to(torch.int32)

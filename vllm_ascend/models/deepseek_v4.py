@@ -992,7 +992,7 @@ class DeepseekV4Model(nn.Module):
         intermediate_tensors: IntermediateTensors | None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
-        print(f'xxxxxxxxxxxxxxxxxxxxxx input_ids: {input_ids}')
+        # print(f'xxxxxxxxxxxxxxxxxxxxxx input_ids: {input_ids}')
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
@@ -1238,10 +1238,10 @@ class AscendDeepseekV4ForCausalLM(
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')
-                print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
+                # print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             if 'model.lm_head.' in name:
                 name = name.replace('model.lm_head.','lm_head.')
-                print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
+                # print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             if 'embed.' in name and 'embed_token.' not in name:
                 name = name.replace('embed.','embed_tokens.')
             if 'attn' in name and 'self_attn' not in name:
@@ -1258,8 +1258,8 @@ class AscendDeepseekV4ForCausalLM(
             if ".gate.bias" in name:
                 name=name.replace('.gate.bias','.gate.e_score_correction_bias')
 
-            if 'wq_b' in name:
-                print(f'loaded_weight.shape for wq_b: {loaded_weight.shape}')
+            # if 'wq_b' in name:
+            #     print(f'loaded_weight.shape for wq_b: {loaded_weight.shape}')
             if "sink" in name:
                 # Handle attention sinks (distributed across ranks)
                 param = params_dict[name]
