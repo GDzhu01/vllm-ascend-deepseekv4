@@ -177,8 +177,6 @@ def dsa_forward(
     layer_name: str,
 ) -> None:
     forward_context: ForwardContext = get_forward_context()
-    # print(f'??????????????: {layer_name}')
-    # print(f'xxxxxxxxxxxxxxxxxx: {forward_context.no_compile_layers.keys()}')
     self = forward_context.no_compile_layers[layer_name]
     if forward_context.attn_metadata:
         attn_metadata = forward_context.attn_metadata[self.dsa_attn.layer_name]

@@ -2035,10 +2035,25 @@ class NPUModelRunner(GPUModelRunner):
             num_computed_tokens_cpu = (
                 self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs])
 
+            blk_table_list = self.input_batch.block_table.block_tables
+            # TODO: refactor this logic to MultiGroupBlockTable
+            slot_mapping_list = []
+            blk_table_tensor_list = []
+            for i,blk_table in enumerate(blk_table_list):
+                blk_table_tensor_list.append(blk_table.get_device_tensor(num_reqs))
+                # print(f"blk_table.slot_mapping.gpu: {blk_table.slot_mapping.gpu} "
+                #       f"blk_table.slot_mapping.gpu_shape: {blk_table.slot_mapping.gpu.shape}")
+                slot_mapping = blk_table.slot_mapping.gpu  # [:maybe_pcp_full_tokens]?
+                if self.pcp_size == 1:
+                    if self.use_compress:
+                        slot_mapping_list.append(slot_mapping)
+                    else:
+                        pass
+
             for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
-                block_table_tensor = self.input_batch.block_table[
-                    kv_cache_group_id].get_device_tensor()
+                block_table_tensor = self.input_batch.block_table[  # This is stay for GDNA
+                    kv_cache_group_id].get_device_tensor(num_reqs)
                 slot_mapping = self.input_batch.block_table[
                     kv_cache_group_id].slot_mapping
                 long_seq_metadata = None if self.pcp_size * self.dcp_size == 1 else self.pcp_manager.generate_pcp_metadata(
@@ -2061,8 +2076,13 @@ class NPUModelRunner(GPUModelRunner):
                     num_actual_tokens=num_tokens,
                     num_input_tokens=num_tokens,
                     actual_seq_lengths_q=self.actual_seq_lengths_q,
-                    block_table_tensor=block_table_tensor[:num_reqs],
-                    slot_mapping=slot_mapping.gpu,
+                    block_table_tensor=None,
+                    block_table_tensor_list=blk_table_tensor_list,
+                    slot_mapping=None,
+                    slot_mapping_list=slot_mapping_list,
+                    swa_slot_mapping=self.swa_slot_mapping.gpu,
+                    swa_block_table=self.swa_block_table.gpu,
+                    state_block_table=self.state_block_table.gpu,
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     positions=self.positions.gpu,
                     attn_state=self.attn_state,
@@ -2111,6 +2131,29 @@ class NPUModelRunner(GPUModelRunner):
                         else:
                             attn_metadata[
                                 layer_name] = attn_metadata_full_attention
+
+                # ------------- make swa metadata -----------------
+                kv_cache_spec = AttentionSpec(
+                    block_size=self.block_size,
+                    num_kv_heads=1,
+                    head_size=512,
+                    dtype=torch.bfloat16,
+                )
+                swa_metadata_builder = self.attn_backend.get_builder_cls()(
+                    kv_cache_spec,
+                    list(self.runner_only_attn_layers),
+                    self.vllm_config,
+                    self.device,
+                    AscendDSAMetadata,
+                    supports_dcp_with_varlen=False,
+                )
+                for layer_name in self.runner_only_attn_layers:
+                    common_prefix_len = 0
+                    swa_attn_metadata = builder.build(
+                        common_prefix_len=common_prefix_len,
+                        common_attn_metadata=common_attn_metadata)
+                    attn_metadata[layer_name] = swa_attn_metadata
+                # ---------------------------------------------------
 
         return attn_metadata
 
