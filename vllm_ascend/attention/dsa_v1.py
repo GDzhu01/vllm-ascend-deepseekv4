@@ -748,7 +748,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         common_attn_metadata: AscendCommonAttentionMetadata,
     ) -> AscendDSADecodeMetadata:
         num_reqs = common_attn_metadata.num_reqs
-        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
+        query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
 
         input_positions = common_attn_metadata.positions[:self.
                                                          num_actual_tokens].long(
@@ -758,7 +758,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # Notice that num_decodes != num_decode_tokens in SpecDecoding Scenario
         # actual_seq_lengths_q = query_start_loc_cpu[1:self.num_decodes +
         #                                            1].tolist()
-        query_start_loc = query_start_loc_cpu[:self.num_decodes+1]
         max_seq_lens = common_attn_metadata.seq_lens_cpu[:self.num_decodes].max().item()
 
         block_table_size = self.get_block_table_size(
@@ -1430,7 +1429,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # forward_context = get_forward_context()
         cos = attn_metadata.decode.cos[layer_name]
         sin = attn_metadata.decode.sin[layer_name]
-        actual_seq_lengths_query = attn_metadata.decode.query_start_loc.to(cos.device)
+        actual_seq_lengths_query = attn_metadata.decode.query_start_loc
         actual_seq_lengths_key = attn_metadata.decode.seq_lens
         num_decode_tokens = attn_metadata.num_decode_tokens
         max_seqlen_kv = torch.max(actual_seq_lengths_key).item()
