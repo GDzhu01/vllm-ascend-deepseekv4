@@ -2102,25 +2102,26 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         attn_state = AscendAttentionState.ChunkedPrefill
 
-                common_metadata = CommonAttentionMetadata(
-                    query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
-                    query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
-                                                                 1],
-                    _seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
-                    seq_lens=self.seq_lens.cpu[:num_reqs],
-                    num_reqs=num_reqs,
-                    num_actual_tokens=num_tokens,
-                    block_table_tensor=block_table_tensor[:num_reqs],
-                    slot_mapping=slot_mapping.gpu,
-                    _num_computed_tokens_cpu=num_computed_tokens_cpu,
-                    max_query_len=max_query_len,
-                    max_seq_len=seq_lens)
+                # common_metadata = CommonAttentionMetadata(
+                #     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
+                #     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
+                #                                                  1],
+                #     _seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
+                #     seq_lens=self.seq_lens.cpu[:num_reqs],
+                #     num_reqs=num_reqs,
+                #     num_actual_tokens=num_tokens,
+                #     block_table_tensor=block_table_tensor[:num_reqs],
+                #     slot_mapping=slot_mapping.gpu,
+                #     _num_computed_tokens_cpu=num_computed_tokens_cpu,
+                #     max_query_len=max_query_len,
+                #     max_seq_len=seq_lens)
 
                 for attn_group in self.attn_groups[kv_cache_group_id]:
                     builder = attn_group.get_metadata_builder()
                     if isinstance(builder, GDNAttentionMetadataBuilder):
-                        attn_metadata_gdn_attention = builder.build_for_cudagraph_capture(
-                            common_metadata)
+                        # attn_metadata_gdn_attention = builder.build_for_cudagraph_capture(
+                        #     common_metadata)
+                        pass
                     else:
                         attn_metadata_full_attention = builder.build_for_graph_capture(
                             common_attn_metadata, attn_state)
