@@ -1111,6 +1111,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         # attn post
         # print(f'****************************cos = {cos.shape}')
         # output[...] = self.npu_attention_post_func(o_proj_input, cos, sin, wo_a, wo_b)
+        cos = attn_metadata.cos[layer_name]
+        sin = attn_metadata.sin[layer_name]
         o = o_proj_input.view(-1, 64, 512)
         num_tokens = o.shape[0]
         o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
@@ -1213,7 +1215,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     compressed_cos=compress_cos,
                                                     compressed_sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
-                                                    actual_seq_lengths_key=actual_seq_lengths_key)
+                                                    actual_seq_lengths_key=actual_seq_lengths_key,
+                                                    with_prefill=True)
             elif self.compress_ratio == 128:
                 # slot_mapping = attn_metadata.slot_mapping_list[1][num_decode_tokens:]
                 compress_topk_idxs = None
@@ -1513,7 +1516,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     compressed_cos=compress_cos,
                                                     compressed_sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
-                                                    actual_seq_lengths_key=actual_seq_lengths_key)
+                                                    actual_seq_lengths_key=actual_seq_lengths_key,
+                                                    with_prefill=False)
                 
             elif self.compress_ratio == 128:
                 # slot_mapping = attn_metadata.decode.slot_mapping_list[1][:num_decode_tokens]
@@ -1598,7 +1602,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
-                ori_block_table=attn_metadata.decode.swa_block_table,
+                ori_block_table=attn_metadata.decode.state_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
@@ -1636,7 +1640,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
                 cmp_sparse_indices=compress_topk_idxs,
-                ori_block_table=attn_metadata.decode.swa_block_table,
+                ori_block_table=attn_metadata.decode.state_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
@@ -1675,7 +1679,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
-                ori_block_table=attn_metadata.decode.swa_block_table,
+                ori_block_table=attn_metadata.decode.state_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
@@ -1894,6 +1898,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         compressed_sin: torch.Tensor,
         actual_seq_lengths_query: torch.Tensor,
         actual_seq_lengths_key: torch.Tensor,
+        with_prefill: bool = False,
     ):
         seqlen, _ = x.size()  # [T, H]
         bsz = 1
@@ -1947,8 +1952,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if kv.numel() == 0:
             kv = None
-        # elif self.indexer.compressor.rotate:
-        #     kv = rotate_activation(kv)
+        elif self.indexer.compressor.rotate:
+            kv = rotate_activation(kv)
 
         # print(f"indexer kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
 
@@ -2013,7 +2018,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
         # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_lens=}\n{attn_metadata.decode.query_start_loc=}")
 
-        if start_pos == 0:
+        if with_prefill:
             qlens = attn_metadata.prefill.query_start_loc[1:].to(q.device)
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table_list[0]
@@ -2045,9 +2050,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
         # return None
         # topk_idxs [b, s, N, k]
-        topk_idxs = topk_idxs[..., :math.floor(kvlens.sum() / 4)].unsqueeze(0).squeeze(2)  # TODO 多序列需要修改
-        mask = topk_idxs == -1
-        topk_idxs = torch.where(mask, -1, topk_idxs)
+        # topk_idxs = topk_idxs[..., :math.floor(kvlens.sum() / 4)].unsqueeze(0).squeeze(2)  # TODO 多序列需要修改
+        # mask = topk_idxs == -1
+        # topk_idxs = torch.where(mask, -1, topk_idxs)
         # if start_pos == 0:
         #     mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
         return topk_idxs
