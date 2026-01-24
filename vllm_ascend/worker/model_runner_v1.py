@@ -974,29 +974,25 @@ class NPUModelRunner(GPUModelRunner):
                     num_input_tokens if self.pcp_size == 1 else
                     total_num_scheduled_tokens * self.pcp_size -
                     sum(self.pcp_manager.num_pcp_pads_cpu[:num_reqs]))
-                # blk_table 针对不同的压缩比，取两次
-                # slot_mapping 同样两次
-                # 搞个 block_table_map, compress_ratio: block_table
-                # blk_table_list[0]: c4
-                # blk_table_list[1]: c128
-                blk_table_list = self.input_batch.block_table.block_tables
-                # TODO: refactor this logic to MultiGroupBlockTable
-                blk_table_tensor_list = []
-                slot_mapping_list = []
-                for i,blk_table in enumerate(blk_table_list):
-                    blk_table_tensor_list.append(blk_table.get_device_tensor(num_reqs))
-                    # print(f"blk_table.slot_mapping.gpu: {blk_table.slot_mapping.gpu} "
-                    #       f"blk_table.slot_mapping.gpu_shape: {blk_table.slot_mapping.gpu.shape}")
-                    slot_mapping = blk_table.slot_mapping.gpu[:
-                                                        maybe_pcp_full_tokens]
-                    if self.pcp_size == 1:
-                        if self.use_compress:
-                            slot_mapping[
-                            total_num_scheduled_tokens_compressed_list[i]:num_input_tokens].fill_(-1)
-                            slot_mapping_list.append(slot_mapping)
-                        else:
-                            slot_mapping[
-                            total_num_scheduled_tokens:num_input_tokens].fill_(-1)
+
+                blk_table = self.input_batch.block_table[kv_cache_group_id]
+                blk_table_tensor = blk_table.get_device_tensor(num_reqs)
+                slot_mapping = blk_table.slot_mapping.gpu[:
+                                                          maybe_pcp_full_tokens]
+                # print(f"blk_table.slot_mapping.gpu: {blk_table.slot_mapping.gpu} "
+                #       f"blk_table.slot_mapping.gpu_shape: {blk_table.slot_mapping.gpu.shape}")
+                if self.pcp_size == 1:
+                    if self.use_compress:
+                        slot_mapping[
+                            total_num_scheduled_tokens_compressed_list[kv_cache_group_id]:num_input_tokens].fill_(-1)
+                        # print(f"slot_mapping_before_model: {slot_mapping} "
+                        #       f"maybe_pcp_full_tokens: {maybe_pcp_full_tokens} "
+                        #       f"total_num_scheduled_tokens: {total_num_scheduled_tokens} "
+                        #       f"num_input_tokens: {num_input_tokens} "
+                        #       f"total_num_scheduled_tokens_compressed_list: {total_num_scheduled_tokens_compressed_list[kv_cache_group_id]}")
+                    else:
+                        slot_mapping[
+                        total_num_scheduled_tokens:num_input_tokens].fill_(-1)
 
             if self.pcp_size * self.dcp_size > 1:
                 # TODO: adapt the logic in cp
@@ -1068,10 +1064,8 @@ class NPUModelRunner(GPUModelRunner):
                 num_input_tokens=num_input_tokens,
                 actual_seq_lengths_q=self.actual_seq_lengths_q,
                 # TODO: change this to the right block table for linear attn
-                block_table_tensor=None,
-                slot_mapping=None,
-                block_table_tensor_list=blk_table_tensor_list,
-                slot_mapping_list=slot_mapping_list,
+                block_table_tensor=blk_table_tensor,
+                slot_mapping=slot_mapping,
                 state_ids=state_ids,
                 swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
                 swa_block_table=self.swa_block_table.gpu[:num_reqs],
@@ -3092,7 +3086,7 @@ class NPUModelRunner(GPUModelRunner):
                 kernel_block_sizes.append([0])
         if block_sizes != [
                 self.cache_config.block_size
-        ] or kernel_block_sizes != [[self.cache_config.block_size]]:
+        ] or kernel_block_sizes != [[self.cache_config.block_size]] or len(kv_cache_config.kv_cache_groups) > 1:
             assert self.cache_config.cpu_offload_gb == 0, (
                 "Cannot re-initialize the input batch when CPU weight "
                 "offloading is enabled. See https://github.com/vllm-project/vllm/pull/18298 "  # noqa: E501
@@ -3113,6 +3107,7 @@ class NPUModelRunner(GPUModelRunner):
                     self.vllm_config.speculative_config.num_speculative_tokens
                     if self.vllm_config.speculative_config else 0),
                 kernel_block_sizes=kernel_block_sizes,
+                kv_cache_groups=kv_cache_config.kv_cache_groups,
             )
 
     def initialize_attn_backend(self, kv_cache_config: KVCacheConfig) -> None:

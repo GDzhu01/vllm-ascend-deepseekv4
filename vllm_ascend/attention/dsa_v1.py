@@ -263,13 +263,12 @@ class AscendDSAPrefillMetadata:
     input_positions: torch.Tensor
     query_start_loc: torch.Tensor
     block_table: torch.Tensor
-    block_table_list: list[torch.Tensor]
+    prefill_swa_block_table: torch.Tensor
+    slot_mapping: torch.Tensor
     max_query_len: int
     max_seq_lens: int
     state_ids: torch.Tensor
 
-    block_table_list: list[torch.Tensor]
-    slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
     state_block_table: torch.Tensor
@@ -288,14 +287,12 @@ class AscendDSADecodeMetadata:
     # position embeddings are applied inside the attention backend
     input_positions: torch.Tensor
     block_table: torch.Tensor
-    block_table_list: list[torch.Tensor]
     seq_lens: torch.Tensor
-    max_seq_lens: int
     seq_lens_list: list[int]
+    max_seq_lens: int
+    slot_mapping: torch.Tensor
     state_ids: torch.Tensor
 
-    block_table_list: list[torch.Tensor]
-    slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
     state_block_table: torch.Tensor
@@ -334,8 +331,6 @@ class AscendDSAMetadata:
     block_tables: torch.Tensor
     sin: torch.Tensor
     cos: torch.Tensor
-    block_table_list: list[torch.Tensor]
-    slot_mapping_list: list[torch.Tensor]
     swa_slot_mapping: torch.Tensor
     swa_block_table: torch.Tensor
     state_block_table: torch.Tensor
@@ -454,9 +449,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.context_lens_cpu: torch.Tensor = None
         self.num_actual_tokens: Optional[int] = None
         self.block_table: torch.Tensor = None
-        self.block_table_list: list[torch.Tensor] = []
         self.slot_mapping: torch.Tensor = None
-        self.slot_mapping_list: list[torch.Tensor] = []
         self.graph_pad_size = 0
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
@@ -596,10 +589,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
-        # self.slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
-        self.slot_mapping_list = []
-        for slot_mapping in common_attn_metadata.slot_mapping_list:
-            self.slot_mapping_list.append(slot_mapping[:num_input_tokens])
+        self.slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
 
         query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
         query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
@@ -607,20 +597,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         self.seq_lens = common_attn_metadata.seq_lens[:num_reqs]
 
-        #cpu
-        # query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
-        # self.query_lens = query_seq_lens_cpu[:num_reqs]
-        # self.seq_lens = common_attn_metadata.seq_lens_cpu[:num_reqs]
-
         self.graph_pad_size = common_attn_metadata.graph_pad_size
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_PREFILL)
-        # self.block_table = common_attn_metadata.block_table_tensor[:
-        #                                                            block_table_size]
-        self.block_table_list = []
-        for block_table in common_attn_metadata.block_table_tensor_list:
-            self.block_table_list.append(block_table[:block_table_size])
-        # self.set_prefill_block_table(common_attn_metadata)
+        self.block_table = common_attn_metadata.block_table_tensor[:block_table_size]
 
         prefill_metadata = None
         if self.num_prefills > 0:
@@ -637,7 +617,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_actual_tokens=self.num_actual_tokens,
             query_lens=self.query_lens,
             slot_mapping=self.slot_mapping,
-            slot_mapping_list=self.slot_mapping_list,
             head_dim=self.model_config.get_head_size(),
             num_decodes=self.num_decodes,
             num_decode_tokens=self.num_decode_tokens,
@@ -649,7 +628,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             decode=decode_metadata,
             query_start_loc=query_start_loc,
             block_tables=self.block_table,
-            block_table_list=self.block_table_list,
             seq_lens=self.seq_lens,
             cos=cos,
             sin=sin,
@@ -714,31 +692,25 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         block_cumsum = prefill_block.cumsum(dim=0)
         end = block_cumsum[-1]
         block_id = torch.arange(1, end + 1,
-                                dtype=self.block_table_list[0].dtype,
-                                device=self.block_table_list[0].device)
+                                dtype=self.block_table.dtype,
+                                device=self.block_table.device)
         num_prefill = self.seq_lens[reqs_start:].shape[0]
         # [num_req, max_model_len // block_size]
         prefill_block_table_shape = (num_prefill, 65536//128)
 
-        prefill_block_table = torch.zeros(prefill_block_table_shape,
-                                         dtype=self.block_table_list[0].dtype,
-                                         device=self.block_table_list[0].device)
+        prefill_swa_block_table = torch.zeros(prefill_block_table_shape,
+                                         dtype=self.block_table.dtype,
+                                         device=self.block_table.device)
         
         for i in range(num_prefill):
             start_idx = block_cumsum[i] - prefill_block[i]
             end_idx = block_cumsum[i]
-            prefill_block_table[i, :prefill_block[i]] = block_id[start_idx:end_idx]
+            prefill_swa_block_table[i, :prefill_block[i]] = block_id[start_idx:end_idx]
 
-        # slotmapping
-        prefill_slot_mapping_list = []
-        for slot_mapping in common_attn_metadata.slot_mapping_list:
-            prefill_slot_mapping_list.append(slot_mapping[tokens_start:])
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
+        prefill_slot_mapping = self.slot_mapping[tokens_start:]
 
-        
-        prefill_block_table_list = []
-        for block_table in self.block_table_list:
-            prefill_block_table_list.append(block_table[reqs_start:, ...])
+        block_table = self.block_table[reqs_start:, ...]
 
         return AscendDSAPrefillMetadata(
             attn_mask=self.attn_mask_builder.get_final_mla_mask(
@@ -747,9 +719,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens[reqs_start:],
             context_lens=self.seq_lens[reqs_start:],
             input_positions=prefill_input_positions,
-            block_table=prefill_block_table,
-            block_table_list=prefill_block_table_list,
-            slot_mapping_list=prefill_slot_mapping_list,
+            block_table=block_table,
+            prefill_swa_block_table=prefill_swa_block_table,
+            slot_mapping = prefill_slot_mapping,
             swa_slot_mapping=prefill_swa_slot_mapping,
             swa_block_table=common_attn_metadata.swa_block_table[reqs_start:, ...],
             state_block_table=common_attn_metadata.state_block_table[reqs_start:, ...],
@@ -787,10 +759,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
-        # self.block_table = self.block_table[:block_table_size]
-        for i in range(len(self.block_table_list)):
-            self.block_table_list[i] = self.block_table_list[i][:block_table_size, ...]
 
+        block_table = self.block_table[:block_table_size, ...]
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
         # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
         # if self.graph_pad_size > self.num_decodes and \
@@ -802,11 +772,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
 
-        # slotmapping
-        decode_slot_mapping_list = []
-        for slot_mapping in common_attn_metadata.slot_mapping_list:
-            decode_slot_mapping_list.append(slot_mapping[:self.num_decode_tokens])
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
+        slot_mapping = self.slot_mapping[:self.num_decode_tokens]
 
 
         decode_input_positions = input_positions
@@ -831,11 +798,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
-            block_table=None,
-            block_table_list=self.block_table_list,
+            block_table=block_table,
             swa_block_table=common_attn_metadata.swa_block_table[:block_table_size, ...],
-            state_block_table=common_attn_metadata.state_block_table[:block_table_size, ...],
-            slot_mapping_list=decode_slot_mapping_list,
+            slot_mapping=slot_mapping,
             swa_slot_mapping=decode_swa_slot_mapping,
             seq_lens=self.seq_lens[:self.num_decodes],
             seq_lens_list=seq_lens_list,
@@ -843,6 +808,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
             state_ids=self.state_ids[:block_table_size],
+            state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
             c4_sin=c4_sin,
@@ -1166,10 +1132,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         max_seqlen_kv =  torch.max(actual_seq_lengths_key).item()
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
         max_seqlen_q = torch.max(seq_lens_q).item()
-        compressed_kv_block_table = attn_metadata.prefill.block_table_list[0] \
-            if self.compress_ratio == 4 else attn_metadata.prefill.block_table_list[1]
-        compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping_list[0] \
-            if self.compress_ratio == 4 else attn_metadata.prefill.slot_mapping_list[1]
+        compressed_kv_block_table = attn_metadata.prefill.block_table
+        compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping
 
         # mlaprolog
         # q
@@ -1320,7 +1284,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=sliding_window_kv_padded,
-                ori_block_table=attn_metadata.prefill.block_table,
+                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
@@ -1359,7 +1323,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
                 cmp_sparse_indices=compress_topk_idxs, # B T D 
-                ori_block_table=attn_metadata.prefill.block_table,
+                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
@@ -1398,7 +1362,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 q,
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
-                ori_block_table=attn_metadata.prefill.block_table,
+                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
@@ -1473,10 +1437,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         max_seqlen_kv = torch.max(actual_seq_lengths_key).item()
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
         max_seqlen_q = torch.max(seq_lens_q).item()
-        compressed_kv_block_table = attn_metadata.decode.block_table_list[0] \
-            if self.compress_ratio == 4 else attn_metadata.decode.block_table_list[1]
-        compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping_list[0] \
-            if self.compress_ratio == 4 else attn_metadata.decode.slot_mapping_list[1]
+        compressed_kv_block_table = attn_metadata.decode.block_table
+        compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping
 
         # q
         qr = q = self.wq_a(hidden_states) # bs
@@ -1973,6 +1935,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         if kv is not None:
             kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
 
+            kv_scale = kv_scale.unsqueeze(-1)
+
         if soc_version not in {AscendDeviceType.A5}:
             q_scale = q_scale.to(torch.float16)
             if kv is not None:
@@ -1984,20 +1948,20 @@ class AscendDSAImpl(DSAAttentionImpl):
             # print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                             kv.view(-1, kv.shape[-1]))
                 torch_npu.npu_scatter_nd_update_(
-                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
+                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                             kv_scale.view(-1, kv_scale.shape[-1]))
         else:
             # print(f"indexer decode kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.decode.slot_mapping_list=}\n{attn_metadata.decode.block_table_list=}")
             # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_start_loc=}")
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping_list[0].unsqueeze(-1),
+                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
                             kv.view(-1, kv.shape[-1]))
                 torch_npu.npu_scatter_nd_update_(
-                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping_list[0].unsqueeze(-1),
+                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
                             kv_scale.view(-1, kv_scale.shape[-1]))
 
         metadata = torch.zeros((2048), dtype = torch.int32)
@@ -2021,11 +1985,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             qlens = attn_metadata.prefill.query_start_loc[1:].to(q.device)
             kvlens = attn_metadata.prefill.seq_lens
-            block_table = attn_metadata.prefill.block_table_list[0]
+            block_table = attn_metadata.prefill.block_table
         else:
             qlens = attn_metadata.decode.query_start_loc[1:].to(q.device)
             kvlens = attn_metadata.decode.seq_lens
-            block_table = attn_metadata.decode.block_table_list[0]
+            block_table = attn_metadata.decode.block_table
 
         topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
             query=q,
