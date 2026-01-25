@@ -1391,9 +1391,6 @@ class MooncakeConnectorWorker:
         
         if self.is_dsv4:
             _, first_state_cache_tuple = next(iter(state_caches.items()))
-            #self.num_state_blocks = first_state_cache_tuple[0].size(0)
-            # TODO(zxr): num_state_blocks of sliding window is two times larger than state blocks
-            # state slide window shape dim0 should reshape to max_num_seqs + 1
             max_num_seqs = self.vllm_config.scheduler_config.max_num_seqs
             for layer_name, state_cache_tuple in state_caches.items():
                 if isinstance(state_cache_tuple, (list, tuple)) is False:
@@ -1406,13 +1403,10 @@ class MooncakeConnectorWorker:
                     num_blocks = single_state_cache.shape[0]
                     self.state_caches_base_addr[layer_name].append(single_state_cache.data_ptr())
                     ptrs.append(single_state_cache.data_ptr())
-                    if num_blocks == max_num_seqs + 1:
-                        self.state_len[layer_name].append(single_state_cache.element_size() * math.prod(block_shape))
-                        lengths.append(num_blocks * single_state_cache.element_size() * math.prod(block_shape))
-                    else:
-                        # NOTE(zxr): for sliding windows, we need to use two times length
-                        self.state_len[layer_name].append(single_state_cache.element_size() * 2 * math.prod(block_shape))
-                        lengths.append(num_blocks * single_state_cache.element_size() * math.prod(block_shape))
+                    # NOTE(zxr): use another way to get state_block_multiple
+                    state_block_multiple = 3
+                    self.state_len[layer_name].append(single_state_cache.element_size() * state_block_multiple * math.prod(block_shape))
+                    lengths.append((max_num_seqs + 1) * single_state_cache.element_size() * state_block_multiple * math.prod(block_shape))
                     
                     logger.info(
                         "layer: %s, num_state_blocks: %s, block_shape: %s",
@@ -1423,7 +1417,7 @@ class MooncakeConnectorWorker:
             for layer_name in kv_cache_group.layer_names:
                 self.layer_group_spec_idx[layer_name] = idx
 
-        print(f"[+++] {ptrs=} {lengths=}")
+        # print(f"[+++] {ptrs=} {lengths=}")
         global_te.register_buffer(ptrs, lengths)
         # After KV Caches registered, start the sending or receiving thread.
         metadata = MooncakeAgentMetadata(
