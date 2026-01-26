@@ -1239,6 +1239,10 @@ def get_compressed_pos_and_indices(
         req_indices_compressed_list.append(req_indices_compressed)
         positions_compressed_list.append(compressed_pos_ids)
         num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+        if compress_ratio == 4:
+            req_indices_compressed_list.append(req_indices_compressed)
+            positions_compressed_list.append(compressed_pos_ids)
+            num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
     return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list
 
 def get_aligned_tensor_for_pd(size: torch.Size, device: torch.device, dtype: torch.dtype, alignment: int = 1):

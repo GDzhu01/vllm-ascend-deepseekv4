@@ -90,9 +90,6 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata
-from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
-                                        Compress4AttentionSpec,
-                                        Compress128AttentionSpec)
 # yapf conflicts with isort for this block
 # yapf: disable
 from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
@@ -3229,8 +3226,7 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=128,
-                            # TODO(cmq): REVERT ME after debugging
-                            dtype=torch.bfloat16,
+                            dtype=torch.int8,
                             compress_ratio=4,
                         ))
                 elif layer_id % 2 != 0:
