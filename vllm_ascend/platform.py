@@ -352,6 +352,12 @@ class NPUPlatform(Platform):
                 "needs to be equal if use pcp or dcp > 1 in P/D disaggregate and kv pool scenario."
             )
 
+        if hasattr(vllm_config.model_config.hf_config,
+                            "compress_ratios"):
+            # dsv4 not support chunked_prefill and prefix_caching now
+            vllm_config.scheduler_config.enable_chunked_prefill = False
+            vllm_config.cache_config.enable_prefix_caching = False
+
         if is_vl_model(vllm_config):
             if bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM", '0'))) or \
                bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM1", '0'))):
