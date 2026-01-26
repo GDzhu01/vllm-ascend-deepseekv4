@@ -3389,7 +3389,8 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=128,
-                            dtype=torch.int8,
+                            # TODO(cmq): REVERT ME after debugging
+                            dtype=torch.bfloat16,
                             compress_ratio=4,
                         ))
                 elif layer_id % 2 != 0:
