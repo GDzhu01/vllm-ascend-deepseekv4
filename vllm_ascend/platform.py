@@ -366,37 +366,37 @@ class NPUPlatform(Platform):
                     "FLASHCOMM in vllm-ascend. We will fix this in the future. "
                     "Please set VLLM_ASCEND_ENABLE_FLASHCOMM1=0.")
 
-    @classmethod
-    def import_kernels(cls) -> None:
-        # Directly importing vllm_ascend_C prevents ASCEND_RT_VISIBLE_DEVICES
-        # from being applied during runtime initialization, which causes bugs
-        # in the RL module. Therefore, we currently use lazy initialization
-        # to avoid this issue. See https://github.com/vllm-project/vllm-ascend/pull/884.
-        # TODO: when the above issue is fixed, we can uncomment the following lines.
-        # from vllm_ascend.utils import enable_custom_op
-        # enable_custom_op()
-        # set custom ops path
-        global _CUSTOM_OP_REGISTERED
-        if _CUSTOM_OP_REGISTERED:
-            return
-        CUR_DIR = os.path.dirname(os.path.realpath(__file__))
-        CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                       "vllm-ascend")
-        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                "vllm-ascend","op_api","lib")
-        if os.path.exists(CUSTOM_OPP_PATH):
-            current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
-                                                   "")
-            if current_cust_opp_path:
-                os.environ[
-                    "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
-            else:
-                os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
-            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
-                                        "")
-            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
-            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
-        _CUSTOM_OP_REGISTERED = True
+    # @classmethod
+    # def import_kernels(cls) -> None:
+    #     # Directly importing vllm_ascend_C prevents ASCEND_RT_VISIBLE_DEVICES
+    #     # from being applied during runtime initialization, which causes bugs
+    #     # in the RL module. Therefore, we currently use lazy initialization
+    #     # to avoid this issue. See https://github.com/vllm-project/vllm-ascend/pull/884.
+    #     # TODO: when the above issue is fixed, we can uncomment the following lines.
+    #     # from vllm_ascend.utils import enable_custom_op
+    #     # enable_custom_op()
+    #     # set custom ops path
+    #     global _CUSTOM_OP_REGISTERED
+    #     if _CUSTOM_OP_REGISTERED:
+    #         return
+    #     CUR_DIR = os.path.dirname(os.path.realpath(__file__))
+    #     CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+    #                                    "vllm-ascend")
+    #     CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+    #                             "vllm-ascend","op_api","lib")
+    #     if os.path.exists(CUSTOM_OPP_PATH):
+    #         current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
+    #                                                "")
+    #         if current_cust_opp_path:
+    #             os.environ[
+    #                 "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
+    #         else:
+    #             os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+    #         current_ld_path = os.environ.get("LD_LIBRARY_PATH",
+    #                                     "")
+    #         os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
+    #         print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
+    #     _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):

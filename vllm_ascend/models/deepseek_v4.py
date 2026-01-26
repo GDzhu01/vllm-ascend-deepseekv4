@@ -718,6 +718,7 @@ class DeepseekV4Attention(nn.Module):
         else: 
             config.rope_parameters['rope_theta'] = 10000
             rope_groups = ['default']
+            config.rope_parameters['rope_theta'] = 10000
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
             layername=f'{prefix}.attn',
