@@ -60,9 +60,6 @@ from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (AttentionSpec, CrossAttentionSpec,
                                         EncoderOnlyAttentionSpec,
-                                        CompressAttentionSpec,
-                                        Compress4AttentionSpec,
-                                        Compress128AttentionSpec,
                                         FullAttentionSpec, KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
@@ -88,6 +85,9 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata
+from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
+                                        Compress4AttentionSpec,
+                                        Compress128AttentionSpec)
 # yapf conflicts with isort for this block
 # yapf: disable
 from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
