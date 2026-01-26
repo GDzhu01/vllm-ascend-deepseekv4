@@ -2036,27 +2036,12 @@ class NPUModelRunner(GPUModelRunner):
             num_computed_tokens_cpu = (
                 self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs])
 
-            blk_table_list = self.input_batch.block_table.block_tables
-            # TODO: refactor this logic to MultiGroupBlockTable
-            slot_mapping_list = []
-            blk_table_tensor_list = []
-            for i,blk_table in enumerate(blk_table_list):
-                blk_table_tensor_list.append(blk_table.get_device_tensor(num_reqs))
-                # print(f"blk_table.slot_mapping.gpu: {blk_table.slot_mapping.gpu} "
-                #       f"blk_table.slot_mapping.gpu_shape: {blk_table.slot_mapping.gpu.shape}")
-                slot_mapping = blk_table.slot_mapping.gpu  # [:maybe_pcp_full_tokens]?
-                if self.pcp_size == 1:
-                    if self.use_compress:
-                        slot_mapping_list.append(slot_mapping)
-                    else:
-                        pass
-
             for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
-                block_table_tensor = self.input_batch.block_table[  # This is stay for GDNA
-                    kv_cache_group_id].get_device_tensor(num_reqs)
-                slot_mapping = self.input_batch.block_table[
-                    kv_cache_group_id].slot_mapping
+                blk_table = self.input_batch.block_table[kv_cache_group_id]
+                block_table_tensor = blk_table.get_device_tensor(num_reqs)
+                slot_mapping = blk_table.slot_mapping.gpu[:num_tokens]
+
                 long_seq_metadata = None if self.pcp_size * self.dcp_size == 1 else self.pcp_manager.generate_pcp_metadata(
                     num_tokens, self.query_lens, self.input_batch)
                 if long_seq_metadata is not None:
@@ -2077,10 +2062,8 @@ class NPUModelRunner(GPUModelRunner):
                     num_actual_tokens=num_tokens,
                     num_input_tokens=num_tokens,
                     actual_seq_lengths_q=self.actual_seq_lengths_q,
-                    block_table_tensor=None,
-                    block_table_tensor_list=blk_table_tensor_list,
-                    slot_mapping=None,
-                    slot_mapping_list=slot_mapping_list,
+                    block_table_tensor=block_table_tensor,
+                    slot_mapping=slot_mapping,
                     swa_slot_mapping=self.swa_slot_mapping.gpu,
                     swa_block_table=self.swa_block_table.gpu,
                     state_block_table=self.state_block_table.gpu,
@@ -2103,26 +2086,25 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         attn_state = AscendAttentionState.ChunkedPrefill
 
-                # common_metadata = CommonAttentionMetadata(
-                #     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
-                #     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
-                #                                                  1],
-                #     _seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
-                #     seq_lens=self.seq_lens.cpu[:num_reqs],
-                #     num_reqs=num_reqs,
-                #     num_actual_tokens=num_tokens,
-                #     block_table_tensor=block_table_tensor[:num_reqs],
-                #     slot_mapping=slot_mapping.gpu,
-                #     _num_computed_tokens_cpu=num_computed_tokens_cpu,
-                #     max_query_len=max_query_len,
-                #     max_seq_len=seq_lens)
+                common_metadata = CommonAttentionMetadata(
+                    query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
+                    query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
+                                                                 1],
+                    _seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
+                    seq_lens=self.seq_lens.cpu[:num_reqs],
+                    num_reqs=num_reqs,
+                    num_actual_tokens=num_tokens,
+                    block_table_tensor=block_table_tensor[:num_reqs],
+                    slot_mapping=slot_mapping.gpu,
+                    _num_computed_tokens_cpu=num_computed_tokens_cpu,
+                    max_query_len=max_query_len,
+                    max_seq_len=seq_lens)
 
                 for attn_group in self.attn_groups[kv_cache_group_id]:
                     builder = attn_group.get_metadata_builder()
                     if isinstance(builder, GDNAttentionMetadataBuilder):
-                        # attn_metadata_gdn_attention = builder.build_for_cudagraph_capture(
-                        #     common_metadata)
-                        pass
+                        attn_metadata_gdn_attention = builder.build_for_cudagraph_capture(
+                            common_metadata)
                     else:
                         attn_metadata_full_attention = builder.build_for_graph_capture(
                             common_attn_metadata, attn_state)
