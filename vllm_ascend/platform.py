@@ -343,6 +343,12 @@ class NPUPlatform(Platform):
             vllm_config.scheduler_config.enable_chunked_prefill = True
             vllm_config.scheduler_config.SLO_limits_for_dynamic_batch = ascend_config.SLO_limits_for_dynamic_batch
 
+        # For dsv4, we need to patch scheduler temporarily (for kv_state allocation)
+        if hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
+            vllm_config.scheduler_config.scheduler_cls = (
+                "vllm_ascend.core.kv_state_scheduler.KVStateScheduler"
+            )
+
         if vllm_config.kv_transfer_config is not None and \
             cache_config.block_size != parallel_config.cp_kv_cache_interleave_size and \
             parallel_config.decode_context_parallel_size * parallel_config.prefill_context_parallel_size > 1:

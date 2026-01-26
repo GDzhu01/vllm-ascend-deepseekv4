@@ -104,6 +104,7 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
 
+    state_ids: torch.Tensor | None = None
     swa_slot_mapping: torch.Tensor = None
     swa_block_table: torch.Tensor = None
 
