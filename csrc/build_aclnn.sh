@@ -86,12 +86,17 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "moe_dispatch_normal"
     #     "dispatch_layout"
     #     "notify_dispatch"
-    #     "moe_init_routing_custom"
-    #     ""
     # )
-            # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
     CUSTOM_OPS_ARRAY=(
+        # "notify_dispatch"
+        # "dispatch_ffn_combine"
+        # "dispatch_gmm_combine_decode"
+        # "moe_combine_normal"
+        # "moe_dispatch_normal"
+        # "dispatch_layout"
+
+
         "sparse_flash_attention"
         "lightning_indexer"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"

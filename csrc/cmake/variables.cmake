@@ -314,4 +314,7 @@ include_directories(${PROJECT_SOURCE_DIR}/utils/inc)
 
 set(OPS_CATEGORY_LIST
   "attention"
+  "moe"
+  "mc2"
+  "gmm"
 )

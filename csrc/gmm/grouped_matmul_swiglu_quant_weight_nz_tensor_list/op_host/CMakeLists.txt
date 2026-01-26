@@ -68,5 +68,8 @@ if (BUILD_OPEN_PROJECT)
 endif()
 
 if(NOT BUILD_OPS_RTY_KERNEL)
-    add_modules_sources(OPTYPE grouped_matmul_swiglu_quant_weight_nz_tensor_list ACLNNTYPE aclnn_exclude)
+    add_modules_sources(OPTYPE grouped_matmul_swiglu_quant_weight_nz_tensor_list 
+                ACLNNTYPE aclnn_exclude 
+                OP_API_INDEPENDENT ON
+                OP_API_DIR "${CMAKE_CURRENT_LIST_DIR}/../op_api")
 endif()

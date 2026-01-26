@@ -64,5 +64,8 @@ add_ops_compile_options(
 )
 
 if (NOT BUILD_OPS_RTY_KERNEL)
-    add_modules_sources(OPTYPE notify_dispatch ACLNNTYPE aclnn)
+    add_modules_sources(OPTYPE notify_dispatch 
+    ACLNNTYPE aclnn   
+    OP_API_INDEPENDENT ON
+    OP_API_DIR "${CMAKE_CURRENT_LIST_DIR}/../op_api")
 endif()
