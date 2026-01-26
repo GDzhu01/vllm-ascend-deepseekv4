@@ -65,10 +65,7 @@ def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int
     return _get_window_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
 
 
-def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
-    from scipy.linalg import hadamard
-    if hadamard is None:
-        raise ImportError("Please install scipy")
+def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
     x_shape = x.shape
     dim = x.shape[-1]
     x = x.reshape(-1, dim)
@@ -76,13 +73,13 @@ def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
     dim_padded = 2 ** log_dim
     if dim != dim_padded:
         x = F.pad(x, (0, dim_padded - dim))
-    out = F.linear(x, torch.tensor(hadamard(dim_padded, dtype=float), dtype=x.dtype, device=x.device))
-    out = out * scale
+    out = F.linear(x, attn_metadata.hadamard)
+    out = x * scale
     return out[..., :dim].reshape(*x_shape)
 
-def rotate_activation(x: torch.Tensor) -> torch.Tensor:
+def rotate_activation(x: torch.Tensor, attn_metadata) -> torch.Tensor:
     hidden_size = x.size(-1)
-    return hadamard_transform_ref(x, scale=hidden_size ** -0.5)
+    return hadamard_transform_ref(x, scale=hidden_size ** -0.5, attn_metadata=attn_metadata)
 import math
 
 
@@ -356,6 +353,10 @@ class AscendDSAMetadata:
     prefill: Optional[AscendDSAPrefillMetadata] = None
     reshape_cache_event: torch.npu.Event = None
 
+    # metadata for dsv4 indexer
+    indexer_metadata: Optional[torch.Tensor] = None
+
+    hadamard: Optional[torch.Tensor] = None
 
     def __post_init__(self):
         pass
@@ -374,6 +375,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     # Does this backend/builder support ACL Graphs for attention (default: no).
     aclgraph_support: ClassVar[AttentionCGSupport] = \
         AttentionCGSupport.UNIFORM_BATCH
+    indexer_metadata = None
+    hadamard = None
+
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
@@ -453,6 +457,27 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
+        if AscendDSAMetadataBuilder.indexer_metadata is None:
+            AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048), dtype = torch.int32, device=self.device)
+            usedCoreNum = 24 
+            mBaseSize = 256
+            s2BaseSize = 2048
+            AscendDSAMetadataBuilder.indexer_metadata[:3] = torch.tensor([usedCoreNum, mBaseSize, s2BaseSize], dtype=torch.int32, device=self.device)
+
+            # AscendDSAMetadataBuilder.metadata[3:27] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #bN2End 每个核处理数据的BN2结束点
+            # AscendDSAMetadataBuilder.metadata[27:51] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #mEnd 每个核处理数据的M结束点
+            # AscendDSAMetadataBuilder.metadata[51:75] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #s2End 每个核处理数据的S2结束点
+
+        if AscendDSAMetadataBuilder.hadamard is None:
+            hf_config = self.model_config.hf_config
+            if hf_config.model_type == 'deepseek_v4':
+                indexer_head_dim = hf_config.index_head_dim
+                from scipy.linalg import hadamard
+                if hadamard is None:
+                    raise ImportError("Please install scipy")
+                log_dim = math.ceil(math.log2(indexer_head_dim))
+                dim_padded = 2 ** log_dim
+                AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device)
 
     @classmethod
     def get_cudagraph_support(
@@ -642,6 +667,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
             swa_block_table=common_attn_metadata.swa_block_table,
             state_block_table=common_attn_metadata.state_block_table,
+            indexer_metadata=AscendDSAMetadataBuilder.indexer_metadata,
+            hadamard = AscendDSAMetadataBuilder.hadamard,
         )
     
     def build_prefill_metadata(
@@ -1221,7 +1248,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if compressed_kv.numel() == 0:
                 compressed_kv = None
             # elif self.compressor.rotate:
-            #     compressed_kv = rotate_activation(compressed_kv)
+            #     compressed_kv = rotate_activation(compressed_kv, attn_metadata)
             # print(f"prefill {compressed_kv=}, {self.compress_ratio}, {coff=}, {start_pos=}")
 
             # kv_compress_epilog
@@ -1484,7 +1511,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key,
                                                     with_prefill=False)
-                
+
             elif self.compress_ratio == 128:
                 # slot_mapping = attn_metadata.decode.slot_mapping_list[1][:num_decode_tokens]
                 compress_topk_idxs = None
@@ -1515,6 +1542,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 norm_eps = self.compressor_norm_eps,
                 rotary_mode = 2
             )
+            # compressed_kv = torch.randn((min(int(hidden_states.shape[0]//self.compress_ratio), )))
+            # print(f"{compressed_kv.shape}, {compressed_kv.dtype}")
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[0].view(-1, compressed_kv.shape[-1]), 
@@ -1879,7 +1908,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         q_pe = self.rope_single(q_pe, cos, sin)
         q = torch.cat([q_nope, q_pe], dim=-1)
 
-        q = rotate_activation(q)
+        q = rotate_activation(q, attn_metadata)
         
         # c4_indexer_kv_state = torch.zeros(2,128,256).to(torch.float32).to("npu")
         # c4_indexer_score_state = torch.zeros(2,128,256).to(torch.float32).to("npu")
@@ -1919,7 +1948,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         if kv.numel() == 0:
             kv = None
         elif self.indexer.compressor.rotate:
-            kv = rotate_activation(kv)
+            kv = rotate_activation(kv, attn_metadata)
 
         # print(f"indexer kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
 
@@ -1968,15 +1997,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
                             kv_scale.view(-1, kv_scale.shape[-1]))
 
-        metadata = torch.zeros((2048), dtype = torch.int32)
-        usedCoreNum = 24 
-        mBaseSize = 256
-        s2BaseSize = 2048
-        metadata[:3] = torch.tensor([usedCoreNum, mBaseSize, s2BaseSize], dtype=torch.int32)
-        metadata[3:27] = torch.zeros((usedCoreNum), dtype = torch.int32) #bN2End 每个核处理数据的BN2结束点
-        metadata[27:51] = torch.zeros((usedCoreNum), dtype = torch.int32) #mEnd 每个核处理数据的M结束点
-        metadata[51:75] = torch.zeros((usedCoreNum), dtype = torch.int32) #s2End 每个核处理数据的S2结束点
-        metadata = metadata.to(q.device)
+
+
 
         # if kv is not None:
         #     print(f"input info:\n{kv.shape=}\n{kv_scale.shape=}")
@@ -1987,11 +2009,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_lens=}\n{attn_metadata.decode.query_start_loc=}")
 
         if with_prefill:
-            qlens = attn_metadata.prefill.query_start_loc[1:].to(q.device)
+            qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
         else:
-            qlens = attn_metadata.decode.query_start_loc[1:].to(q.device)
+            qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
 
@@ -2004,7 +2026,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,
-            metadata=metadata,
+            metadata=attn_metadata.indexer_metadata,
             query_quant_mode=0,
             key_quant_mode=0,
             layout_query="TND",
@@ -2051,7 +2073,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = torch.cat([q_nope, q_pe], dim=-1)
         
 
-        q = rotate_activation(q)
+        q = rotate_activation(q, attn_metadata)
         kv = self.indexer.compressor(x, start_pos, cos, sin, kv_state)
         if kv is not None:
             torch_npu.npu_scatter_nd_update_(
@@ -2213,7 +2235,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             q_pe = self.rope_single(q_pe, cos, sin)
             q = torch.cat([q_nope, q_pe], dim=-1)
 
-            q = rotate_activation(q)
+            q = rotate_activation(q, attn_metadata)
             kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, kv_state)
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
