@@ -3,7 +3,11 @@
 from collections.abc import Sequence
 
 import vllm
-from vllm.v1.core.kv_cache_coordinator import KVCacheCoordinator
+from vllm.v1.core.kv_cache_coordinator import (KVCacheCoordinator,
+                                               KVCacheCoordinatorNoPrefixCache,
+                                               UnitaryKVCacheCoordinator,
+                                               HybridKVCacheCoordinator,
+                                               )
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
 from vllm.v1.kv_cache_interface import KVCacheConfig
@@ -108,6 +112,8 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
         return num_blocks_to_allocate[1]
 
 
+
+
 def get_kv_cache_coordinator(
     kv_cache_config: KVCacheConfig,
     max_model_len: int,
@@ -119,7 +125,30 @@ def get_kv_cache_coordinator(
     hash_block_size: int,
     metrics_collector: KVCacheMetricsCollector | None = None,
 ) -> KVCacheCoordinator:
-    return KVCacheCoordinatorWithMultiPool(
+    if not enable_caching:
+        return KVCacheCoordinatorNoPrefixCache(
+            kv_cache_config,
+            max_model_len,
+            use_eagle,
+            enable_kv_cache_events,
+            dcp_world_size=dcp_world_size,
+            pcp_world_size=pcp_world_size,
+            hash_block_size=hash_block_size,
+            metrics_collector=metrics_collector,
+        )
+    if len(kv_cache_config.kv_cache_groups) == 1:
+        return UnitaryKVCacheCoordinator(
+            kv_cache_config,
+            max_model_len,
+            use_eagle,
+            enable_caching,
+            enable_kv_cache_events,
+            dcp_world_size=dcp_world_size,
+            pcp_world_size=pcp_world_size,
+            hash_block_size=hash_block_size,
+            metrics_collector=metrics_collector,
+        )
+    return HybridKVCacheCoordinator(
         kv_cache_config,
         max_model_len,
         use_eagle,
@@ -130,6 +159,30 @@ def get_kv_cache_coordinator(
         hash_block_size=hash_block_size,
         metrics_collector=metrics_collector,
     )
+
+
+# def get_kv_cache_coordinator(
+#     kv_cache_config: KVCacheConfig,
+#     max_model_len: int,
+#     use_eagle: bool,
+#     enable_caching: bool,
+#     enable_kv_cache_events: bool,
+#     dcp_world_size: int,
+#     pcp_world_size: int,
+#     hash_block_size: int,
+#     metrics_collector: KVCacheMetricsCollector | None = None,
+# ) -> KVCacheCoordinator:
+#     return KVCacheCoordinatorWithMultiPool(
+#         kv_cache_config,
+#         max_model_len,
+#         use_eagle,
+#         enable_caching,
+#         enable_kv_cache_events,
+#         dcp_world_size=dcp_world_size,
+#         pcp_world_size=pcp_world_size,
+#         hash_block_size=hash_block_size,
+#         metrics_collector=metrics_collector,
+#     )
 
 
 vllm.v1.core.kv_cache_coordinator.get_kv_cache_coordinator = get_kv_cache_coordinator
