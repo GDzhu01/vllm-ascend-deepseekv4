@@ -14,7 +14,7 @@ from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 
-USE_MULTI_BLOCK_POOL = True
+USE_MULTI_BLOCK_POOL = False
 
 
 class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
