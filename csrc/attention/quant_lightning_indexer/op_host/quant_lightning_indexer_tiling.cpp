@@ -189,6 +189,9 @@ ge::graphStatus QLIInfoParser::GetAttrParaInfo()
     if (opParamInfo_.nextTokens != nullptr) {
         OP_LOGI(context_->GetNodeName(), "nextTokens is:%d", *opParamInfo_.nextTokens);
     }
+    if (opParamInfo_.cmpRatio != nullptr) {
+        OP_LOGI(context_->GetNodeName(), "cmpRatio is:%d", *opParamInfo_.cmpRatio);
+    }
     if (opParamInfo_.queryQuantMode != nullptr) {
         OP_LOGI(context_->GetNodeName(), "query_quant_mode mode is:%d", *opParamInfo_.queryQuantMode);
     }
@@ -217,8 +220,11 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
         OP_LOGE(opName_,  "outside of PA, input attr layout_query and input attr layout_key must be the same,"
                   "but now layout_key is %s, layout_query is %s.",
          layout_key.c_str(),  layout_query.c_str()), return ge::GRAPH_FAILED);
-    OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
-                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= 2048, but now sparse_count is %u",
+    // OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
+    //             OP_LOGE(opName_, "input attr sparse_count must > 0 and <= 2048, but now sparse_count is %u",
+    //                    *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
+    OP_CHECK_IF(*opParamInfo_.sparseCount != 512,
+                OP_LOGE(opName_, "input attr sparse_count must be 512, but now sparse_count is %u",
                        *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
     OP_CHECK_IF(!((*opParamInfo_.sparseMode == 0) || (*opParamInfo_.sparseMode == SPARSE_MODE_LOWER)),
                 OP_LOGE(opName_, "input attr sparse_mode only supported 0 or 3, but now sparseMode is %u.",
@@ -229,7 +235,10 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
     OP_CHECK_IF(*opParamInfo_.nextTokens != 9223372036854775807,
                 OP_LOGE(opName_, "input attr nextTokens only supported 9223372036854775807, but now nextTokens is %ld.",
                 *opParamInfo_.nextTokens), return ge::GRAPH_FAILED);
-
+    OP_CHECK_IF((*opParamInfo_.cmpRatio <= 0) || (*opParamInfo_.cmpRatio > 128) 
+                || ((*opParamInfo_.cmpRatio & (*opParamInfo_.cmpRatio - 1)) != 0),
+                OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
+                *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
     OP_CHECK_IF(*opParamInfo_.queryQuantMode != 0, OP_LOGE(opName_, "input attr query_quant_mode only supported 0."),
                return ge::GRAPH_FAILED);
 

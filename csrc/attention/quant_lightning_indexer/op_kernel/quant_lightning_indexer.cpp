@@ -15,9 +15,10 @@
 
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
+#include "quant_lightning_indexer_metadata.h"
 #if (__CCE_AICORE__ == 310)
     #include "arch35/quant_lightning_indexer_kernel.h"
-    #include "arch35/quant_lightning_indexer_metadata.h"
+    
 #else
     #include "arch32/quant_lightning_indexer_kernel.h"
 #endif
@@ -47,10 +48,10 @@ __inline__ __attribute__((always_inline)) __aicore__ void InitMetaData(const __g
         templateClass<QLIType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(QLITilingData, tiling_data_in, tiling);                                  \
         const QLITilingData *__restrict tiling_data = &tiling_data_in;                                       \
-        LiqMetaData *__restrict meta_data = nullptr;                                                         \
-        LiqMetaData metadataTmp;                                                                             \
+        QliMetaData *__restrict meta_data = nullptr;                                                         \
+        QliMetaData metadataTmp;                                                                             \
         if (metadata != nullptr) {                                                                           \
-            InitMetaData<LiqMetaData>(metadata, &metadataTmp);                                               \
+            InitMetaData<QliMetaData>(metadata, &metadataTmp);                                               \
             meta_data = &metadataTmp;                                                                        \
         }                                                                                                    \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \

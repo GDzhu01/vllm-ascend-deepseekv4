@@ -18,7 +18,7 @@
 #define RMS_NORM_H
 
 #include "../compressor_comm.h"
-#include "../compressor_vector_comm.h"
+#include "compressor_vector_comm.h"
 
 namespace Compressor {
 /**
@@ -79,9 +79,6 @@ __aicore__ inline void RmsNorm(const LocalTensor<float> &dstLocal, const LocalTe
     // dstLocal = srcLocal / temp1Local(sum)
     RowDivs(dstLocal, srcLocal, temp1Local, repeatParams);
     PipeBarrier<PIPE_V>();
-
-    // Cast(xSquareLocal, gammaLocal, RoundMode::CAST_NONE, rmsNormParams.col);
-    // PipeBarrier<PIPE_V>();
 
     // dstLocal = dstLocal * gammaLocal
     MatMulVec(dstLocal, dstLocal, gammaLocal, repeatParams);

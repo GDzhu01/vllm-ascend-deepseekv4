@@ -16,7 +16,7 @@
 #ifndef COMPRESSOR_VECTOR_COMM_H
 #define COMPRESSOR_VECTOR_COMM_H
 
-#include "compressor_comm.h"
+#include "../compressor_comm.h"
 namespace Compressor {
 
 
@@ -52,6 +52,7 @@ __aicore__ inline void ColumnSum(const LocalTensor<float> &dstLocal, const Local
     // 行数为1时，直接将srcLocal复制到dstLocal
     if (unlikely(row == 1)) {
         DataCopy(dstLocal, srcLocal, row * col);
+        PipeBarrier<PIPE_V>();
         return;
     }
     for (uint32_t mask = MAX_R << 1; mask > 1; mask >>= 1) {
@@ -101,6 +102,7 @@ __aicore__ inline void ColumnMax(const LocalTensor<float> &dstLocal, const Local
     // 行数为1时，直接将srcLocal复制到dstLocal
     if (unlikely(row == 1)) {
         DataCopy(dstLocal, srcLocal, row * col);
+        PipeBarrier<PIPE_V>();
         return;
     }
     for (uint32_t mask = MAX_R << 1; mask > 1; mask >>= 1) {

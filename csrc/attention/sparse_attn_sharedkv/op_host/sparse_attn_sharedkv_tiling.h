@@ -76,13 +76,13 @@ struct InnerSplitParams {
 constexpr uint32_t Q_INDEX = 0;
 constexpr uint32_t ORI_KV_INDEX = 1;
 constexpr uint32_t CMP_KV_INDEX = 2;
-constexpr uint32_t CMP_SPARSE_INDICES_INDEX = 3;
-constexpr uint32_t ORI_BLOCK_TABLE_INDEX = 4;
-constexpr uint32_t CMP_BLOCK_TABLE_INDEX = 5;
-constexpr uint32_t CU_SEQLENS_Q_INDEX = 6;
-constexpr uint32_t SEQUSED_KV_INDEX = 7;
-constexpr uint32_t SINKS_INDEX = 8;
-constexpr uint32_t METADATA_INDEX = 9;
+constexpr uint32_t CMP_SPARSE_INDICES_INDEX = 4;
+constexpr uint32_t ORI_BLOCK_TABLE_INDEX = 5;
+constexpr uint32_t CMP_BLOCK_TABLE_INDEX = 6;
+constexpr uint32_t CU_SEQLENS_Q_INDEX = 7;
+constexpr uint32_t SEQUSED_KV_INDEX = 11;
+constexpr uint32_t SINKS_INDEX = 12;
+constexpr uint32_t METADATA_INDEX = 13;
 // Outputs Index
 constexpr uint32_t ATTN_OUT_INDEX = 0;
 

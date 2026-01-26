@@ -100,8 +100,13 @@ struct ConstInfo {
     uint32_t headDim = 0;
     uint32_t ropeHeadDim = 0;
     uint32_t cmpRatio = 0;
-    float normEps = 0;
+    float normEps = 1e-6;
     float reciprocalD = 0;
+
+    uint32_t curGroupIdx = 0;
+    uint32_t tailGroupIdx = 0;
+    uint32_t tailBasicBlockNum = 0;
+    uint32_t realDealBasicBlockNum = 0;
 
     // pageAttention
     uint32_t blockNum = 0;
@@ -178,6 +183,7 @@ static constexpr uint32_t BUFFER_SIZE_BYTE_4K = 4096;
 static constexpr uint32_t BUFFER_SIZE_BYTE_8K = 8192;
 static constexpr uint32_t BUFFER_SIZE_BYTE_16K = 16384;
 static constexpr uint32_t BUFFER_SIZE_BYTE_32K = 32768;
+static constexpr uint32_t BUFFER_SIZE_BYTE_64K = 65536;
 
 // BLOCK和REPEAT的字节数
 static constexpr uint64_t BYTE_BLOCK = 32UL;

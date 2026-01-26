@@ -127,16 +127,17 @@ ge::graphStatus CompressorTiling::SetBaseInfo()
         baseParams_->seqSize = context_->x.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_1);
         baseParams_->hiddenSize = context_->x.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_2);
         baseParams_->tokenSize = baseParams_->batchSize * baseParams_->seqSize;
+        baseParams_->cgSize = context_->ropeSin.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_1);
     } else {
         baseParams_->batchSize = context_->kvBlockTable.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_0);
         baseParams_->tokenSize = context_->x.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_0);
         baseParams_->hiddenSize = context_->x.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_1);
+        baseParams_->cgSize = context_->ropeSin.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_0);
     }
     
     baseParams_->headDim = context_->normWeight.shape->GetStorageShape().GetDim(COMPRESSOR_DIM_INDEX_0);
     baseParams_->cmpRatio = static_cast<uint32_t>(*context_->cmpRatio);
     baseParams_->csSize = baseParams_->seqSize - (baseParams_->seqSize %  baseParams_->cmpRatio);
-    baseParams_->cgSize = baseParams_->seqSize / baseParams_->cmpRatio;
     baseParams_->ropeHeadDim = static_cast<uint32_t>(*context_->ropeHeadDim);
     baseParams_->normEps = static_cast<float>(*context_->normEps);
     baseParams_->reciprocalD = 1.0 / baseParams_->headDim;

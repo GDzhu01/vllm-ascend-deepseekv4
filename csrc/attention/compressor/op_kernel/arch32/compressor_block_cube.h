@@ -325,14 +325,18 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
     if (copyLastCmpBlock) {
         uint32_t bStartPos = GetStartPos(constInfo_.batchSize - 1);
         uint32_t bSeqUsed = GetSeqUsed(constInfo_.batchSize - 1);
-        uint32_t len = (bStartPos + bSeqUsed + constInfo_.cmpRatio - 1) % constInfo_.cmpRatio + 1;
-        if (len > bSeqUsed) {
-            len = bSeqUsed;
+        uint32_t copySeqCnt = (bStartPos + bSeqUsed) % constInfo_.cmpRatio;
+        if (copySeqCnt == 0) {
+            copySeqCnt = constInfo_.cmpRatio;
         }
-        uint32_t rOffset = (bStartPos + bSeqUsed - len) % constInfo_.cmpRatio * (32 / sizeof(X_T));
-        uint64_t sIdx = GetTIdxByBatch(constInfo_.batchSize - 1) + bSeqUsed - len;
+        if (bSeqUsed < copySeqCnt) {
+            copySeqCnt = bSeqUsed;
+        }
+        uint64_t tmpSeqId = bSeqUsed- copySeqCnt;
+        uint32_t rOffset = (bStartPos + bSeqUsed - copySeqCnt) % constInfo_.cmpRatio * (32 / sizeof(X_T));
+        uint64_t sIdx = GetTIdxByBatch(constInfo_.batchSize - 1) + tmpSeqId;
         uint64_t gmOffset = sIdx * constInfo_.hSize + hIdx;
-        uint32_t nValue = len;
+        uint32_t nValue = copySeqCnt;
         uint32_t dValue = kBase;
         uint32_t srcDValue = constInfo_.hSize;
         uint32_t dstNzC0Stride = (info.dealTcNum * constInfo_.cmpRatio + 15) / 16 * 16;

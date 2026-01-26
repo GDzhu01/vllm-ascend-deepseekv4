@@ -24,7 +24,7 @@
 #include "quant_lightning_indexer_common.h"
 #include "quant_lightning_indexer_service_vector.h"
 #include "quant_lightning_indexer_service_cube.h"
-#include "quant_lightning_indexer_metadata.h"
+#include "../quant_lightning_indexer_metadata.h"
 
 namespace QLIKernel {
 using namespace QLICommon;
@@ -59,7 +59,7 @@ public:
     __aicore__ inline void Init(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                 __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale, __gm__ uint8_t *actualSeqLengthsQ,
                                 __gm__ uint8_t *actualSeqLengthsK, __gm__ uint8_t *blockTable,
-                                const LiqMetaData *__restrict metadata, __gm__ uint8_t *sparseIndices,
+                                const QliMetaData *__restrict metadata, __gm__ uint8_t *sparseIndices,
                                 __gm__ uint8_t *workspace, const QLITilingData *__restrict tiling, TPipe *tPipe);
     __aicore__ inline void Process();
 
@@ -129,7 +129,7 @@ protected:
     __aicore__ inline void InitActualSeqLen(__gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK);
     // ================================Split Core================================
     __aicore__ inline void SplitCore(uint32_t curCoreIdx, uint32_t &coreNum, QLICommon::SplitCoreInfo &info);
-    __aicore__ inline void SplitCoreByAICPU(uint32_t curCoreIdx, const LiqMetaData *__restrict metadata);
+    __aicore__ inline void SplitCoreByAICPU(uint32_t curCoreIdx, const QliMetaData *__restrict metadata);
     __aicore__ inline uint32_t GetS2BaseBlockNumOnMask(uint32_t s1gIdx, uint32_t actS1Size, uint32_t actS2SizeOrig);
     __aicore__ inline uint32_t GetTotalBaseBlockNum();
     // ================================Process functions================================
@@ -250,7 +250,7 @@ template <typename QLIT>
 __aicore__ inline uint32_t QLIPreload<QLIT>::GetS2BaseBlockNumOnMask(uint32_t s1gIdx, uint32_t actS1Size,
                                                                      uint32_t actS2SizeOrig)
 {
-    if (actS2SizeOrig == 0) {
+    if (actS2SizeOrig / constInfo.cmpRatio == 0) {
         return 0;
     }
     uint32_t s1Offset = constInfo.s1BaseSize * s1gIdx;
@@ -366,9 +366,13 @@ __aicore__ void inline QLIPreload<QLIT>::SplitCore(uint32_t curCoreIdx, uint32_t
 }
 
 template <typename QLIT>
-__aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx, const LiqMetaData *__restrict metadata)
+__aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx, const QliMetaData *__restrict metadata)
 {
     usedCoreNum = metadata->usedCoreNum;
+    if (aiCoreIdx >= usedCoreNum) {
+        return ;
+    }
+
     if (aiCoreIdx != 0) {
         splitCoreInfo.bN2Start = static_cast<uint32_t>(metadata->bN2End[aiCoreIdx - 1]);
         splitCoreInfo.gS1Start = static_cast<uint32_t>(metadata->mEnd[aiCoreIdx - 1]);
@@ -392,7 +396,7 @@ __aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx, c
             // 此时需要使用bIdx获取实际Actal S2来计算出 s2End
             splitCoreInfo.gS1End = splitCoreInfo.gS1End - 1;
             // 需要获取当前的Actaul S2
-            uint32_t bIdx = splitCoreInfo.bN2End % constInfo.kHeadNum;
+            uint32_t bIdx = splitCoreInfo.bN2End / constInfo.kHeadNum;
             uint32_t actS1Size, actS2Size, actS2SizeOrig;
             GetS1S2ActualSeqLen(bIdx, actS1Size, actS2Size, actS2SizeOrig);
             // s2的切块数量
@@ -409,7 +413,7 @@ __aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx, c
             splitCoreInfo.bN2End = splitCoreInfo.bN2End - 1;
 
             // 需要获取当前的Actaul S1 S2
-            uint32_t bIdx = splitCoreInfo.bN2End % constInfo.kHeadNum;
+            uint32_t bIdx = splitCoreInfo.bN2End / constInfo.kHeadNum;
             uint32_t actS1Size, actS2Size, actS2SizeOrig;
             GetS1S2ActualSeqLen(bIdx, actS1Size, actS2Size, actS2SizeOrig);
 
@@ -462,7 +466,7 @@ template <typename QLIT>
 __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                               __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale,
                                               __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
-                                              __gm__ uint8_t *blockTable, const LiqMetaData *__restrict metadata,
+                                              __gm__ uint8_t *blockTable, const QliMetaData *__restrict metadata,
                                               __gm__ uint8_t *sparseIndices, __gm__ uint8_t *workspace,
                                               const QLITilingData *__restrict tiling, TPipe *tPipe)
 {

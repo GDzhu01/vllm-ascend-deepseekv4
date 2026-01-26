@@ -83,7 +83,7 @@ public:
     __aicore__ inline void Init(__gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
                                 __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
                                 __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
+                                __gm__ uint8_t *sequsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
                                 SasMetaData *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace,
                                 const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe);
 
@@ -491,7 +491,7 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::Init(
                                 __gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
                                 __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
                                 __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
+                                __gm__ uint8_t *sequsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
                                 SasMetaData *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace,
                                 const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe)
 {
@@ -782,6 +782,8 @@ template <typename SAST> __aicore__ inline void SparseAttnSharedkvScfa<SAST>::Pr
         if (constInfo.gS1Start != constInfo.gS1End || constInfo.s2Start != constInfo.s2End) {
             constInfo.bN2End += 1;
         }
+    } else if ((constInfo.gS1End != 0) || (constInfo.s2End != 0)){
+        constInfo.bN2End += 1;
     }
 
     for (uint32_t bN2LoopIdx = constInfo.bN2Start; bN2LoopIdx < constInfo.bN2End; bN2LoopIdx++) {

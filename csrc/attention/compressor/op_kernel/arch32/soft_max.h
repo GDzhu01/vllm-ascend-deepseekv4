@@ -18,7 +18,7 @@
 #define SOFT_MAX_H
 
 #include "../compressor_comm.h"
-#include "../compressor_vector_comm.h"
+#include "compressor_vector_comm.h"
 
 namespace Compressor {
 /**
@@ -37,11 +37,13 @@ __aicore__ inline void ColumnSoftMax(const LocalTensor<float> &dstLocal, const L
     uint32_t dRemain = col % dtypeMask;
     uint8_t repeatStride = col / FP32_BLOCK_ELEMENT_NUM;
     ColumnMax(shareTmpUb, srcLocal, shareTmpUb, row, col);
+    PipeBarrier<PIPE_V>();
     MatSubVec(dstLocal, srcLocal, shareTmpUb, {row, col, dtypeMask, dLoop, dRemain, repeatStride});
     PipeBarrier<PIPE_V>();
     Exp(dstLocal, dstLocal, row * col);
     PipeBarrier<PIPE_V>();
     ColumnSum(shareTmpUb, dstLocal, shareTmpUb, row, col);
+    PipeBarrier<PIPE_V>();
     MatDivVec(dstLocal, dstLocal, shareTmpUb, {row, col, dtypeMask, dLoop, dRemain, repeatStride});
 }
 

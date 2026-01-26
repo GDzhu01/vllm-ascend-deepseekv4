@@ -47,7 +47,8 @@ __inline__ __attribute__((always_inline)) __aicore__ void InitMetaData(const __g
             meta_data = &metaDataTmp;                                                             \
         }                                                                                         \
         op.Init(query, oriKV, cmpKV, cmpSparseIndices, oriBlockTable, cmpBlockTable, cuSeqlensQ,  \
-                seqUsedKV, sinks, meta_data, attentionOut, user, tiling_data, tiling, &tPipe);     \
+                seqUsedQ, seqUsedKV, sinks, meta_data, attentionOut, user, tiling_data, tiling,   \
+                &tPipe);                                                                          \
         op.Process();                                                                             \
     } while (0)
 
@@ -55,10 +56,12 @@ __inline__ __attribute__((always_inline)) __aicore__ void InitMetaData(const __g
 template<int FLASH_DECODE, int LAYOUT_T, int KV_LAYOUT_T, int TEMPLATE_MODE>
  __global__ __aicore__ void
 sparse_attn_sharedkv(__gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
-                       __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
-                       __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                       __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
-                       __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut,
+                       __gm__ uint8_t *oriSparseIndices, __gm__ uint8_t *cmpSparseIndices,
+                       __gm__ uint8_t* oriBlockTable, __gm__ uint8_t* cmpBlockTable,
+                       __gm__ uint8_t *cuSeqlensQ, __gm__ uint8_t *cuSeqlensOriKv,
+ 	                   __gm__ uint8_t *cuSeqlensCmpKv, __gm__ uint8_t *seqUsedQ,
+                       __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks, __gm__ uint8_t *metadata,
+                       __gm__ uint8_t *attentionOut, __gm__ uint8_t *softmax_lse,
                        __gm__ uint8_t *workspace, __gm__ uint8_t *tiling)
 {
     KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);

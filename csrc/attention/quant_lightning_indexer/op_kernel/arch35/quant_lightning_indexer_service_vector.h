@@ -80,6 +80,7 @@ protected:
 
     static constexpr uint32_t KSCALE_S_MTE2_EVENT = EVENT_ID7;
     static constexpr uint32_t MTE3_MTE2_EVENT = EVENT_ID0;
+    static constexpr uint32_t V_MTE2_EVENT = EVENT_ID7;
 
 private:
     __aicore__ inline void GetKeyScale(const QLICommon::RunInfo &runInfo, LocalTensor<float> &kScaleUB,
@@ -118,6 +119,9 @@ private:
 
     TBuf<TPosition::VECCALC> topkValueBuf_;
     LocalTensor<uint32_t> topkValueLocal_;
+
+    TBuf<TPosition::VECCALC> outInvalidBuf_;
+    LocalTensor<int32_t> outInvalidLocal_; 
 
     int32_t blockId_ = -1;
     // para for vector
@@ -177,6 +181,10 @@ __aicore__ inline void QLIVector<QLIT>::InitBuffers(TPipe *pipe)
 
     pipe->InitBuffer(topkValueBuf_, (topkCount + 64) * sizeof(uint32_t));         // 大小：(512 + 64) * 4 = 2.25KB
     topkValueLocal_ = topkValueBuf_.Get<uint32_t>();
+
+    //刷-1
+    pipe->InitBuffer(outInvalidBuf_, topkCount * sizeof(int32_t));
+    outInvalidLocal_ = outInvalidBuf_.Get<int32_t>();
 }
 
 template <typename QLIT>
@@ -253,9 +261,20 @@ __aicore__ inline void QLIVector<QLIT>::FreeEventID()
 }
 
 template <typename QLIT>
-__aicore__ inline void QLIVector<QLIT>::CleanInvalidOutput(int64_t invalidS1offset)
+__aicore__ inline void QLIVector<QLIT>::CleanInvalidOutput(int64_t invalidS1Offset)
 {
     // init -1 and copy to output
+    Duplicate(outInvalidLocal_, constInfo_.INVALID_IDX, constInfo_.sparseCount);
+
+    SetFlag<HardEvent::V_MTE3>(TOPK_V_MTE3_EVENT);
+    WaitFlag<HardEvent::V_MTE3>(TOPK_V_MTE3_EVENT);
+
+    AscendC::DataCopyParams dataCopyOutParams;
+    dataCopyOutParams.blockCount = 1;
+    dataCopyOutParams.blockLen = constInfo_.sparseCount * sizeof(int32_t);
+    dataCopyOutParams.srcStride = 0;
+    dataCopyOutParams.dstStride = 0;
+    AscendC::DataCopyPad(indiceOutGm[invalidS1Offset], outInvalidLocal_, dataCopyOutParams);
 }
 
 template <typename QLIT>
@@ -442,30 +461,36 @@ __aicore__ inline void QLIVector<QLIT>::ProcessTopK(const QLICommon::RunInfo &in
         uint32_t zero = 0;
         int32_t neg = -1;
         if (constInfo_.attenMaskFlag) {
-            validS2Len = (i + cuRealAcSeq) / static_cast<int32_t>(constInfo_.cmpRatio);
+            validS2Len = ((int32_t)i + cuRealAcSeq) / static_cast<int32_t>(constInfo_.cmpRatio);
         }
 
-        Duplicate(topkInputLocal_[validS2Len / 256 * 256], zero, CeilAlign(validS2Len, 256) - validS2Len / 256 * 256);
-        copyInParams.blockLen = validS2Len * sizeof(SCORE_T); // byte
-        uint8_t rightPad = CeilAlign(validS2Len, 8) - validS2Len;
-        AscendC::DataCopyPadExtParams<SCORE_T> padParams{true, 0, rightPad, 0};
-        SetFlag<HardEvent::V_MTE2>(1);
-        WaitFlag<HardEvent::V_MTE2>(1);
-        AscendC::DataCopyPad(topkInputLocal_, scoreGm[rowIdx * CeilAlign(constInfo_.kSeqSize, s2BaseSize_)], copyInParams, padParams);
-        SetFlag<HardEvent::MTE2_V>(TOPK_MTE2_V_EVENT);
-        WaitFlag<HardEvent::MTE2_V>(TOPK_MTE2_V_EVENT);
-        WaitFlag<HardEvent::MTE3_V>(TOPK_MTE3_V_EVENT);
-        if (CeilAlign(validS2Len, 256) >= topkCount) {
-            topk_(topkIndexLocal_, topkValueLocal_, topkInputLocal_, CeilAlign(validS2Len, 256));
+        if (validS2Len > 0) {
+            Duplicate(topkInputLocal_[validS2Len / 256 * 256], zero, CeilAlign(validS2Len, 256) - validS2Len / 256 * 256);
+            copyInParams.blockLen = validS2Len * sizeof(SCORE_T); // byte
+            uint8_t rightPad = CeilAlign(validS2Len, 8) - validS2Len;
+            AscendC::DataCopyPadExtParams<SCORE_T> padParams{true, 0, rightPad, 0};
+            SetFlag<HardEvent::V_MTE2>(V_MTE2_EVENT);
+            WaitFlag<HardEvent::V_MTE2>(V_MTE2_EVENT);
+            AscendC::DataCopyPad(topkInputLocal_, scoreGm[rowIdx * CeilAlign(constInfo_.kSeqSize, s2BaseSize_)], copyInParams, padParams);
+            SetFlag<HardEvent::MTE2_V>(TOPK_MTE2_V_EVENT);
+            WaitFlag<HardEvent::MTE2_V>(TOPK_MTE2_V_EVENT);
+            WaitFlag<HardEvent::MTE3_V>(TOPK_MTE3_V_EVENT);
+            if (CeilAlign(validS2Len, 256) >= topkCount) {
+                topk_(topkIndexLocal_, topkValueLocal_, topkInputLocal_, CeilAlign(validS2Len, 256));
+            } else {
+                AscendC::CreateVecIndex(topkIndexLocal_.ReinterpretCast<int32_t>(), (int32_t)zero, validS2Len);
+                AscendC::DataCopy(topkValueLocal_, topkInputLocal_, validS2Len);
+            }
         } else {
-            AscendC::CreateVecIndex(topkIndexLocal_.ReinterpretCast<int32_t>(), (int32_t)zero, validS2Len);
-            AscendC::DataCopy(topkValueLocal_, topkInputLocal_, validS2Len);
+            WaitFlag<HardEvent::MTE3_V>(TOPK_MTE3_V_EVENT);
         }
         
         // indiceOutGm coord (bIdx, s1Idx, (vecId * mCore  + i))
         // auto indiceOutGmOffset = (bIdx * constInfo_.qSeqSize + s1Idx + (vecId * mCore  + i)) * topkCount;
         // indiceOutOffset
-        if (validS2Len < topkCount) {
+        if (validS2Len <= 0) {
+            Duplicate(topkIndexLocal_.ReinterpretCast<int32_t>(), neg, topkCount);
+        } else if (validS2Len < topkCount) {
             uint64_t mask[1];
             mask[0] = ~0;
             mask[0] = mask[0] << (validS2Len % 8);

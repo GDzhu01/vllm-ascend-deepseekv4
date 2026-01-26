@@ -116,11 +116,13 @@ private:
     __aicore__ inline void CopyOutVec1Res(const RunInfo &info, LocalTensor<T> comporessedUb, uint32_t compressTcSize, uint32_t dStartIdx, uint32_t dDealSize);
 
     __aicore__ inline void SplitCoreV2(const Compressor::RunInfo& info);
-    __aicore__ inline void CopyFinalResultOut(const Compressor::RunInfo& info, const LocalTensor<X_T> &cmpKvOutUb, uint32_t dealRowCount);
+    __aicore__ inline void CopyFinalResultOut(const Compressor::RunInfo& info, const LocalTensor<X_T> &cmpKvOutUb,
+        uint32_t startRow, uint32_t dealRowCount);
     __aicore__ inline void DealVec2BaseBlock(const Compressor::RunInfo& info, uint32_t startRow, uint32_t dealRowCount);
     __aicore__ inline void RmsNorm(LocalTensor<T> &vec1ResUb, LocalTensor<X_T> &normWeightUb, LocalTensor<T> &normResUb,
-        const Compressor::RunInfo& info, uint32_t startRow, uint32_t dealRowCount);
-    __aicore__ inline void CalRope(const Compressor::RunInfo& info, LocalTensor<X_T> &outputUb, LocalTensor<T> &normResUb, uint32_t dealRowCount);
+        const Compressor::RunInfo& info, uint32_t dealRowCount);
+    __aicore__ inline void CalRope(const Compressor::RunInfo& info, LocalTensor<X_T> &outputUb, LocalTensor<T> &normResUb,
+        uint32_t startRow, uint32_t dealRowCount);
     __aicore__ inline void SaveLeftFirst(const LocalTensor<T> kvLocal, const LocalTensor<T> scoreLocal,
         const BlockInfo &blockInfo, uint32_t dStartIdx, uint32_t dDealSize);
     __aicore__ inline void SaveState(const LocalTensor<T> kvLocal, const LocalTensor<T> scoreLocal,
@@ -450,7 +452,7 @@ __aicore__ inline void CompressorBlockVector<COMP>::CalcScEndIdx(uint32_t bStart
         if (bIdx == bStart) {
             curActSeqLength_ = GetSeqLength(bIdx);
             curStartPos_ = GetStartPos(bIdx);
-            accScSize += GetScSize();
+            accScSize += GetScSize() - scStart;  // 需要减去本batch已经处理完的sc
             // printf("[GetEndIdx]  bIdx:%u accScSize:%u dealScSize:%u headSize:%u curStartPos_:%u curActSeqLength_:%u \n", bIdx, accScSize, dealScSize, headSize, curStartPos_, curActSeqLength_);
             if (accScSize >= dealScSize) {
                 scEnd = scStart + dealScSize;
@@ -642,7 +644,7 @@ __aicore__ inline void CompressorBlockVector<COMP>::ReadFromCacheState(const Loc
         copyParams.srcStride = (coff * constInfo_.headDim - dDealSize) / (32 / sizeof(T));
         // printf("stateOffset=%d, copyRowCnt=%d, dDealSize=%d, dstStride=%d, srcStride=%d\n",
         //         stateOffset, copyRowCnt, dDealSize, (coff * constInfo_.headDim - dDealSize), (coff * dDealSize - dDealSize));
-        DataCopy(output, state[stateOffset], copyParams);
+        DataCopy(output[copyFinishRowCnt * coff * dDealSize], state[stateOffset], copyParams);
         // AscendC::DumpTensor(state[stateOffset], 120, 64);
         // AscendC::DumpTensor(output, 121, 64);
 
@@ -684,7 +686,7 @@ __aicore__ inline void CompressorBlockVector<COMP>::WriteToCacheState(const Glob
             copyParams.srcStride = (coff * dDealSize - dDealSize) / (32 / sizeof(T));
             // printf("stateOffset=%d, copyRowCnt=%d, dDealSize=%d, dstStride=%d, srcStride=%d\n",
             //     stateOffset, copyRowCnt, dDealSize, (coff * constInfo_.headDim - dDealSize), (coff * dDealSize - dDealSize));
-            DataCopy(state[stateOffset], input, copyParams);
+            DataCopy(state[stateOffset], input[copyFinishRowCnt * coff * dDealSize], copyParams);
             // AscendC::DumpTensor(state[stateOffset], 110, 64);
         }
 
@@ -1163,26 +1165,26 @@ __aicore__ inline void CompressorBlockVector<COMP>::DealVec2BaseBlock(const Comp
     LocalTensor<T> normResUb = tmpBuff2.Get<T>();
     // DumpTensorForDim2(normWeightUb, 202, constInfo_.headDim);
     PipeBarrier<PIPE_V>();
-    RmsNorm(vec1ResUb, normWeightUb, normResUb, info, startRow, dealRowCount);
+    RmsNorm(vec1ResUb, normWeightUb, normResUb, info, dealRowCount);
     // DumpTensorForDim2(normResUb, 203, computeSize);
     inputQue1.FreeTensor(vec1ResUb);
 
     // rope: 只对后RD进行rope; 将normResUb每行前headDim - ropeHeadDim个元素cast到X_T，然后再与rope后的结果组合存到outputUb
     LocalTensor<X_T> outputUb = outputQue1.AllocTensor<X_T>();
     PipeBarrier<PIPE_V>();
-    CalRope(info, outputUb, normResUb, dealRowCount);
+    CalRope(info, outputUb, normResUb, startRow - v2TcStartIdx, dealRowCount);
     PipeBarrier<PIPE_V>();
     // DumpTensorForDim2(outputUb, 204, computeSize);
     // CopyOut
     outputQue1.EnQue(outputUb);
     outputQue1.DeQue<X_T>();
-    CopyFinalResultOut(info, outputUb, dealRowCount);
+    CopyFinalResultOut(info, outputUb, startRow - v2TcStartIdx, dealRowCount);
     outputQue1.FreeTensor(outputUb);
 }
 
 template <typename COMP> 
 __aicore__ inline void CompressorBlockVector<COMP>::RmsNorm(LocalTensor<T> &vec1ResUb, LocalTensor<X_T> &normWeightUb, LocalTensor<T> &normResUb,
-    const Compressor::RunInfo& info, uint32_t startRow, uint32_t dealRowCount)
+    const Compressor::RunInfo& info, uint32_t dealRowCount)
 {
     uint32_t row = 1;
     uint32_t col = constInfo_.headDim;
@@ -1195,7 +1197,7 @@ __aicore__ inline void CompressorBlockVector<COMP>::RmsNorm(LocalTensor<T> &vec1
 
 template <typename COMP> 
 __aicore__ inline void CompressorBlockVector<COMP>::CalRope(const Compressor::RunInfo& info, LocalTensor<X_T> &outputUb,
-    LocalTensor<T> &normResUb, uint32_t dealRowCount)
+    LocalTensor<T> &normResUb, uint32_t startRow, uint32_t dealRowCount)
 {
     uint32_t computeSize = dealRowCount * constInfo_.ropeHeadDim;
     uint32_t normNum = constInfo_.headDim - constInfo_.ropeHeadDim;
@@ -1218,7 +1220,7 @@ __aicore__ inline void CompressorBlockVector<COMP>::CalRope(const Compressor::Ru
     DataCopy(tmpRopeInUb, normResUb[normNum], ropeCopyParams);
 
     // 读取sin cos
-    int64_t SinCosOffset = CalcGlobalScStart(OutputBStartIdx, OutputSStartIdx) * constInfo_.ropeHeadDim;
+    int64_t SinCosOffset = CalcGlobalScStart(OutputBStartIdx, OutputSStartIdx + startRow) * constInfo_.ropeHeadDim;
     // sin与cos各占一半, 实际分别最多只会用8K,总占用16K
     LocalTensor<X_T> sinUb = inputQue1.AllocTensor<X_T>();
     LocalTensor<X_T> cosUb = sinUb[BLOCK_VEC_BASE_BUFFER_SIZE / 2 / sizeof(X_T)];
@@ -1333,9 +1335,10 @@ __aicore__ inline int64_t CompressorBlockVector<COMP>::CalcGlobalScStart(uint32_
 }
 
 template <typename COMP> 
-__aicore__ inline void CompressorBlockVector<COMP>::CopyFinalResultOut(const Compressor::RunInfo& info, const LocalTensor<X_T> &cmpKvOutUb, uint32_t dealRowCount)
+__aicore__ inline void CompressorBlockVector<COMP>::CopyFinalResultOut(const Compressor::RunInfo& info, const LocalTensor<X_T> &cmpKvOutUb,
+    uint32_t startRow, uint32_t dealRowCount)
 {   
-    int64_t outOffset = CalcGlobalScStart(OutputBStartIdx, OutputSStartIdx) * constInfo_.headDim;
+    int64_t outOffset = CalcGlobalScStart(OutputBStartIdx, OutputSStartIdx + startRow) * constInfo_.headDim;
     uint32_t copySize = dealRowCount * constInfo_.headDim;
     DataCopy(cmpKvOutGm_[outOffset], cmpKvOutUb, copySize);
 } 
