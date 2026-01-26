@@ -122,10 +122,10 @@ fi
 
 
 # build custom ops
-cd csrc
-rm -rf build output
-echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"
-bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
+# cd csrc
+# rm -rf build output
+# echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"
+# bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
 
-# install custom ops to vllm_ascend/_cann_ops_custom
-./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
+# # install custom ops to vllm_ascend/_cann_ops_custom
+# ./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
