@@ -29,7 +29,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     CUSTOM_OPS_ARRAY=(
         "sparse_flash_attention"
         "lightning_indexer"
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
@@ -68,7 +68,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     yes | cp "${HCCL_STRUCT_FILE_PATH}" "${ROOT_DIR}/csrc/utils/inc/kernel"
     # for dispatch_ffn_combine
     SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-    TARGET_DIR="$SCRIPT_DIR/dispatch_ffn_combine/op_kernel/utils/"
+    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine/op_kernel/utils/"
     TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
 
     echo "*************************************"
@@ -79,6 +79,13 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
     sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
 
+    # for dispatch_normal and combine_normal
+    TARGET_DIR="$SCRIPT_DIR/mc2/moe_dispatch_normal/op_kernel/utils/"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+
+    TARGET_DIR="$SCRIPT_DIR/mc2/moe_combine_normal/op_kernel/utils/"
+    echo "$TARGET_DIR"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
     # CUSTOM_OPS_ARRAY=(
     #     "dispatch_ffn_combine"
     #     "dispatch_gmm_combine_decode"
@@ -89,17 +96,16 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     # )
 
     CUSTOM_OPS_ARRAY=(
-        # "notify_dispatch"
-        # "dispatch_ffn_combine"
-        # "dispatch_gmm_combine_decode"
-        # "moe_combine_normal"
-        # "moe_dispatch_normal"
-        # "dispatch_layout"
-
+        "notify_dispatch"
+        "dispatch_ffn_combine"
+        "dispatch_gmm_combine_decode"
+        "moe_combine_normal"
+        "moe_dispatch_normal"
+        "dispatch_layout"
 
         "sparse_flash_attention"
         "lightning_indexer"
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
@@ -121,7 +127,7 @@ else
 fi
 
 
-# build custom ops
+# # build custom ops
 # cd csrc
 # rm -rf build output
 # echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"

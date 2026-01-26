@@ -7,43 +7,63 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # ======================================================================================================================
 
-add_ops_compile_options(
+# add_ops_compile_options(
+#         OP_NAME MoeDispatchNormal
+#         OPTIONS --cce-auto-sync=off
+#                 -Wno-deprecated-declarations
+#                 -Werror
+# )
+
+# target_sources(op_host_aclnnInner PRIVATE
+#         moe_dispatch_normal.cpp
+# )
+
+# target_sources(opapi PRIVATE
+#         aclnn_moe_dispatch_normal.cpp
+# )
+
+# if (NOT BUILD_OPEN_PROJECT)
+#     target_sources(aclnn_ops_train PRIVATE
+#         aclnn_moe_dispatch_normal.cpp
+#     )
+
+#     target_sources(aclnn_ops_infer PRIVATE
+#         aclnn_moe_dispatch_normal.cpp
+#     )
+# endif ()
+
+# target_sources(optiling PRIVATE
+#         moe_dispatch_normal_tiling.cpp
+# )
+
+# target_include_directories(optiling PRIVATE
+#         ${CMAKE_CURRENT_SOURCE_DIR}
+# )
+
+# target_sources(opsproto PRIVATE)
+
+# file(GLOB _GMM_Aclnn_header "${CMAKE_CURRENT_SOURCE_DIR}/aclnn_moe_dispatch_normal.h")
+
+# install(FILES ${_GMM_Aclnn_header}
+#         DESTINATION ${ACLNN_INC_INSTALL_DIR} OPTIONAL
+# )
+
+
+
+
+if (BUILD_OPEN_PROJECT)
+    target_sources(op_host_aclnnInner PRIVATE
+        moe_dispatch_normal.cpp
+    )
+    add_ops_compile_options(
         OP_NAME MoeDispatchNormal
         OPTIONS --cce-auto-sync=off
                 -Wno-deprecated-declarations
                 -Werror
-)
-
-target_sources(op_host_aclnnInner PRIVATE
-        moe_dispatch_normal.cpp
-)
-
-target_sources(opapi PRIVATE
-        aclnn_moe_dispatch_normal.cpp
-)
-
-if (NOT BUILD_OPEN_PROJECT)
-    target_sources(aclnn_ops_train PRIVATE
-        aclnn_moe_dispatch_normal.cpp
     )
+endif()
 
-    target_sources(aclnn_ops_infer PRIVATE
-        aclnn_moe_dispatch_normal.cpp
-    )
-endif ()
-
-target_sources(optiling PRIVATE
-        moe_dispatch_normal_tiling.cpp
-)
-
-target_include_directories(optiling PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_sources(opsproto PRIVATE)
-
-file(GLOB _GMM_Aclnn_header "${CMAKE_CURRENT_SOURCE_DIR}/aclnn_moe_dispatch_normal.h")
-
-install(FILES ${_GMM_Aclnn_header}
-        DESTINATION ${ACLNN_INC_INSTALL_DIR} OPTIONAL
-)
+if(NOT BUILD_OPS_RTY_KERNEL)
+    add_modules_sources(OPTYPE moe_dispatch_normal 
+                ACLNNTYPE aclnn_inner)
+endif()

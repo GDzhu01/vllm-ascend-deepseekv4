@@ -54,7 +54,7 @@
 # )
 
 
-
+add_op_to_compiled_list()
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnnExc PRIVATE
         grouped_matmul_swiglu_quant_weight_nz_tensor_list_def.cpp
@@ -69,7 +69,5 @@ endif()
 
 if(NOT BUILD_OPS_RTY_KERNEL)
     add_modules_sources(OPTYPE grouped_matmul_swiglu_quant_weight_nz_tensor_list 
-                ACLNNTYPE aclnn_exclude 
-                OP_API_INDEPENDENT ON
-                OP_API_DIR "${CMAKE_CURRENT_LIST_DIR}/../op_api")
+                ACLNNTYPE aclnn_exclude)
 endif()

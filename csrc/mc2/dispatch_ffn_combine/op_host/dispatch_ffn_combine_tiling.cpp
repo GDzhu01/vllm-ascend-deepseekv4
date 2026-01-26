@@ -17,11 +17,11 @@
 #include "error_log.h"
 #include "hcom_topo_info.h"
 #include "register/op_def_registry.h"
-#include "dispatch_ffn_combine_tiling.h"
+#include "../op_kernel/dispatch_ffn_combine_tiling.h"
 #include <vector>
 #include <map>
 #include <algorithm>
-#include "moe_init_routing_quant_v2/moe_init_routing_quant_v2_tiling.h"
+#include "../op_kernel/moe_init_routing_quant_v2/moe_init_routing_quant_v2_tiling.h"
 
 using namespace AscendC;
 using namespace ge;
