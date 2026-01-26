@@ -94,51 +94,6 @@ def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, of
             return matrix
     return _get_compress_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
 
-def sparse_attn_torch(
-    q: torch.Tensor, 
-    kv: torch.Tensor, 
-    attn_sink: torch.Tensor, 
-    topk_idxs: torch.Tensor, 
-    softmax_scale: float
-) -> torch.Tensor:
-    q= q.unsqueeze(0)
-    kv=kv.unsqueeze(0).squeeze(2)
-    topk_idxs=topk_idxs.to(q.device)
-    # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}, topk_ids.shape: {topk_idxs.shape}')
-    b, m, h, d = q.shape
-    
-    # Prepare indices: clamp -1 to 0 for gathering, but keep mask
-    mask = (topk_idxs == -1)
-    safe_idxs = topk_idxs.clone()
-    safe_idxs[mask] = 0
-    
-    # Gather KV: (b, m, topk, d)
-    batch_indices = torch.arange(b, device=kv.device).view(b, 1, 1)
-    kv_gathered = kv[batch_indices, safe_idxs, :]
-    
-    # Compute Scores (FP32)
-    q_f32 = q.float()
-    kv_f32 = kv_gathered.float()
-    
-    # (b, m, h, 1, d) @ (b, m, 1, topk, d)^T -> (b, m, h, topk)
-    scores = torch.matmul(q_f32.unsqueeze(3), kv_f32.unsqueeze(2).transpose(-1, -2)).squeeze(3)
-    scores = scores * softmax_scale
-    scores = scores.masked_fill(mask.unsqueeze(2), float("-inf"))
-    
-    # Softmax logic with Sink
-    scores_max = torch.max(scores, dim=-1).values # (b, m, h)
-    exp_scores = torch.exp(scores - scores_max.unsqueeze(-1))
-    exp_scores = exp_scores.masked_fill(mask.unsqueeze(2), 0.0)
-    
-    sum_exp = exp_scores.sum(dim=-1)
-    sink_term = torch.exp(attn_sink.float().view(1, 1, h) - scores_max)
-    total_denominator = sum_exp + sink_term
-    
-    # Weighted Sum
-    numerator = torch.matmul(exp_scores.unsqueeze(3), kv_f32.unsqueeze(2)).squeeze(3)
-    output = numerator / total_denominator.unsqueeze(-1)
-    output=output.squeeze(0)
-    return output.to(q.dtype)
 
 def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 128):
     """
@@ -555,7 +510,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         num_reqs = common_attn_metadata.num_reqs
 
         num_computed_tokens_cpu = (self.seq_lens - self.query_lens)
-        reqs_start = self.num_decodes  # prefill_start
+        reqs_start = self.num_decodes 
 
         self.context_lens_cpu = num_computed_tokens_cpu[reqs_start:num_reqs]
         max_context_len_cpu = self.context_lens_cpu.max().item()
@@ -718,18 +673,16 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
 
         # tmp swa_block
-        # [8,129,257]
         prefill_seq_len = self.seq_lens[reqs_start:]
-        # [1,2,3]
         prefill_block = (prefill_seq_len + 128 - 1) // 128
-        # [1,3,6]
         block_cumsum = prefill_block.cumsum(dim=0)
         end = block_cumsum[-1]
         block_id = torch.arange(1, end + 1,
                                 dtype=self.block_table.dtype,
                                 device=self.block_table.device)
         num_prefill = self.seq_lens[reqs_start:].shape[0]
-        # [num_req, max_model_len // block_size]
+
+        #TODO modify max_model_len
         prefill_block_table_shape = (num_prefill, 65536//128)
 
         prefill_swa_block_table = torch.zeros(prefill_block_table_shape,
@@ -1017,7 +970,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             tnd_layout=0
             _,num_tokens,num_heads,rotary_dim = x.shape
-        # print(f'cos.shape: {cos.shape}, x.shape: {x.shape}')
         x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
@@ -1127,10 +1079,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: AscendDSAMetadata,
         kv_state: Tuple,
     ):
-        # if True:
-        #     return torch.rand(hidden_states.shape[0], 32768,
-        #                       dtype=hidden_states.dtype,
-        #                       device=hidden_states.device)
         if self.compress_ratio==1:
             (sliding_window_state) = kv_state
         elif self.compress_ratio==4:
@@ -1139,11 +1087,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.compress_ratio==128:
             (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
 
-        # if torch.distributed.get_rank() == 0 and '.0' in layer_name:
-        #     logger.info(f'>>>>> mla fwd, layer_name={layer_name}, hidden_states={hidden_states.shape}, state_ids={state_ids}, kv_state={kv_state.shape}')
-        # forward_context = get_forward_context()
-        # cos = attn_metadata.prefill.cos
-        # sin = attn_metadata.prefill.sin
         cos = attn_metadata.prefill.cos[layer_name]
         sin = attn_metadata.prefill.sin[layer_name]
         actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
@@ -1157,16 +1100,12 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # mlaprolog
         # q
-        qr = self.q_norm(self.wq_a(hidden_states)) # bs
-        # print(f"attn Inner {qr=}, {qr.mean()=}")
-        q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
-        # print(f"attn Inner {q=}, {q.mean()=}")
+        qr = self.q_norm(self.wq_a(hidden_states)) 
+        q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
         q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
-        # print(f"attn Inner rsqrt {q=}, {q.mean()=}")
         q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         q_pe = self.rope_single(q_pe, cos, sin)
         q = torch.cat([q_nope, q_pe], dim=-1)
-        # print(f"attn Inner {q=}, {q.mean()=}")
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
@@ -1174,7 +1113,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         kv_pe = self.rope_single(kv_pe, cos, sin)
         kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        # print(f"attn Inner {kv=}")
 
         # swa exec kv
         torch_npu.npu_scatter_nd_update_(
@@ -1183,7 +1121,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv
         )
 
-        # topk_idxs = self.get_window_topk_idxs(self.win, bsz, seqlen, start_pos) # ignorn
         if self.compress_ratio > 1:
             if self.compress_ratio == 4:
                 compress_cos = attn_metadata.prefill.c4_cos[layer_name]
@@ -1234,7 +1171,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressed_kv = None
             # elif self.compressor.rotate:
             #     compressed_kv = rotate_activation(compressed_kv, attn_metadata)
-            # print(f"prefill {compressed_kv=}, {self.compress_ratio}, {coff=}, {start_pos=}")
 
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
@@ -1276,7 +1212,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND"
             )
-            # print(f"metadata {metadata=}, {metadata.mean()=}")
         elif self.compress_ratio == 4:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
@@ -1357,32 +1292,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND"
             )
-
-        # torch.save(q, "/home/w00879359/q_test.pt")
-        # torch.save(sliding_window_kv_padded, "/home/w00879359/sliding_window_kv_padded_test.pt")
-        # exit()
-        # attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
-        #     q,
-        #     ori_kv=sliding_window_kv_padded,
-        #     cmp_kv=None if self.compress_ratio == 1 else kv_cache[0],
-        #     cmp_sparse_indices= None if self.compress_ratio == 1 else compress_topk_idxs,
-        #     ori_block_table=attn_metadata.prefill.block_table,
-        #     cmp_block_table=None if self.compress_ratio == 1 else compressed_kv_block_table,
-        #     cu_seqlens_q=actual_seq_lengths_query,
-        #     seqused_kv=actual_seq_lengths_key,
-        #     sinks=self.attn_sink,
-        #     metadata=metadata,
-        #     softmax_scale=self.softmax_scale,
-        #     cmp_ratio=self.compress_ratio, #
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND"
-        # )
-
-        # print(f"attn_output {attn_output=}, {attn_output.shape=}, {attn_output.mean()=}")
         return attn_output
 
     def _forward_decode(
@@ -1393,10 +1302,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: AscendDSAMetadata,
         kv_state: Tuple,
     ):
-        # if True:
-        #     return torch.rand(hidden_states.shape[0], 32768,
-        #                       dtype=hidden_states.dtype,
-        #                       device=hidden_states.device)
         if self.compress_ratio==1:
             (sliding_window_state) = kv_state
         elif self.compress_ratio==4:
@@ -1404,9 +1309,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.compress_ratio==128:
             (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
 
-        # if torch.distributed.get_rank() == 0 and '.0' in layer_name:
-        #     logger.info(f'>>>>> mla fwd, layer_name={layer_name}, hidden_states={hidden_states.shape}, state_ids={state_ids}, kv_state={kv_state.shape}')
-        # forward_context = get_forward_context()
         cos = attn_metadata.decode.cos[layer_name]
         sin = attn_metadata.decode.sin[layer_name]
         actual_seq_lengths_query = attn_metadata.decode.query_start_loc
@@ -1443,7 +1345,6 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if self.compress_ratio > 1:
             if self.compress_ratio == 4:
-                # slot_mapping = attn_metadata.decode.slot_mapping_list[0][:num_decode_tokens]
                 compress_cos = attn_metadata.decode.c4_cos[layer_name]
                 compress_sin = attn_metadata.decode.c4_sin[layer_name]
                 compress_topk_idxs = self.indexer_select_qli(x=hidden_states,
@@ -1460,7 +1361,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     with_prefill=False)
 
             elif self.compress_ratio == 128:
-                # slot_mapping = attn_metadata.decode.slot_mapping_list[1][:num_decode_tokens]
                 compress_topk_idxs = None
                 compress_cos = attn_metadata.decode.c128_cos[layer_name]
                 compress_sin = attn_metadata.decode.c128_sin[layer_name]
@@ -1489,39 +1389,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                 norm_eps = self.compressor_norm_eps,
                 rotary_mode = 2
             )
-            # compressed_kv = torch.randn((min(int(hidden_states.shape[0]//self.compress_ratio), )))
-            # print(f"{compressed_kv.shape}, {compressed_kv.dtype}")
-            # kv_compress_epilog
+
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[0].view(-1, compressed_kv.shape[-1]), 
                             compressed_kv_slot_mapping.unsqueeze(-1),
                             compressed_kv.view(-1, compressed_kv.shape[-1]))
         
-            # compress_kv = compress_kernal(kv, self.wkv, self.wgate, kv_state[1], kv_state[2], self.ape, 
-            #                 self.kv_norm, self.compress_sin, self.compress_cos, state_ids, 
-            #                 state_ids, actual_seq_lengths_query, actual_seq_lengths_key,
-            #                 start_pos, self.rope_head_dim, self.compress_ratio, self.overlap+1,
-            #                 self.eps)
-            # kv_compress_epilog_kernal(compress_kv, slot_mapping, kv_cache[0])
-
-        # attn_output = torch.ops._C_ascend.npu_sparse_flash_attention(
-        #     query=ql_nope,
-        #     key=kv_cache[0],
-        #     value=kv_cache[0],
-        #     sparse_indices=topk_indices,
-        #     scale_value=self.scale,
-        #     sparse_block_size=1,
-        #     block_table=attn_metadata.block_tables,
-        #     actual_seq_lengths_query=actual_seq_lengths_query,
-        #     actual_seq_lengths_kv=actual_seq_lengths_key,
-        #     query_rope=q_pe,
-        #     key_rope=kv_cache[1],
-        #     layout_query="TND",
-        #     layout_kv="PA_BSND",
-        #     sparse_mode=3,
-        # )
-
-        # print(f"=====================> {actual_seq_lengths_query=}, {actual_seq_lengths_key=}, {max_seqlen_q=}, {max_seqlen_kv=}")
         if self.compress_ratio == 1:
             metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
@@ -1638,194 +1511,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             )
         return attn_output 
 
-    def _forward_single_op_prefill(
-        self,
-        hidden_states,
-        kv_cache,
-        attn_metadata,
-        kv_state,
-        layer_name
-    ):     
-        cos = attn_metadata.prefill.cos[layer_name]
-        sin = attn_metadata.prefill.sin[layer_name]
-        
-        seqlen, _ = hidden_states.size()
-        bsz = 1
-        start_pos = 0
-        win = self.window_size
-        ratio = self.compress_ratio
-        # q
-        x = hidden_states
-        qr = q = self.q_norm(self.wq_a(x))
-        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q_dtype = q.dtype
-        q *= torch.rsqrt(q.to(torch.float32).square().mean(-1, keepdim=True) + self.eps)
-        q = q.to(q_dtype)
-        
-        
-        # qq = q.clone()
-        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
-        
-
-        # win kv & topk_idxs
-        kv = self.wkv(x)
-        # print(f'======================kv.shape: {kv.shape} weights.shape: {self.wkv.weight.shape}')
-        kv = self.kv_norm(kv)
-        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim) # 5 512
-        
-        
-        
-        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        kv_pe = self.rope_single(kv_pe, cos, sin)
-        kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        
-
-        # print(f'kv max_abs:{max_abs}, rmse:{rmse}, rel_l2:{rel_l2}, cossim:{cossim}')
-        torch_npu.npu_scatter_nd_update_(
-                        kv_state[0].view(-1, kv.shape[-1]), attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
-                        kv)
-        
-        # print(f"=====================================in attention kv rank : {torch.distributed.get_rank()}, kv is {kv}, mean is {kv.mean()}")
-        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
-        # print(f"=====================================in attention topkidx rank : {torch.distributed.get_rank()}, topkidx is {topk_idxs}")
-        if self.compress_ratio > 1:
-            offset = kv.size(0) if start_pos == 0 else win # TODO zyl
-            if self.indexer is not None:
-                compress_topk_idxs = self.indexer_select_single_op(x, qr, cos, sin,kv_cache, kv_state,attn_metadata,offset)
-            else:
-                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset).to(kv.device)
-            topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
-        topk_idxs = topk_idxs.int()
-        
-        # compress kv & attn
-        if start_pos == 0:
-            # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
-            if self.compress_ratio > 1:
-
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
-                    # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
-                        if self.compress_ratio ==4 and kv_compress.numel()!=0:
-                            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
-                            kv_compress.squeeze(0))
-                        elif self.compress_ratio ==128 and kv_compress.numel()!=0:
-                            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1].unsqueeze(-1),
-                            kv_compress.squeeze(0))
-
-                        kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
-                    
-            # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-            o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
-
-        o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        o_pe = self.rope_single(o_pe, cos, sin, True)
-        o = torch.cat([o_nope, o_pe], dim=-1)
-
-        # o
-        o = o.view(bsz, seqlen, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        o=o.flatten(2).squeeze(0)
-        x = self.wo_b(o)
-        
-        return x
-
-    def indexer_select(
-        self,
-        x: torch.Tensor,
-        qr: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-        attn_metadata: M,
-        kv_state: Tuple,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        actual_seq_lengths_query: torch.Tensor,
-        actual_seq_lengths_key: torch.Tensor,
-        need_gather_q_kv: bool = False,
-    ):
-        start_pos = 0 # (wy): start_pos=0
-        seqlen, _ = x.size()
-        bsz = 1
-        rd = self.rope_head_dim
-        (_, _, _,
-             c4_indexer_kv_state, c4_indexer_score_state) = kv_state
-        # q process in new stream
-        q, _ = self.wq_b(qr)  # [b,s,1536] @ [1536,64*128] = [b,s,64*128]
-        q = q.view(-1, self.n_head, self.head_dim)  # [n_toks,64,128]
-
-        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
-
-        seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-
-        c4_indexer_kv_state = torch.zeros(2,128,c4_indexer_kv_state.shape[-1]).to(torch.float32).to("npu")
-        c4_indexer_score_state = torch.zeros(2,128,256).to(torch.float32).to("npu")
-        state_ids = attn_metadata.state_ids.view(1, 1)
-        coff = 2 if self.compressor_overlap else 1
-        start_pos = actual_seq_lengths_key - seq_lens_q
-        # print(f"================> indexer_select_qli:  {x.shape=},\n {start_pos=},\n {c4_indexer_kv_state.shape=},\n {state_ids=},\n {actual_seq_lengths_query=},\n {actual_seq_lengths_key=}")
-        # print(f"================> indexer_select_qli:  {self.indexcom_ape.shape=},\n {self.rope_head_dim=},\n {self.compress_ratio=},\n {coff=},\n {self.compressor_norm_eps=},\n {self.indexcom_wgate.weight.shape=}")
-        # k = self.compress_forward(x, kv_cache)
-        k = torch.ops.custom.npu_compressor(
-            x,
-            self.indexcom_wkv.weight,
-            self.indexcom_wgate.weight,
-            c4_indexer_kv_state,
-            c4_indexer_score_state,
-            self.indexcom_ape,
-            self.indexcom_norm.weight, 
-            sin.view(-1, sin.shape[-1]),
-            cos.view(-1, cos.shape[-1]),
-            kv_block_table = attn_metadata.state_ids,
-            score_block_table = attn_metadata.state_ids,
-            cu_seqlens = actual_seq_lengths_query,
-            seqused = actual_seq_lengths_key,
-            start_pos = actual_seq_lengths_key - seq_lens_q,
-            rope_head_dim = self.rope_head_dim,
-            cmp_ratio = self.compress_ratio,
-            coff = 0 if self.compressor_overlap else 1,
-            norm_eps = self.compressor_norm_eps,
-            rotary_mode = 2
-        )
-
-        weights, _ = self.weights_proj(x)
-
-        block_table = attn_metadata.block_tables
-
-        torch.ops._C_ascend.indexer_compress_epilog(k, attn_metadata.slot_mapping, kv_cache[1], kv_cache[2])
-
-        soc_version = get_ascend_device_type()
-        dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
-
-        q_shape = q.shape
-
-        q, q_scale = torch_npu.npu_dynamic_quant(q.view(-1, self.head_dim), dst_type=dst_type)
-
-        if soc_version not in {AscendDeviceType.A5}:
-            q_scale = q_scale.to(torch.float16)
-
-        sparse_indices, _ = torch.ops._C_ascend.npu_lightning_indexer(
-            query=q.view(q_shape),
-            key=kv_cache[1],
-            weights=weights,
-            query_dequant_scale=q_scale.view(q_shape[:-1]),
-            key_dequant_scale=kv_cache[2],
-            actual_seq_lengths_query=actual_seq_lengths_query,
-            actual_seq_lengths_key=actual_seq_lengths_key,
-            block_table=block_table,
-            query_quant_mode=0,
-            key_quant_mode=0,
-            sparse_count=512,
-            sparse_mode=3,
-            cmp_ratio=4,
-            layout_query="TND",
-            layout_key="PA_BSND",
-        )
-        return sparse_indices
 
     def indexer_select_qli(
         self,
@@ -1857,9 +1542,6 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         q = rotate_activation(q, attn_metadata)
         
-        # c4_indexer_kv_state = torch.zeros(2,128,256).to(torch.float32).to("npu")
-        # c4_indexer_score_state = torch.zeros(2,128,256).to(torch.float32).to("npu")
-        # state_ids = attn_metadata.state_ids.view(1, 1)
         coff = 2 if self.compressor_overlap else 1
         start_pos = actual_seq_lengths_key - seq_lens_q
         
@@ -1897,19 +1579,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.indexer.compressor.rotate:
             kv = rotate_activation(kv, attn_metadata)
 
-        # print(f"indexer kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
-
-        # if kv is not None:
-        #     torch_npu.npu_scatter_nd_update_(
-        #                     kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
-        #                     kv.view(kv.shape[1], kv.shape[-1]))
         weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
 
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
 
-        # if kv is not None:
-        #     print(f'q kv in indexer: {q.shape=}, {kv.shape=}, {weights.shape=}')
 
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
         if kv is not None:
@@ -1924,8 +1598,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_scale = kv_scale.unsqueeze(-1)
 
         if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
-            # print(f"indexer prefill kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.prefill.slot_mapping_list=}\n{attn_metadata.prefill.block_table_list=}")
-            # print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                             kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
@@ -1934,8 +1606,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                             kv_scale.view(-1, kv_scale.shape[-1]))
         else:
-            # print(f"indexer decode kvcache info:\n{kv_cache[1].shape=}\n{kv_cache[1].dtype=}\n{kv_cache[2].shape=}\n{kv_cache[2].dtype=}\n{attn_metadata.decode.slot_mapping_list=}\n{attn_metadata.decode.block_table_list=}")
-            # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_start_loc=}")
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                             kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
@@ -1944,16 +1614,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                             kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
                             kv_scale.view(-1, kv_scale.shape[-1]))
 
-
-
-
-        # if kv is not None:
-        #     print(f"input info:\n{kv.shape=}\n{kv_scale.shape=}")
-        #     print(f"input info:\n{kv.dtype=}\n{kv_scale.dtype=}")
-        # print(f"input info:\n{q.shape=}\n{weights.shape=}\n{q_scale.shape=}\n{torch.Tensor([q.shape[1]])=}")
-        # print(f"input info:\n{q.dtype=}\n{weights.dtype=}\n{q_scale.dtype=}\n{torch.Tensor([q.shape[1]])=}")
-        # print(f"input info:\n{attn_metadata.prefill.seq_lens=}\n{attn_metadata.prefill.query_lens=}\n{attn_metadata.prefill.query_start_loc=}")
-        # print(f"input info:\n{attn_metadata.decode.seq_lens=}\n{attn_metadata.decode.query_lens=}\n{attn_metadata.decode.query_start_loc=}")
 
         if with_prefill:
             qlens = attn_metadata.prefill.query_start_loc[1:]
@@ -1985,222 +1645,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio = 4,
             return_value = False
         )
-        # return None
-        # topk_idxs [b, s, N, k]
-        # topk_idxs = topk_idxs[..., :math.floor(kvlens.sum() / 4)].unsqueeze(0).squeeze(2)  # TODO 多序列需要修改
-        # mask = topk_idxs == -1
-        # topk_idxs = torch.where(mask, -1, topk_idxs)
-        # if start_pos == 0:
-        #     mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
         return topk_idxs
     
-    def indexer_select_single_op(
-        self,
-        x: torch.Tensor,
-        qr: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        kv_cache,
-        kv_state,
-        attn_metadata,
-        offset=0, # (wy): start_pos=0
-    ):
-        start_pos = 0 # (wy): start_pos=0
-        seqlen, _ = x.size()
-        bsz = 1
-        ratio = self.compress_ratio
-        end_pos = start_pos + seqlen
-        q = self.inderxer_wq_b(qr)
-        # print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
-        q = q.view(bsz, seqlen, self.indexer_heads, self.indexcom_head_dim)
-        ## rope
-
-        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
-        
-
-        q = rotate_activation(q, attn_metadata)
-        kv = self.indexer.compressor(x, start_pos, cos, sin, kv_state)
-        if kv is not None:
-            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
-                            kv.view(kv.shape[1], kv.shape[-1]))
-        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
-        # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-        # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
-        index_score = torch.einsum("bshd,btd->bsht", q, kv.squeeze(2))
-        index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-        if start_pos == 0:
-            mask = torch.arange(seqlen // ratio,device=q.device).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
-            index_score += torch.where(mask, float("-inf"), 0)
-        topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
-        if start_pos == 0:
-            mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
-            topk_idxs = torch.where(mask, -1, topk_idxs + offset)
-        else:
-            topk_idxs += offset
-        return topk_idxs
     
-    def _forward_single_op_decode(
-        self,        
-        hidden_states,
-        kv_cache,
-        attn_metadata,
-        kv_state,
-        layer_name):
-        cos = attn_metadata.decode.cos[layer_name]
-        sin = attn_metadata.decode.sin[layer_name]
-        
-        seqlen, _ = hidden_states.size()
-        bsz = 1
-        start_pos = int(attn_metadata.decode.seq_lens) - 1 
-        end_pos = int(attn_metadata.decode.seq_lens)
-        win = self.window_size
-        ratio = self.compress_ratio
-        x = hidden_states
-        qr = q = self.q_norm(self.wq_a(x))
-        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q_dtype = q.dtype
-        q *= torch.rsqrt(q.to(torch.float32).square().mean(-1, keepdim=True) + self.eps)
-        q = q.to(q_dtype)
-
-        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
-
-        # win kv & topk_idxs
-        kv = self.wkv(x)
-        kv = self.kv_norm(kv)
-        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim) # 5 512
-
-        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        kv_pe = self.rope_single(kv_pe, cos, sin)
-        kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        
-        torch_npu.npu_scatter_nd_update_(
-                        kv_state[0].view(-1, kv.shape[-1]), attn_metadata.decode.swa_slot_mapping.unsqueeze(-1),
-                        kv)
-        
-        topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos).to(kv.device)
-        if self.compress_ratio > 1:
-            offset = kv.size(1) if start_pos == 0 else win
-            if self.indexer is not None:
-                compress_topk_idxs = self.indexer_select_single_op_decode(x, qr, cos, sin,kv_cache, kv_state,attn_metadata,start_pos,offset)
-            else:
-                compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset).to(kv.device)
-            topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
-        topk_idxs = topk_idxs.int()
-        
-        # compress kv & attn
-        if start_pos == 0:
-            # self.kv_cache[:bsz, :min(win, seqlen)] = kv[:, -win:]
-            if self.compress_ratio > 1:
-
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, freqs_cis, kv_state)) is not None:
-                    # print(f'kv.shape: {kv.shape}, kv_compress:{kv_compress.shape}')                    if kv_compress.shape[1]:  # bsnd
-                        if self.compress_ratio ==4:
-                            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[0].unsqueeze(-1),
-                            kv_compress.squeeze(0))
-                        elif self.compress_ratio ==128:
-                            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.prefill.slot_mapping_list[1].unsqueeze(-1),
-                            kv_compress.squeeze(0))
-
-                        kv = torch.cat([kv, kv_compress.squeeze(0)], dim=0)
-                    
-            # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-            o = sparse_attn_torch(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
-        else:
-            swa_kv = kv_state[0][2][:128].unsqueeze(1)  # TODO
-            if self.compress_ratio >1:
-                if (kv_compress := self.compressor(x, start_pos, cos, sin, kv_state)) is not None:
-                    if self.compress_ratio ==4 and kv_compress.numel()!=0:
-                        torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
-                            kv_compress)
-                    elif self.compress_ratio ==128 and kv_compress.numel()!=0:
-                            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, kv_compress.shape[-1]), attn_metadata.decode.slot_mapping_list[1][0].unsqueeze(-1),
-                            kv_compress)
-
-                if self.compress_ratio ==4:
-                    compress_kv = kv_cache[0][1][:end_pos//self.compress_ratio]
-                    swa_kv = torch.cat([swa_kv, compress_kv], dim=0)
-
-
-            
-            o = sparse_attn_torch(q, swa_kv, self.attn_sink, topk_idxs, self.softmax_scale)
-            
-            
-
-
-        o_nope, o_pe = o.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        o_pe = self.rope_single(o_pe, cos, sin, True)
-        o = torch.cat([o_nope, o_pe], dim=-1)
-
-        # o
-        o = o.view(bsz, seqlen, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
-        # print(f"=====================================in attention o2 rank : {torch.distributed.get_rank()}, o2 is {o}")
-        o=o.flatten(2).squeeze(0)
-        x = self.wo_b(o)
-        # print(f"=====================================in attention attn out rank : {torch.distributed.get_rank()}, attn out is {x}")
-        
-        return x
-
-    def indexer_select_single_op_decode(
-            self,
-            x: torch.Tensor,
-            qr: torch.Tensor,
-            cos: torch.Tensor,
-            sin: torch.Tensor,
-            kv_cache,
-            kv_state,
-            attn_metadata,
-            start_pos,
-            offset=0, # (wy): start_pos=0
-        ):
-            start_pos = start_pos # (wy): start_pos=0
-            seqlen, _ = x.size()
-            bsz = 1
-            ratio = self.compress_ratio
-            end_pos = start_pos + seqlen
-            # if self.indexer.compressor.kv_cache is None:
-            #     self.indexer.compressor.kv_cache = self.indexer.kv_cache
-            q = self.inderxer_wq_b(qr)
-            # print(f'qr.shape in indexer: {qr.shape}, q.shape : {q.shape}, self.wq_b.shape: {self.wq_b.weight.shape}')
-            q = q.view(bsz, seqlen, self.indexer_heads, self.indexcom_head_dim)
-            ## rope
-            cos_q, sin_q = cos, sin
-            cos_q = cos_q.view(1, 1, -1, self.rope_head_dim)
-            sin_q = sin_q.view(1, 1, -1, self.rope_head_dim)
-
-            q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-            q_pe = self.rope_single(q_pe, cos, sin)
-            q = torch.cat([q_nope, q_pe], dim=-1)
-
-            q = rotate_activation(q, attn_metadata)
-            kv = self.indexer.compressor(x, start_pos, cos_q, sin_q, kv_state)
-            if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
-                                kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping_list[0][0].unsqueeze(-1),
-                                kv.view(kv.shape[1], kv.shape[-1]))
-            weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
-            # We performed QAT here, kv could also use fp8 format, though current implementation uses bf16
-            # print(f'q.shape: {q.shape}, kv.shape: {kv.shape}')
-            kv = kv_cache[1][1][:end_pos//4].unsqueeze(0).squeeze(2)  ## TODO
-            index_score = torch.einsum("bshd,btd->bsht", q, kv)
-            index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-            if start_pos == 0:
-                mask = torch.arange(seqlen // ratio,device=q.device).repeat(seqlen, 1) >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
-                index_score += torch.where(mask, float("-inf"), 0)
-            topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
-            if start_pos == 0:
-                mask = topk_idxs >= torch.arange(1, seqlen + 1,device=q.device).unsqueeze(1) // ratio
-                topk_idxs = torch.where(mask, -1, topk_idxs + offset)
-            else:
-                topk_idxs += offset
-            return topk_idxs

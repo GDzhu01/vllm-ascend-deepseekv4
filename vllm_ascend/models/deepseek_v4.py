@@ -180,7 +180,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
     Returns:
         torch.Tensor: Tensor with rotary embeddings applied.
     """
-    y = x   # (1,1,1,64)
+    y = x
     x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2))) # (1,1,1,32)
     if inverse:
         freqs_cis = freqs_cis.conj()
@@ -188,7 +188,6 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    # print(x.device, freqs_cis.to("npu"))
     x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
     y.copy_(x)
     return y  # 
@@ -461,7 +460,6 @@ class Indexer(nn.Module):
             prefix=f"{prefix}.wq_b",
             return_bias=False,
         )
-        # print(f'self.wq_b: {self.n_heads}, {self.head_dim}')
 
         self.weights_proj = ReplicatedLinear(
             config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
@@ -692,7 +690,6 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wkv",
             return_bias=False,
         )
-        # print(f'self.head_dim: {self.head_dim}')
         self.kv_norm = RMSNorm(self.head_dim, self.norm_eps)
         self.wo_a = ColumnParallelLinear(
             self.n_heads * self.head_dim // self.n_groups,
@@ -718,7 +715,6 @@ class DeepseekV4Attention(nn.Module):
         else: 
             config.rope_parameters['rope_theta'] = 10000
             rope_groups = ['default']
-            config.rope_parameters['rope_theta'] = 10000
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
             layername=f'{prefix}.attn',
@@ -889,23 +885,14 @@ class DeepseekV2DecoderLayer(nn.Module):
     ) -> torch.Tensor:
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"=====================================after hcpre rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}, post is {post}, comb is {comb}")
         hidden_states = self.input_layernorm(hidden_states)
         attn_kwargs = {
             "positions": positions,
             "hidden_states": hidden_states,
             "llama_4_scaling": llama_4_scaling
         }
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"=====================================before attn rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.self_attn(**attn_kwargs)
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"=====================================after attb rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"=====================================after hc_post rank : {torch.distributed.get_rank()}, layer is {self.layer_idx}, hidden_states is {hidden_states}")
-        # Fully Connected
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
         hidden_states = self.post_attention_layernorm(hidden_states)
@@ -997,7 +984,6 @@ class DeepseekV4Model(nn.Module):
         intermediate_tensors: IntermediateTensors | None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
-        # print(f'xxxxxxxxxxxxxxxxxxxxxx input_ids: {input_ids}')
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
@@ -1169,7 +1155,6 @@ class AscendDeepseekV4ForCausalLM(
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
-        # print(f'===================inputid is :{input_ids.cpu()}, rank is :{torch.distributed.get_rank()}')
         hidden_states = self.model(
             input_ids, positions, intermediate_tensors, inputs_embeds
         )
@@ -1243,10 +1228,8 @@ class AscendDeepseekV4ForCausalLM(
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')
-                # print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             if 'model.lm_head.' in name:
                 name = name.replace('model.lm_head.','lm_head.')
-                # print(f'ohhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             if 'embed.' in name and 'embed_token.' not in name:
                 name = name.replace('embed.','embed_tokens.')
             if 'attn' in name and 'self_attn' not in name:
@@ -1263,8 +1246,6 @@ class AscendDeepseekV4ForCausalLM(
             if ".gate.bias" in name:
                 name=name.replace('.gate.bias','.gate.e_score_correction_bias')
 
-            # if 'wq_b' in name:
-            #     print(f'loaded_weight.shape for wq_b: {loaded_weight.shape}')
             if "sink" in name:
                 # Handle attention sinks (distributed across ranks)
                 param = params_dict[name]
