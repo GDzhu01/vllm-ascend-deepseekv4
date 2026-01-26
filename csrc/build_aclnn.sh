@@ -29,6 +29,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     CUSTOM_OPS_ARRAY=(
         "sparse_flash_attention"
         "lightning_indexer"
+        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
@@ -93,6 +94,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     CUSTOM_OPS_ARRAY=(
         "sparse_flash_attention"
         "lightning_indexer"
+        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
