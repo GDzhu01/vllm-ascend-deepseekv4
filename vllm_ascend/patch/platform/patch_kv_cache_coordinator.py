@@ -8,13 +8,13 @@ from vllm.v1.core.kv_cache_coordinator import (HybridKVCacheCoordinator,
                                                UnitaryKVCacheCoordinator)
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
-from vllm.v1.core.single_type_kv_cache_manager import \
-    get_manager_for_kv_cache_spec
 from vllm.v1.kv_cache_interface import KVCacheConfig
 
 from vllm_ascend.core.multi_block_pool import MultiBlockPool
+from vllm_ascend.core.single_type_kv_cache_manager import \
+    get_manager_for_kv_cache_spec
 
-USE_MULTI_BLOCK_POOL = False
+USE_MULTI_BLOCK_POOL = True
 
 
 class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
