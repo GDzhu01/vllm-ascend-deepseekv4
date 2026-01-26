@@ -215,7 +215,7 @@ function(gen_cust_aicpu_json_symbol)
   add_custom_target(merge_aicpu_json ALL DEPENDS ${MERGED_JSON})
   install(
     FILES ${MERGED_JSON}
-    DESTINATION packages/vendors/${VENDOR_NAME}/op_impl/cpu/config
+    DESTINATION packages/vendors/${VENDOR_NAME}_transformer/op_impl/cpu/config
     OPTIONAL
   )
 endfunction()
@@ -268,7 +268,7 @@ function(gen_cust_aicpu_kernel_symbol)
 
   install(
     FILES ${ARM_SO_OUTPUT}
-    DESTINATION packages/vendors/${VENDOR_NAME}/op_impl/cpu/aicpu_kernel/impl
+    DESTINATION packages/vendors/${VENDOR_NAME}_transformer/op_impl/cpu/aicpu_kernel/impl
     OPTIONAL
   )
 endfunction()

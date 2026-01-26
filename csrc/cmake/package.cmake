@@ -62,7 +62,7 @@ function(pack_tiling_sink)
     set(INSTALL_DIR "ops_transformer/built-in/op_impl/ai_core/tbe/op_tiling_device/lib")
   else()
     set(TRANSFORMER_OPMASTER_SO ${BINARY_DIR}/libcust_opmaster.so)
-    set(INSTALL_DIR "packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/op_master_device/lib")
+    set(INSTALL_DIR "packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/op_master_device/lib")
   endif()
   install(CODE "
     if(EXISTS \"${TRANSFORMER_OPMASTER_SO}\")

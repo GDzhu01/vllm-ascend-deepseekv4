@@ -260,7 +260,7 @@ function(add_ops_info_target)
         )
     else()
         install(FILES ${OPS_INFO_JSON}
-                DESTINATION packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/config/${OPINFO_COMPUTE_UNIT} OPTIONAL
+                DESTINATION packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/config/${OPINFO_COMPUTE_UNIT} OPTIONAL
         )
     endif()
 endfunction()
@@ -454,7 +454,7 @@ function(add_bin_compile_target)
     if (ENABLE_BUILT_IN)
         set(_INSTALL_DIR ops_transformer/built-in/op_impl/ai_core/tbe/kernel)
     else()
-        set(_INSTALL_DIR packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/kernel)
+        set(_INSTALL_DIR packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/kernel)
     endif()
     set(_OUT_DIR ${ASCEND_BINARY_OUT_DIR}/${BINARY_COMPUTE_UNIT})
 

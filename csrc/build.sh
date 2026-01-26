@@ -445,12 +445,12 @@ function build_example()
                     vendor_name="custom"
                 fi
                 echo "pkg_mode:${PKG_MODE} vendor_name:${vendor_name}"
-                export CUST_LIBRARY_PATH="${ASCEND_OPP_PATH}/vendors/${VENDOR_NAME}/op_api/lib"     # 仅自定义算子需要
-                export CUST_INCLUDE_PATH="${ASCEND_OPP_PATH}/vendors/${VENDOR_NAME}/op_api/include" # 仅自定义算子需要
+                export CUST_LIBRARY_PATH="${ASCEND_OPP_PATH}/vendors/${vendor_name}_transformer/op_api/lib"     # 仅自定义算子需要
+                export CUST_INCLUDE_PATH="${ASCEND_OPP_PATH}/vendors/${vendor_name}_transformer/op_api/include" # 仅自定义算子需要
                 if [[ -n "${ASCEND_CUSTOM_OPP_PATH}" ]]; then
                     CUST_VENDORS_PATH=$(dirname "${ASCEND_CUSTOM_OPP_PATH%%:*}")
-                    CUST_LIBRARY_PATH="${CUST_VENDORS_PATH}/${VENDOR_NAME}/op_api/lib"
-                    CUST_INCLUDE_PATH="${CUST_VENDORS_PATH}/${VENDOR_NAME}/op_api/include"
+                    CUST_LIBRARY_PATH="${CUST_VENDORS_PATH}/${vendor_name}_transformer/op_api/lib"
+                    CUST_INCLUDE_PATH="${CUST_VENDORS_PATH}/${vendor_name}_transformer/op_api/include"
                 fi
                 ABSOLUTE_MC2_PATH=$(realpath ${BUILD_PATH}/../mc2)
                 ABSOLUTE_EXAMPLES_PATH=$(realpath ${BUILD_PATH}/../examples/mc2)

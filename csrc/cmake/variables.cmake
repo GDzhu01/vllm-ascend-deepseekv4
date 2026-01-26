@@ -47,7 +47,7 @@ if(NOT DEFINED ASCEND_PYTHON_EXECUTABLE)
   set(ASCEND_PYTHON_EXECUTABLE python3 CACHE STRING "")
 endif()
 
-set(BIN_STATIC_INSTALL_DIR          packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/static)
+set(BIN_STATIC_INSTALL_DIR          packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/static)
 if (ENABLE_BUILT_IN)
   set(ACLNN_INC_INSTALL_DIR           ops_transformer/built-in/op_impl/ai_core/tbe/op_api/include/aclnnop)
   set(ACLNN_INC_LEVEL2_INSTALL_DIR    ops_transformer/built-in/op_impl/ai_core/tbe/op_api/include/aclnnop/level2)

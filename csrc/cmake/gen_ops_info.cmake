@@ -42,7 +42,7 @@ endfunction()
 
 ###################################################################################################
 # generate operator dynamic python script for compile, generenate out path ${CMAKE_BINARY_DIR}/tbe,
-# and install to packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/${VENDOR_NAME}_impl/dynamic
+# and install to packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/${VENDOR_NAME}_impl/dynamic
 ###################################################################################################
 function(add_ops_impl_target)
   set(oneValueArgs TARGET OPS_INFO_DIR IMPL_DIR OUT_DIR INSTALL_DIR)
@@ -75,7 +75,7 @@ endfunction()
 ###################################################################################################
 # generate aic-${compute_unit}-ops-info.json from aic-${compute_unit}-ops-info.ini
 # generate outpath: ${CMAKE_BINARY_DIR}/tbe/op_info_cfg/ai_core/${compute_unit}/
-# install path: packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/config/${compute_unit}
+# install path: packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/config/${compute_unit}
 ###################################################################################################
 function(add_ops_info_target)
   set(oneValueArgs TARGET OPS_INFO_DIR COMPUTE_UNIT OUTPUT INSTALL_DIR)
@@ -250,7 +250,7 @@ endfunction()
 ###################################################################################################
 # generate binary_info_config.json
 # generate outpath: ${CMAKE_BINARY_DIR}/binary/${compute_unit}/bin/config
-# install path: packages/vendors/${VENDOR_NAME}/op_impl/ai_core/tbe/kernel/config
+# install path: packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/kernel/config
 ###################################################################################################
 function(gen_binary_info_config_json)
   set(oneValueArgs TARGET BIN_DIR COMPUTE_UNIT)
