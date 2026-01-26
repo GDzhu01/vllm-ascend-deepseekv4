@@ -24,7 +24,26 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     ABSOLUTE_CATLASS_PATH=$(cd "${CATLASS_PATH}" && pwd)
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
-    CUSTOM_OPS="grouped_matmul_swiglu_quant_weight_nz_tensor_list;lightning_indexer;sparse_flash_attention;matmul_allreduce_add_rmsnorm;moe_init_routing_custom;moe_gating_top_k;moe_gating_top_k_hash"
+    # CUSTOM_OPS="grouped_matmul_swiglu_quant_weight_nz_tensor_list;lightning_indexer;sparse_flash_attention;matmul_allreduce_add_rmsnorm;moe_init_routing_custom;moe_gating_top_k;moe_gating_top_k_hash"
+
+    CUSTOM_OPS_ARRAY=(
+        "sparse_flash_attention"
+        "lightning_indexer"
+
+        "moe_init_routing_custom"
+        "moe_gating_top_k"
+        "moe_gating_top_k_hash"
+
+        "compressor"
+        "quant_lightning_indexer"
+        "lightning_indexer_quant_metadata"
+        "sparse_attn_sharedkv"
+        "sparse_attn_sharedkv_metadata"
+
+    )
+
+
+    CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910b"
 elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     # ASCEND910C (A3) series
@@ -69,10 +88,11 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "moe_init_routing_custom"
     #     ""
     # )
+            # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+
     CUSTOM_OPS_ARRAY=(
         "sparse_flash_attention"
         "lightning_indexer"
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
