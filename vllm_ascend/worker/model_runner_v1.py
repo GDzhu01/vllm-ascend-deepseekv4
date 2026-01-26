@@ -362,6 +362,7 @@ class NPUModelRunner(GPUModelRunner):
         self.intermediate_tensors: IntermediateTensors | None = None
         self.reorder_batch_threshold: int | None = None
         self.long_seq_metadata = None
+        self.kv_states: list[tuple[torch.Tensor]] = []
         # Since compressor kernel need PA format input,
         # and write backward blocks instead of overwrite in one block,
         # we need to initialize three blocks and simulate writing backward
@@ -3540,6 +3541,12 @@ class NPUModelRunner(GPUModelRunner):
                 swa_block_table[i][:block_num_in_use]
 
         return swa_slot_mapping, swa_block_table, state_block_table
+    
+    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
+        super()._update_states(scheduler_output)
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            req_id = new_req_data.req_id
+            self.requests[req_id].state_id = new_req_data.state_id
     
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
         super()._update_states(scheduler_output)
