@@ -2095,7 +2095,7 @@ class NPUModelRunner(GPUModelRunner):
                     num_reqs=num_reqs,
                     num_actual_tokens=num_tokens,
                     block_table_tensor=block_table_tensor[:num_reqs],
-                    slot_mapping=slot_mapping.gpu,
+                    slot_mapping=slot_mapping,
                     _num_computed_tokens_cpu=num_computed_tokens_cpu,
                     max_query_len=max_query_len,
                     max_seq_len=seq_lens)
