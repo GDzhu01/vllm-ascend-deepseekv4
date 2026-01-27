@@ -277,6 +277,7 @@ def _select_experts_with_fusion_ops(
         original_scores = scores
         if e_score_correction_bias is not None:
             scores = scores + e_score_correction_bias
+        # tid2eid = None
         if tid2eid is not None: # Note: if hash
             input_ids = get_forward_context().input_ids
             topk_ids = tid2eid[input_ids]

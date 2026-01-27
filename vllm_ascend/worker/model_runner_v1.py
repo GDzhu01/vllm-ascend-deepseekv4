@@ -85,7 +85,7 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
                                          using_paged_attention)
-from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata
+from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata, AscendDSAMetadataBuilder
 from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
                                         Compress4AttentionSpec,
                                         Compress128AttentionSpec)
@@ -1166,6 +1166,9 @@ class NPUModelRunner(GPUModelRunner):
                             num_decode_draft_tokens_cpu=self.
                             num_decode_draft_tokens.cpu[:num_reqs],
                         )
+                if isinstance(builder, AscendDSAMetadataBuilder):
+                    compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                    extra_attn_metadata_args = dict(compress_ratio=compress_ratio)
                 attn_metadata_i = builder.build(
                     common_prefix_len=common_prefix_len,
                     common_attn_metadata=common_attn_metadata,
@@ -2138,12 +2141,16 @@ class NPUModelRunner(GPUModelRunner):
 
                 for attn_group in self.attn_groups[kv_cache_group_id]:
                     builder = attn_group.get_metadata_builder()
+                    extra_attn_metadata_args = {}
                     if isinstance(builder, GDNAttentionMetadataBuilder):
                         attn_metadata_gdn_attention = builder.build_for_cudagraph_capture(
                             common_metadata)
                     else:
+                        if isinstance(builder, AscendDSAMetadataBuilder):
+                            compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                            extra_attn_metadata_args = dict(compress_ratio=compress_ratio)
                         attn_metadata_full_attention = builder.build_for_graph_capture(
-                            common_attn_metadata, attn_state)
+                            common_attn_metadata, attn_state, **extra_attn_metadata_args)
                     for layer_name in kv_cache_group_spec.layer_names:
                         if "linear_attn" in layer_name:
                             attn_metadata[
