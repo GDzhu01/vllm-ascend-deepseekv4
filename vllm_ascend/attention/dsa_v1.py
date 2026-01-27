@@ -1172,7 +1172,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
             start_pos = actual_seq_lengths_key - seq_lens_q
             # compressor
-            compressed_kv = torch.ops.custom.npu_compressor(
+            compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1207,7 +1207,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         sliding_window_kv_padded = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
         if self.compress_ratio == 1:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1224,7 +1224,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=sliding_window_kv_padded,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
@@ -1238,9 +1238,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         elif self.compress_ratio == 4:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1260,7 +1260,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
@@ -1279,9 +1279,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         else:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1300,7 +1300,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
@@ -1318,7 +1318,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         return attn_output
 
     def _forward_decode(
@@ -1395,7 +1395,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
             start_pos = actual_seq_lengths_key - seq_lens_q
             # compressor
-            compressed_kv = torch.ops.custom.npu_compressor(
+            compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1423,7 +1423,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                             compressed_kv.view(-1, compressed_kv.shape[-1]))
         
         if self.compress_ratio == 1:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1441,7 +1441,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 ori_block_table=attn_metadata.decode.state_block_table,
@@ -1455,9 +1455,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         elif self.compress_ratio == 4:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1477,7 +1477,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
@@ -1496,9 +1496,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         else:
-            metadata = torch_npu.npu_sparse_attn_sharedkv_metadata(
+            metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=self.n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.head_dim,
@@ -1517,7 +1517,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 has_ori_kv=(sliding_window_state != None),
                 has_cmp_kv=(self.compress_ratio != 1)
             )
-            attn_output = torch.ops.custom.npu_sparse_attn_sharedkv(
+            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
@@ -1535,7 +1535,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )
+            )[0]
         return attn_output 
 
 
@@ -1579,7 +1579,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
 
-        kv = torch.ops.custom.npu_compressor(
+        kv = torch.ops._C_ascend.compressor(
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
@@ -1651,7 +1651,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
 
-        topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
+        topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,
             key=kv_cache[1],
             weights=weights.to(torch.float16),

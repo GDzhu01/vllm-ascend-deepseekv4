@@ -513,7 +513,7 @@ at::Tensor construct_compressor_output_tensor(const at::Tensor &x, const at::Ten
 
 // 为META设备实现前向接口
 std::tuple<at::Tensor>
-npu_compressor_meta(
+compressor_meta(
     const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
     at::Tensor &kv_state, at::Tensor &score_state,
     const at::Tensor &ape, const at::Tensor &norm_weight,
@@ -523,54 +523,25 @@ npu_compressor_meta(
     const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio,
     int64_t coff, double norm_eps, int64_t rotary_mode)
 {
+    constexpr int64_t VALUE_0 = 0;
+    constexpr int64_t DIM_1 = 1;
+    constexpr int64_t DIM_2 = 2;
+    constexpr int64_t DIM_3 = 3;
     // construct the output tensor
     auto x_dim = x.dim();
-    TORCH_CHECK(x_dim == 2 || x_dim == 3, "x dim num[", x_dim, "] should be 2 or 3");
+    TORCH_CHECK(x_dim == DIM_2 || x_dim == DIM_3, "x dim num[", x_dim, "] should be 2 or 3");
 
     auto norm_weight_dim = norm_weight.dim();
-    TORCH_CHECK(norm_weight_dim == 1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
+    TORCH_CHECK(norm_weight_dim == DIM_1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
 
     auto rope_sin_dim = rope_sin.dim();
     TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
 
-    TORCH_CHECK(cmp_ratio != 0, "cmp_ratio should not be 0");
+    TORCH_CHECK(cmp_ratio != VALUE_0, "cmp_ratio should not be 0");
 
     at::Tensor cmp_kv = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio);
 
     return std::tuple<at::Tensor>(cmp_kv);
-}
-
-
-// 为META设备实现前向接口
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-npu_compressor_functional_meta(
-    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
-    at::Tensor &kv_state, at::Tensor &score_state,
-    const at::Tensor &ape, const at::Tensor &norm_weight,
-    const at::Tensor &rope_sin, const at::Tensor &rope_cos,
-    const c10::optional<at::Tensor> &kv_block_table, const c10::optional<at::Tensor> &score_block_table,
-    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
-    const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio,
-    int64_t coff, double norm_eps, int64_t rotary_mode)
-{
-    // construct the output tensor
-    auto x_dim = x.dim();
-    TORCH_CHECK(x_dim == 2 || x_dim == 3, "x dim num[", x_dim, "] should be 2 or 3");
-
-    auto norm_weight_dim = norm_weight.dim();
-    TORCH_CHECK(norm_weight_dim == 1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
-
-    auto rope_sin_dim = rope_sin.dim();
-    TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
-
-    TORCH_CHECK(cmp_ratio != 0, "cmp_ratio should not be 0");
-
-    at::Tensor cmp_kv = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio);
-
-    at::Tensor kv_state_inplace = kv_state.clone();
-    at::Tensor score_state_inplace = score_state.clone();
-
-    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(cmp_kv, kv_state_inplace, score_state_inplace);
 }
 
 
@@ -632,7 +603,8 @@ std::tuple<at::Tensor, at::Tensor> npu_quant_lightning_indexer_meta(
     return std::tuple<at::Tensor, at::Tensor>(sparse_indices_out, sparse_values_out);
 }
 
-at::Tensor construct_output_tensor(const at::Tensor &q, std::string layout)
+std::tuple<at::Tensor, at::Tensor> construct_output_tensor(const at::Tensor &q, std::string layout,
+    bool return_softmax_lse)
 {
     for (size_t i = 0; i < q.sizes().size(); i++) {
         TORCH_CHECK(q.size(i) > 0,
@@ -643,20 +615,29 @@ at::Tensor construct_output_tensor(const at::Tensor &q, std::string layout)
             q.size(i));
     }
     at::Tensor output = at::empty(q.sizes(), q.options().dtype(q.dtype()));
-
-    return output;
+    at::Tensor softmax_lse;
+    if (return_softmax_lse) {
+        std::vector<int64_t> lse_sizes(q.sizes().begin(), q.sizes().end());
+        lse_sizes.back() = 1;
+        softmax_lse = at::empty(lse_sizes, q.options().dtype(c10::ScalarType::Float));
+    } else {
+        softmax_lse = at::empty({0}, q.options().dtype(c10::ScalarType::Float));
+    }
+    return std::tuple<at::Tensor, at::Tensor>(output, softmax_lse);
 }
 
-at::Tensor npu_sparse_attn_sharedkv_meta(const at::Tensor &q, const c10::optional<at::Tensor> &ori_kv,
-    const c10::optional<at::Tensor> &cmp_kv, const c10::optional<at::Tensor> &cmp_sparse_indices,
-    const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table,
-    const c10::optional<at::Tensor> &cu_seqlens_q, const c10::optional<at::Tensor> &seqused_kv,
+std::tuple<at::Tensor, at::Tensor> npu_sparse_attn_sharedkv_meta(const at::Tensor &q, const c10::optional<at::Tensor> &ori_kv,
+    const c10::optional<at::Tensor> &cmp_kv, const c10::optional<at::Tensor> &ori_sparse_indices,
+    const c10::optional<at::Tensor> &cmp_sparse_indices, const c10::optional<at::Tensor> &ori_block_table,
+    const c10::optional<at::Tensor> &cmp_block_table, const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv, const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q, const c10::optional<at::Tensor> &seqused_kv, 
     const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
     double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, int64_t cmp_mask_mode, int64_t ori_win_left,
-    int64_t ori_win_right, c10::string_view layout_q, c10::string_view layout_kv)
+    int64_t ori_win_right, c10::string_view layout_q, c10::string_view layout_kv, bool return_softmax_lse)
 {
     std::string layout_q_str = std::string(layout_q);
-    at::Tensor output = construct_output_tensor(q, layout_q_str);
+    std::tuple<at::Tensor, at::Tensor> output = construct_output_tensor(q, layout_q_str, return_softmax_lse);
 
     return output;
 }
@@ -690,18 +671,13 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     return output;
 }
 
-at::Tensor npu_lightning_indexer_quant_metadata_meta(
-    int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode,
-    const c10::optional<at::Tensor> &actual_seq_lengths_query, const c10::optional<at::Tensor> &actual_seq_lengths_key, int64_t batch_size,
-    int64_t max_seqlen_q, int64_t max_seqlen_k, const c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count,
-    int64_t sparse_mode, bool is_fd, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio)
+at::Tensor npu_quant_lightning_indexer_metadata_meta(
+    at::Tensor &query, int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode, 
+    const c10::optional<at::Tensor> &actual_seq_lengths_query, const c10::optional<at::Tensor> &actual_seq_lengths_key, int64_t batch_size, 
+    int64_t max_seqlen_q, int64_t max_seqlen_k, const c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, 
+    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio)
 {
-    at::Tensor output;
-    if (actual_seq_lengths_key.has_value()) {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device(actual_seq_lengths_key.value().device()));
-    }else {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device("npu"));
-    }
+    at::Tensor output = torch::empty({1024}, torch::dtype(torch::kInt32).device(query.device()));
     return output;
 }
 
@@ -745,17 +721,15 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("moe_gating_top_k", &vllm_ascend::meta::moe_gating_top_k_meta);
     // Moe_gating_top_k_hash
     ops.impl("moe_gating_top_k_hash", &vllm_ascend::meta::moe_gating_top_k_hash_meta);
-    // npu_compressor
-    ops.impl("npu_compressor", &vllm_ascend::meta::npu_compressor_meta);
-    // npu_compressor_functional
-    ops.impl("npu_compressor_functional", &vllm_ascend::meta::npu_compressor_functional_meta);
+    // compressor
+    ops.impl("compressor", &vllm_ascend::meta::compressor_meta);
     // npu_quant_lightning_indexer
     ops.impl("npu_quant_lightning_indexer", &vllm_ascend::meta::npu_quant_lightning_indexer_meta);
     // npu_sparse_attn_sharedkv
     ops.impl("npu_sparse_attn_sharedkv", &vllm_ascend::meta::npu_sparse_attn_sharedkv_meta);
     // npu_sparse_attn_sharedkv_metadata
     ops.impl("npu_sparse_attn_sharedkv_metadata", &vllm_ascend::meta::npu_sparse_attn_sharedkv_metadata_meta);
-    // npu_lightning_indexer_quant_metadata
-    ops.impl("npu_lightning_indexer_quant_metadata", &vllm_ascend::meta::npu_lightning_indexer_quant_metadata_meta);
+    // npu_quant_lightning_indexer_metadata
+    ops.impl("npu_quant_lightning_indexer_metadata", &vllm_ascend::meta::npu_quant_lightning_indexer_metadata_meta);
 }
 }
