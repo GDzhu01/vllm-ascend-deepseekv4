@@ -434,6 +434,7 @@ std::tuple<at::Tensor,at::Tensor, at::Tensor> npu_add_rms_norm_bias_meta(
     at::Tensor x = at::empty_symint(x1.sym_sizes(), x1.options());
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, rstd, x);
 }
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash_meta(
     const at::Tensor& x,
     int64_t k,

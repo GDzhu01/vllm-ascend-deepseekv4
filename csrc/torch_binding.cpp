@@ -1302,6 +1302,9 @@ std::tuple<at::Tensor,at::Tensor, at::Tensor> npu_add_rms_norm_bias(
     at::Tensor x = at::empty(x1.sizes(), x1.options());
     EXEC_NPU_CMD(aclnnAddRmsNormBias, x1, x2, gamma, beta, epsilon, y, rstd, x);
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, rstd, x);
+}
+
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash(
     const at::Tensor& x,
     int64_t k,

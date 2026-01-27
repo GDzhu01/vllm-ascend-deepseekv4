@@ -108,9 +108,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
-<<<<<<< HEAD
         "add_rms_norm_bias"
-=======
         "moe_gating_top_k_hash"
 
         "compressor"
@@ -119,7 +117,6 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
 
->>>>>>> a2a2e2dd... init model and dsa
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
