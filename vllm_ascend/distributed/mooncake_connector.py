@@ -527,6 +527,8 @@ class KVCacheRecvingThread(threading.Thread):
 
         req_start_time = time.perf_counter()
         src_list, dst_list, length_list = [], [], []
+        c4_length, c128_length, state_length = 0, 0, 0
+        c4_group_id, c128_group_id = 0, 1
         # get group_ids_index of current layer
         for layer_name in local_kv_caches_base_addrs.keys():
             layer_group_idx = self.layer_group_spec_idx[layer_name]
@@ -547,6 +549,11 @@ class KVCacheRecvingThread(threading.Thread):
                         0] * block_len[k]
                     dst = dst_layer_base_addr + remote_block_id[0] * block_len[k]
                     length = block_len[k] * len(local_block_id)
+                    if self.is_dsv4:
+                        if layer_group_idx == c4_group_id:
+                            c4_length += length
+                        elif layer_group_idx == c128_group_id:
+                            c128_length += length
                     src_list.append(src)
                     dst_list.append(dst)
                     length_list.append(length)
@@ -566,15 +573,18 @@ class KVCacheRecvingThread(threading.Thread):
                     src = src_layer_base_addr + local_state_id * state_len[k]
                     dst = dst_layer_base_addr + remote_state_id * state_len[k]
                     length = state_len[k]
+                    state_length += length
                     src_list.append(src)
                     dst_list.append(dst)
                     length_list.append(length)
         
+        total_length = c4_length + c128_length + state_length
         ret = self.engine.batch_transfer_sync_read(session_id, src_list,
                                                    dst_list, length_list)
         if ret < 0:
             logger.error("Mooncake transfer failed for request %s",
                          req_meta["request_id"])
+            c4_length, c128_length, state_length, total_length = 0, 0, 0, 0
             raise RuntimeError(f"Mooncake transfer failed, ret: {ret}")
 
         req_end_time = time.perf_counter()
@@ -583,6 +593,7 @@ class KVCacheRecvingThread(threading.Thread):
             "KV cache transfer for request %s took %.2f ms. local_ip %s local_device_id %s remote_session_id %s",
             request_id, req_transfer_elapsed,
             get_ip(), self.tp_rank, session_id)
+        return total_length, c4_length, c128_length, state_length, req_transfer_elapsed
         
 
     def _transfer_kv_cache(self, req_meta: dict[str, Any]):
