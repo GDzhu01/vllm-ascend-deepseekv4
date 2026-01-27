@@ -412,6 +412,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
+
+        self.compressor_ratio = 1
         if AscendDSAMetadataBuilder.indexer_metadata is None:
             AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048), dtype = torch.int32, device=self.device)
             usedCoreNum = 24 
@@ -555,9 +557,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         common_prefix_len: int,
         common_attn_metadata: AscendCommonAttentionMetadata,
         fast_build: bool = False,
+        **kwargs,
     ) -> AscendDSAMetadata:
         num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc
+
+        self.compressor_ratio =  kwargs.get('compress_ratio', 1)
 
         self.num_decodes, self.num_prefills, self.num_decode_tokens, self.num_prefill_tokens = \
             split_decodes_and_prefills(common_attn_metadata, decode_threshold=self.decode_threshold)
@@ -695,7 +700,19 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             prefill_swa_block_table[i, :prefill_block[i]] = block_id[start_idx:end_idx]
 
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
-        prefill_slot_mapping = self.slot_mapping[tokens_start:]
+
+        # TODO: zyl refactor this for asc scheduling.
+        decode_input_positions = input_positions[:tokens_start]
+        if self.compressor_ratio == 4:
+            mask = ((decode_input_positions+1) % 4) == 0
+            true_count = torch.sum(mask).item()
+        elif self.compressor_ratio == 128:
+            mask = ((decode_input_positions+1) % 128) == 0
+            true_count = torch.sum(mask).item()
+        else:
+            true_count = tokens_start
+
+        prefill_slot_mapping = self.slot_mapping[true_count:]
 
         block_table = self.block_table[reqs_start:, ...]
 
@@ -757,10 +774,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
 
-        decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
-        slot_mapping = self.slot_mapping[:self.num_decode_tokens]
-
-
         decode_input_positions = input_positions
         # c4 rope
         c4_mask = ((decode_input_positions+1) % 4) == 0
@@ -779,6 +792,18 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
         # c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
         c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions},use_cache=True)
+
+
+        # TODO: zyl refactor this for asc scheduling.
+        if self.compressor_ratio == 4:
+            true_count = torch.sum(c4_mask).item()
+        elif self.compressor_ratio == 128:
+            true_count = torch.sum(c128_mask).item()
+        else:
+            true_count = self.num_decode_tokens
+
+        decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
+        slot_mapping = self.slot_mapping[:true_count]
 
         max_seqlen_kv = torch.max(query_start_loc).item()
         max_seqlen_q = torch.max(self.seq_lens[:self.num_decodes]).item()
@@ -823,6 +848,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self,
         common_attn_metadata: AscendCommonAttentionMetadata,
         attn_state: AscendAttentionState = AscendAttentionState.DecodeOnly,
+        **kwargs
     ):
         if attn_state in {
                 AscendAttentionState.DecodeOnly,
@@ -831,6 +857,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             attn_metadata = self.build(
                 common_prefix_len=0,
                 common_attn_metadata=common_attn_metadata,
+                **kwargs,
             )
         else:
             raise NotImplementedError(
@@ -1545,7 +1572,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         coff = 2 if self.compressor_overlap else 1
         start_pos = actual_seq_lengths_key - seq_lens_q
         
-        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+        if with_prefill:
             kv_block_table = attn_metadata.prefill.state_block_table
             score_block_table = attn_metadata.prefill.state_block_table
         else:
@@ -1597,7 +1624,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_scale = kv_scale.to(torch.float16)
                 kv_scale = kv_scale.unsqueeze(-1)
 
-        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+        if with_prefill:
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                             kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
