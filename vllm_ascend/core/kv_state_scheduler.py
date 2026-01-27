@@ -443,6 +443,19 @@ class KVStateScheduler(Scheduler):
                 else:
                     num_encoder_tokens = 0
 
+                if self.kv_state_manager is not None and request.request_id not in self.kv_state_manager.req_to_state_id.keys():
+                    new_state = self.kv_state_manager.allocate_slots(
+                        request,
+                    )
+                    if new_state is None:
+                        # The request cannot be scheduled.
+                        break
+                    # For connector.update_state_after_alloc,
+                    # currently we don't add a state_id in input args,
+                    # instead we record and pass it by Request.
+                    request.state_id = new_state
+                else:
+                    request.state_id = self.kv_state_manager.req_to_state_id[request.request_id]
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens + num_external_computed_tokens,
@@ -455,18 +468,6 @@ class KVStateScheduler(Scheduler):
                 if new_blocks is None:
                     # The request cannot be scheduled.
                     break
-                new_state = None
-                if self.kv_state_manager is not None and request.state_id is None:
-                    new_state = self.kv_state_manager.allocate_slots(
-                        request,
-                    )
-                    if new_state is None:
-                        # The request cannot be scheduled.
-                        break
-                    # For connector.update_state_after_alloc,
-                    # currently we don't add a state_id in input args,
-                    # instead we record and pass it by Request.
-                    request.state_id = new_state
 
                 # KVTransfer: the connector uses this info to determine
                 # if a load is needed. Note that
@@ -642,3 +643,44 @@ class KVStateScheduler(Scheduler):
         if self.kv_state_manager is not None:
             self.kv_state_manager.free(request)
         del self.requests[request.request_id]
+
+    def _update_waiting_for_remote_kv(self, request: Request) -> bool:
+        """
+        KV Connector: check if the request_id is finished_recving.
+
+        The finished_recving_kv_req_ids list is populated
+        on the previous steps()'s update_from_output based
+        on the worker side connector.
+
+        When the kv transfer is ready, we cache the blocks
+        and the request state will be moved back to WAITING from
+        WAITING_FOR_REMOTE_KV.
+        """
+        assert self.connector is not None
+        if request.request_id not in self.finished_recving_kv_req_ids:
+            return False
+
+        if request.request_id in self.failed_recving_kv_req_ids:
+            # Request had KV load failures; num_computed_tokens was already
+            # updated in _update_requests_with_invalid_blocks
+            if request.num_computed_tokens:
+                # Cache any valid computed tokens.
+                self.kv_cache_manager.cache_blocks(request, request.num_computed_tokens)
+            else:
+                # No valid computed tokens, release allocated blocks.
+                # There may be a local cache hit on retry.
+                self.kv_cache_manager.free(request)
+
+            self.failed_recving_kv_req_ids.remove(request.request_id)
+        else:
+            # For deepseek-v4, we assume that we can get all tokens from P-node because we don't use prefix cache and chunked prefill
+            num_computed_tokens = request.num_tokens - 1
+            # This will cache the blocks iff caching is enabled.
+            self.kv_cache_manager.cache_blocks(request, num_computed_tokens)
+
+            # Update the request state for scheduling.
+            request.num_computed_tokens = num_computed_tokens
+
+        # Return that we are ready.
+        self.finished_recving_kv_req_ids.remove(request.request_id)
+        return True
