@@ -86,7 +86,6 @@ from vllm.v1.attention.backends.mla.indexer import (
     DeepseekV32IndexerBackend,
     DeepseekV32IndexerMetadata,
 )
-from vllm.model_executor.models.deepseek_v2 import get_spec_layer_idx_from_weight_name
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 from vllm.v1.worker.workspace import current_workspace_manager
 
@@ -193,6 +192,13 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
     return y  # 
 
 
+def get_spec_layer_idx_from_weight_name(
+    config: DeepseekV2Config | DeepseekV3Config, weight_name: str
+) -> int | None:
+    if weight_name.startswith(f"mtp."):
+        return 0
+    return None
+
 
 class DeepseekV2MLP(nn.Module):
     def __init__(
@@ -250,6 +256,7 @@ class DeepseekV4MoE(nn.Module):
         parallel_config: ParallelConfig,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
+        is_draft_layer: bool = False,
     ):
         super().__init__()
         self.tp_size = get_tensor_model_parallel_world_size()
@@ -314,7 +321,7 @@ class DeepseekV4MoE(nn.Module):
                 prefix=f"{prefix}.shared_experts",
             )
             
-        self.hash = layer_idx < config.n_hash_layers
+        self.hash = layer_idx < config.n_hash_layers and not is_draft_layer
         if self.hash:
             self.gate.tid2eid = nn.Parameter(torch.empty(config.vocab_size, config.n_activated_experts, dtype=torch.int32), requires_grad=False)
             self.gate.e_score_correction_bias = None
@@ -351,7 +358,7 @@ class DeepseekV4MoE(nn.Module):
             n_shared_experts=config.n_shared_experts
             if self.is_fusion_moe_shared_experts_enabled
             else 0,
-            hash=layer_idx<config.n_hash_layers,
+            hash=layer_idx<config.n_hash_layers and not is_draft_layer,
             tid2eid=self.gate.tid2eid
         )
         
@@ -794,6 +801,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         prefix: str,
         config: DeepseekV2Config | None = None,
         topk_indices_buffer: torch.Tensor | None = None,
+        is_draft_layer: bool = False,
     ) -> None:
         super().__init__()
 
@@ -832,6 +840,7 @@ class DeepseekV2DecoderLayer(nn.Module):
                 parallel_config=parallel_config,
                 quant_config=quant_config,
                 prefix=f"{prefix}.mlp",
+                is_draft_layer=is_draft_layer,
             )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=self.norm_eps)
         self.post_attention_layernorm = RMSNorm(
@@ -1214,7 +1223,10 @@ class AscendDeepseekV4ForCausalLM(
         head_start = tp_rank * heads_per_rank
 
         for name, loaded_weight in weights:
-            
+            spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
+            if spec_layer is not None:
+                continue  # skip spec decode layers for main model
+
             # TODO: 
             if not name.startswith('model'):
                 name = f'model.{name}'
@@ -1253,10 +1265,6 @@ class AscendDeepseekV4ForCausalLM(
                 param.data.copy_(narrow_weight)
                 loaded_params.add(name)
                 continue
-
-            spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
-            if spec_layer is not None:
-                continue  # skip spec decode layers for main model
 
             is_fusion_moe_shared_experts_layer = (
                 rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)

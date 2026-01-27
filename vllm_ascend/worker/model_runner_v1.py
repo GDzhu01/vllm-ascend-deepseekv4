@@ -3349,7 +3349,7 @@ class NPUModelRunner(GPUModelRunner):
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype)
             elif isinstance(attn_module, DSAAttention):
-                if layer_id in [0, 1]:
+                if layer_id in [0, 1] or "mtp" in layer_name:
                     self.runner_only_attn_layers.add(layer_name)
                 elif layer_id % 2 == 0:
                     if get_ascend_device_type() == AscendDeviceType.A5:

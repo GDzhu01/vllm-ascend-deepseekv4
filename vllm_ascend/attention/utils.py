@@ -134,7 +134,11 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
             num_input_tokens=self.num_input_tokens,
             prefill_context_parallel_metadata=self.
             prefill_context_parallel_metadata,
-            max_seq_len=self.max_seq_len)
+            max_seq_len=self.max_seq_len,
+            state_ids=self.state_ids,
+            swa_slot_mapping=self.swa_slot_mapping,
+            swa_block_table=self.swa_block_table,
+            state_block_table=self.state_block_table)
 
 
 def filter_chunked_req_indices(
