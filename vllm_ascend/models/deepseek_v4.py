@@ -350,7 +350,7 @@ class DeepseekV4MoE(nn.Module):
             is_sequence_parallel=self.is_sequence_parallel,
             n_shared_experts=config.n_shared_experts
             if self.is_fusion_moe_shared_experts_enabled
-            else None,
+            else 0,
             hash=layer_idx<config.n_hash_layers,
             tid2eid=self.gate.tid2eid
         )
