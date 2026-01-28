@@ -3503,35 +3503,6 @@ class NPUModelRunner(GPUModelRunner):
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
 
-    def batch_get_compressed_pos(
-        self,
-        old: np.ndarray,
-        new: np.ndarray,
-        ratio: int
-    ) -> (np.ndarray, np.ndarray):
-        """
-        多请求批量版：old/new都是np数组，为每个请求独立计算压缩pos
-        :param old: 多请求历史token数，shape=[num_reqs,]
-        :param new: 多请求本次调度token数，shape=[num_reqs,]
-        :param ratio: 压缩比
-        :return: 每个请求对应的压缩position_id列表
-        """
-        assert old.shape == new.shape, "old和new必须同shape"
-        assert ratio >= 1 and isinstance(ratio, int), "压缩比必须是≥1的整数"
-        assert np.all(old >= 0) and np.all(new >= 0), "token数不能为负"
-
-        len_old = old // ratio
-        len_new = (old + new) // ratio
-        l_diff = len_new - len_old
-        res = []
-        res_len = []
-        for i, l in enumerate(l_diff):
-            res.append(np.arange(len_old[i], len_old[i] + l))
-            res_len.append(l)
-        res = np.concatenate(res)
-        res_len = np.array(res_len)
-        return res, res_len
-
     def _compute_swa_meta(
         self,
         state_ids: np.ndarray,
@@ -3607,12 +3578,6 @@ class NPUModelRunner(GPUModelRunner):
                 swa_block_table[i][:block_num_in_use]
 
         return swa_slot_mapping, swa_block_table, state_block_table
-    
-    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
-        super()._update_states(scheduler_output)
-        for new_req_data in scheduler_output.scheduled_new_reqs:
-            req_id = new_req_data.req_id
-            self.requests[req_id].state_id = new_req_data.state_id
     
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
         super()._update_states(scheduler_output)

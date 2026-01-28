@@ -43,7 +43,7 @@ from vllm.lora.request import LoRARequest
 from vllm.sequence import IntermediateTensors
 from vllm.tasks import SupportedTask
 from vllm.utils.mem_constants import GiB_bytes
-from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE, get_dtype_size
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, AsyncModelRunnerOutput,
@@ -268,8 +268,6 @@ class NPUWorker(WorkerBase):
             return 0
         max_num_reqs = self.scheduler_config.max_num_seqs
         head_dim = hf_config.head_dim
-        index_head_dim = hf_config.index_head_dim
-        window_size = hf_config.window_size
         num_layers = hf_config.n_layers
         compress_ratios: list[int] = hf_config.compress_ratios
         num_c4_layers = compress_ratios[:num_layers].count(4)
@@ -279,33 +277,32 @@ class NPUWorker(WorkerBase):
         # Some args that are strongly related to dsv4 attn implementation
         # and can not get from config file
         c4_coff = 2
-        c4_compress_ratio = 4
         c128_coff = 1
-        c128_compress_ratio = 128
-        swa_dtype_size = 2 # torch.bfloat16
-        state_dtype_size = 4 # torch.float32
+
         state_block_multiple = 3
         block_num = (max_num_reqs + 1) * state_block_multiple
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]
-        swa_memory = block_num * block_size * head_dim * swa_dtype_size * num_layers
-        
+        swa_memory = block_num * block_size * head_dim * get_dtype_size(torch.bfloat16) * num_layers
+
         # compress: [args.max_batch_size, coff * compress_ratio, coff * self.head_dim], dtype=torch.float32
+        state_dtype_size = get_dtype_size(torch.float32) # torch.float32
         # C4 compressor memory
-        c4_kv_state = block_num * block_size * c4_coff * head_dim * state_dtype_size
-        c4_score_state = c4_kv_state
-        c4_indexer_kv_state = block_num * block_size * c4_coff * index_head_dim * state_dtype_size
-        c4_indexer_score_state = c4_indexer_kv_state
-        c4_memory = (c4_kv_state + c4_score_state + c4_indexer_kv_state + c4_indexer_score_state) * num_c4_layers
+        c4_kv_state_byte_size = block_num * block_size * c4_coff * head_dim * state_dtype_size
+        c4_score_state_byte_size = c4_kv_state_byte_size
+        c4_indexer_kv_state_byte_size = block_num * block_size * c4_coff * hf_config.index_head_dim * state_dtype_size
+        c4_indexer_score_state_byte_size = c4_indexer_kv_state_byte_size
+        c4_memory = (c4_kv_state_byte_size + c4_score_state_byte_size + \
+            c4_indexer_kv_state_byte_size + c4_indexer_score_state_byte_size) * num_c4_layers
         # C128 compressor memory
-        c128_kv_state = block_num * block_size * c128_coff * head_dim * state_dtype_size
-        c128_score_state = c128_kv_state
-        c128_memory = (c128_kv_state + c128_score_state) * num_c128_layers
+        c128_kv_state_byte_size = block_num * block_size * c128_coff * head_dim * state_dtype_size
+        c128_score_state_byte_size = c128_kv_state_byte_size
+        c128_memory = (c128_kv_state_byte_size + c128_score_state_byte_size) * num_c128_layers
 
         total_fix_memory = swa_memory + c4_memory + c128_memory
         logger.info(f'Preallocate {total_fix_memory} Bytes memory for swa and states.')
  
-        return swa_memory + c4_memory + c128_memory
+        return total_fix_memory
 
     @torch.inference_mode()
     def determine_available_memory(self) -> int:
