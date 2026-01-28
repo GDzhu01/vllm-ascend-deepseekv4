@@ -226,6 +226,7 @@ jobs:
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_prefix_caching.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_quantization.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_qwen3_moe.py
+
           # This test is broken, fix me
           #pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_shared_expert_dp.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_single_request_aclgraph.py
