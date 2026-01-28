@@ -30,6 +30,9 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
         # TODO(maoqi): This is not used anymore
         # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
+
+        "add_rms_norm_bias"
+
         "moe_init_routing_custom"
         "moe_gating_top_k"
         "moe_gating_top_k_hash"
@@ -39,6 +42,10 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
         "lightning_indexer_quant_metadata"
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
+
+        "hc_pre_sinkhorn"
+        "hc_pre_inv_rms"
+        "hc_post"
 
     )
 
@@ -93,7 +100,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "dispatch_layout"
     #     "notify_dispatch"
     # )
-
+    # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
     CUSTOM_OPS_ARRAY=(
         "notify_dispatch"
         "dispatch_ffn_combine"
@@ -104,11 +111,12 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
 
         "sparse_flash_attention"
         "lightning_indexer"
-        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+
+
+        "add_rms_norm_bias"
 
         "moe_init_routing_custom"
         "moe_gating_top_k"
-        "add_rms_norm_bias"
         "moe_gating_top_k_hash"
 
         "compressor"
@@ -116,6 +124,10 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "lightning_indexer_quant_metadata"
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
+
+        "hc_pre_sinkhorn"
+        "hc_pre_inv_rms"
+        "hc_post"
 
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
@@ -135,3 +147,4 @@ bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
 
 # install custom ops to vllm_ascend/_cann_ops_custom
 ./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
+exit 0
