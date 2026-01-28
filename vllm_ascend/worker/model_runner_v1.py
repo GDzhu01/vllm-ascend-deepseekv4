@@ -381,7 +381,7 @@ class NPUModelRunner(GPUModelRunner):
         self.swa_slot_mapping = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
         self.swa_block_table = self._make_buffer((self.max_num_reqs, self.state_block_multiple), dtype=torch.int32)
         self.state_block_table = self._make_buffer(
-            (self.max_num_reqs, cdiv(self.max_num_tokens, self.block_size)),
+            (self.max_num_reqs, cdiv(self.model_config.max_model_len, self.block_size)),
             dtype=torch.int32,
         )
 
@@ -3586,7 +3586,7 @@ class NPUModelRunner(GPUModelRunner):
         query_end_index = query_lens.cumsum() - 1
         query_end_position = positions[query_end_index]
         swa_block_table = np.zeros([num_reqs, block_multiple], dtype=np.int32)
-        state_block_table = np.zeros([num_reqs, cdiv(self.max_num_tokens, block_size)], dtype=np.int32)
+        state_block_table = np.zeros([num_reqs, cdiv(self.model_config.max_model_len, block_size)], dtype=np.int32)
         for i in range(num_reqs):
             base_block = state_ids[i] * block_multiple
             block_num_total = query_end_position[i] // block_size + 1
