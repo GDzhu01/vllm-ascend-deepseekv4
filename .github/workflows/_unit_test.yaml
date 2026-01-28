@@ -50,10 +50,16 @@ jobs:
           VLLM_TARGET_DEVICE=empty python3 -m pip install . --extra-index https://download.pytorch.org/whl/cpu/
           python3 -m pip uninstall -y triton
 
-      - name: Checkout vllm-project/vllm-ascend repo
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+      - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
         uses: actions/checkout@v6
 
-      - name: Install vllm-project/vllm-ascend
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
         run: |
           export PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/devlib
