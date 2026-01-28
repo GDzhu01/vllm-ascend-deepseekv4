@@ -125,11 +125,6 @@ def get_cos_and_sin_dsa(
             if group_name not in registered_groups:
                 continue
             
-            #  to device
-            if static_cos.device != pos_tensor.device:
-                static_cos = static_cos.to(pos_tensor.device)
-                static_sin = static_sin.to(pos_tensor.device)
-            
             curr_cos = static_cos[pos_tensor]
             curr_sin = static_sin[pos_tensor]
             
