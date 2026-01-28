@@ -18,9 +18,15 @@ jobs:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-cpu
     env:
       GOPROXY: https://goproxy.io,direct
-      GITHUB_WORKSPACE: /__w/vllm-ascend/vllm-ascend
+      GITHUB_WORKSPACE: /__w/vllm-ascend/vllm-ascend-deepseekv4
     steps:
-    - name: Checkout vllm-project/vllm-ascend repo
+    - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+    - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
       uses: actions/checkout@v6
 
     # With problem matchers in a container, the output of $GITHUB_WORKSPACE and ${{ github.workspace }} are different.
@@ -43,9 +49,9 @@ jobs:
       working-directory: vllm-empty
       run: |
         VLLM_TARGET_DEVICE=empty python3 -m pip install . --extra-index https://download.pytorch.org/whl/cpu/
-    - name: Install vllm-ascend dev
+    - name: Install vllm-ascend-deepseekv4 dev
       run: |
-        git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
+        git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend-deepseekv4
         pip install -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
     - name: Run pre-commit
       env:
