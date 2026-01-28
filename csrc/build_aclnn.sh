@@ -139,12 +139,45 @@ else
 fi
 
 
-# build custom ops
-cd csrc
-rm -rf build output
-echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"
-bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
+# # build custom ops
+# cd csrc
+# rm -rf build output build_out
+# echo "building custom ops $CUSTOM_OPS for $SOC_VERSION"
+# bash build.sh --pkg --ops="$CUSTOM_OPS" --soc="$SOC_ARG"
 
-# install custom ops to vllm_ascend/_cann_ops_custom
-./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
-exit 0
+# # install custom ops to vllm_ascend/_cann_ops_custom
+# ./build/cann-ops-transformer*.run --install-path=$ROOT_DIR/vllm_ascend/_cann_ops_custom
+
+
+(
+  set -euo pipefail
+
+  cd csrc
+  rm -rf -- build output build_out
+
+  : "${ROOT_DIR:?ROOT_DIR is not set}"
+  : "${CUSTOM_OPS:?CUSTOM_OPS is not set}"
+  : "${SOC_VERSION:?SOC_VERSION is not set}"
+  : "${SOC_ARG:?SOC_ARG is not set}"
+
+  echo "building custom ops ${CUSTOM_OPS} for ${SOC_VERSION}"
+  bash build.sh --pkg --ops="${CUSTOM_OPS}" --soc="${SOC_ARG}"
+
+  install_dir="${ROOT_DIR}/vllm_ascend/_cann_ops_custom"
+
+  mkdir -p -- "$install_dir"
+
+  # 删除 install_dir 下除 .gitkeep 外的所有内容（包含隐藏文件/目录）
+  find "$install_dir" -mindepth 1 \
+    ! -name '.gitkeep' \
+    -exec rm -rf -- {} +
+
+  shopt -s nullglob
+  runs=(./build/cann-ops-transformer*.run)
+  shopt -u nullglob
+
+  (( ${#runs[@]} == 1 )) || { echo "ERROR: expected 1 installer, got ${#runs[@]}" >&2; exit 1; }
+
+  chmod +x -- "${runs[0]}" || true
+  "${runs[0]}" --install-path="${install_dir}"
+)

@@ -7,45 +7,62 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # ======================================================================================================================
 
-add_ops_compile_options(
-        OP_NAME MatmulAllreduceAddRmsnormTensorList
+# add_ops_compile_options(
+#         OP_NAME MatmulAllreduceAddRmsnormTensorList
+#         OPTIONS --cce-auto-sync=off
+#                 -Wno-deprecated-declarations
+#                 -Werror
+# )
+
+# target_sources(op_host_aclnnInner PRIVATE
+#         matmul_allreduce_add_rmsnorm_def.cpp
+# )
+
+# target_sources(opapi PRIVATE
+#         aclnn_matmul_allreduce_add_rmsnorm.cpp
+# )
+
+# if (NOT BUILD_OPEN_PROJECT)
+#     target_sources(aclnn_ops_train PRIVATE
+#         aclnn_matmul_allreduce_add_rmsnorm.cpp
+#     )
+
+#     target_sources(aclnn_ops_infer PRIVATE
+#         aclnn_matmul_allreduce_add_rmsnorm.cpp
+#     )
+# endif ()
+
+# target_sources(optiling PRIVATE
+#         matmul_allreduce_add_rmsnorm_tiling.cpp
+# )
+
+# target_include_directories(optiling PRIVATE
+#         ${CMAKE_CURRENT_SOURCE_DIR}
+# )
+
+# target_sources(opsproto PRIVATE
+#         matmul_allreduce_add_rmsnorm_proto.cpp
+# )
+
+# file(GLOB _GMM_Aclnn_header "${CMAKE_CURRENT_SOURCE_DIR}/aclnn_matmul_allreduce_add_rmsnorm.h")
+
+# install(FILES ${_GMM_Aclnn_header}
+#         DESTINATION ${ACLNN_INC_INSTALL_DIR} OPTIONAL
+# )
+
+if (BUILD_OPEN_PROJECT)
+#     target_sources(op_host_aclnnExc PRIVATE
+#         dispatch_layout_def.cpp
+#     )
+    add_ops_compile_options(
+        OP_NAME MatmulAllreduceAddRmsnorm
         OPTIONS --cce-auto-sync=off
                 -Wno-deprecated-declarations
                 -Werror
 )
+endif()
 
-target_sources(op_host_aclnnInner PRIVATE
-        matmul_allreduce_add_rmsnorm_def.cpp
-)
-
-target_sources(opapi PRIVATE
-        aclnn_matmul_allreduce_add_rmsnorm.cpp
-)
-
-if (NOT BUILD_OPEN_PROJECT)
-    target_sources(aclnn_ops_train PRIVATE
-        aclnn_matmul_allreduce_add_rmsnorm.cpp
-    )
-
-    target_sources(aclnn_ops_infer PRIVATE
-        aclnn_matmul_allreduce_add_rmsnorm.cpp
-    )
-endif ()
-
-target_sources(optiling PRIVATE
-        matmul_allreduce_add_rmsnorm_tiling.cpp
-)
-
-target_include_directories(optiling PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_sources(opsproto PRIVATE
-        matmul_allreduce_add_rmsnorm_proto.cpp
-)
-
-file(GLOB _GMM_Aclnn_header "${CMAKE_CURRENT_SOURCE_DIR}/aclnn_matmul_allreduce_add_rmsnorm.h")
-
-install(FILES ${_GMM_Aclnn_header}
-        DESTINATION ${ACLNN_INC_INSTALL_DIR} OPTIONAL
-)
+if(NOT BUILD_OPS_RTY_KERNEL)
+    add_modules_sources(OPTYPE matmul_allreduce_add_rmsnorm 
+                ACLNNTYPE aclnn_inner)
+endif()

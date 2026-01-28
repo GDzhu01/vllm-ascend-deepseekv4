@@ -1663,7 +1663,7 @@ void check_hc_post_shape_and_dtype(const at::Tensor& x, const at::Tensor& residu
     constexpr int64_t HC_LIMIT = 4;
     constexpr int64_t D_LIMIT = 4096;
     // check x shape: [b, s, d]
-    TORCH_CHECK(x.dim() == 3, "Input tensor x's dim num should be 4, actual ", x.dim(), ".");
+    TORCH_CHECK(x.dim() == 3, "Input tensor x's dim num should be 3, actual ", x.dim(), ".");
     for (size_t i = 0; i < 3; i++) {
         TORCH_CHECK(x.size(i) > 0, "Input tensor x's shape should be positive, but x.shape[", i, "] is :", x.size(i), ".");
     }
