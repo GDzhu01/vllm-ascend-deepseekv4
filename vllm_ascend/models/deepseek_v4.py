@@ -108,6 +108,7 @@ from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.pypto import HC_PRE, HC_POST
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
+from vllm_ascend.ascend_config import get_ascend_config
 
 logger = init_logger(__name__)
 
@@ -306,6 +307,7 @@ class DeepseekV4MoE(nn.Module):
         self.is_fusion_moe_shared_experts_enabled = (
             rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()
         )
+        self.is_fusion_moe_shared_experts_enabled = getattr(get_ascend_config(), "mix_placement", False)
         if config.n_shared_experts is None or self.is_fusion_moe_shared_experts_enabled:
             self.shared_experts = None
         else:
@@ -1183,7 +1185,12 @@ class AscendDeepseekV4ForCausalLM(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts,
+            num_experts=self.config.n_routed_experts
+            + (
+                self.config.n_shared_experts
+                if getattr(get_ascend_config(), "mix_placement", False)
+                else 0
+            ),
             num_redundant_experts=0,
         )
 
@@ -1191,6 +1198,7 @@ class AscendDeepseekV4ForCausalLM(
         rocm_aiter_moe_shared_expert_enabled = (
             rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()
         )
+        rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(), "mix_placement", False)
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ("gate_up_proj", "gate_proj", 0),
