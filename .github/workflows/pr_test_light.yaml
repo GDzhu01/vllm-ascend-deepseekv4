@@ -73,10 +73,7 @@ jobs:
               - '.github/workflows/pr_test_light.yaml'
 
   ut:
-    needs: [lint, changes]
     name: unit test
-    # only trigger unit test after lint passed and the change is e2e and ut related.
-    if: ${{ needs.lint.result == 'success' && (needs.changes.outputs.e2e_tracker == 'true' || needs.changes.outputs.ut_tracker == 'true') }}
     strategy:
       matrix:
         vllm_version: [v0.13.0]
@@ -92,7 +89,7 @@ jobs:
     strategy:
       matrix:
         vllm_version: [v0.13.0]
-    if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ready') }}
+    if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/_e2e_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
