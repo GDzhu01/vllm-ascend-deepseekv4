@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   image_build:
-    if: ${{ github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'image-build') }}
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'image-build') }}
     name: Image Build and Push
     strategy:
       matrix:
@@ -72,10 +72,10 @@ jobs:
           - name: A3 openEuler
             dockerfile: Dockerfile.a3.openEuler
             suffix: 'a3-openeuler'
-          # - name: 310P Ubuntu
-          #   dockerfile: Dockerfile.310p
-          # - name: 310P openEuler
-          #   dockerfile: Dockerfile.310p.openEuler
+          - name: 310P Ubuntu
+            dockerfile: Dockerfile.310p
+          - name: 310P openEuler
+            dockerfile: Dockerfile.310p.openEuler
     uses: ./.github/workflows/_schedule_image_build.yaml
     with:
       dockerfile: ${{ matrix.build_meta.dockerfile }}

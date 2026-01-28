@@ -36,12 +36,17 @@ jobs:
       matrix:
         include:
           - arch: linux/amd64
-            runner: ubuntu-latest
+            runner: x86_github-runner-02
             tag: amd64
           - arch: linux/arm64
             runner: ubuntu-24.04-arm
             tag: arm64
     steps:
+    - name: Set PTA from file
+      run: |
+        export HOME=/tmp
+        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic ${{ secrets.PTA_TOKEN }}"
+  
     - uses: actions/checkout@v6
       with:
         fetch-depth: 0
@@ -100,7 +105,7 @@ jobs:
 
 
   merge-image:
-    runs-on: ubuntu-latest
+    runs-on: x86_github-runner-02
     needs: build-push-digest
     if: ${{ inputs.should_push }}
     steps:
