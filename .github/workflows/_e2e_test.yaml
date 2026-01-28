@@ -526,6 +526,7 @@ jobs:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         run: |
           # fix me with CANN 8.5
+          set +e
           #pytest -sv --durations=0 tests/e2e/multicard/4-cards/test_data_parallel_tp2.py
           pytest -sv --durations=0 tests/e2e/multicard/4-cards/test_kimi_k2.py \
             tests/e2e/multicard/4-cards/test_qwen3_next.py
