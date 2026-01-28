@@ -318,12 +318,6 @@ class AscendDSAMetadata:
 
     def __post_init__(self):
         pass
-        # supported_head_sizes = AscendMLABackend.get_supported_head_sizes()
-        # if self.head_dim is not None and self.head_dim \
-        #         not in supported_head_sizes:
-        #     raise ValueError(
-        #         f"Only {supported_head_sizes} are supported for head_dim,",
-        #         f"received {self.head_dim}.")
 
 
 M = TypeVar("M", bound=AscendDSAMetadata)
@@ -361,8 +355,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.block_size = vllm_config.cache_config.block_size
         self.max_blocks = (vllm_config.model_config.max_model_len +
                            self.block_size - 1) // self.block_size
-        self.chunked_prefill_enabled = False
-        # self.chunked_prefill_enabled = scheduler_config.enable_chunked_prefill #zyl
+        # NOTE: For deepseek v4, this is disabled by default now in `check_and_update_config`
+        self.chunked_prefill_enabled = scheduler_config.enable_chunked_prefill
 
         self.speculative_config = vllm_config.speculative_config
         self.decode_threshold = 1
@@ -420,11 +414,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         self.compressor_ratio = 1
         if AscendDSAMetadataBuilder.indexer_metadata is None:
-            AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048), dtype = torch.int32, device=self.device)
+            # TODO(cmq): What does the magic number for?
+            AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048),
+                                                                    dtype = torch.int32,
+                                                                    device=self.device)
             usedCoreNum = 24
             mBaseSize = 256
             s2BaseSize = 2048
-            AscendDSAMetadataBuilder.indexer_metadata[:3] = torch.tensor([usedCoreNum, mBaseSize, s2BaseSize], dtype=torch.int32, device=self.device)
+            AscendDSAMetadataBuilder.indexer_metadata[:3] = torch.tensor(
+                [usedCoreNum, mBaseSize, s2BaseSize],
+                dtype=torch.int32,
+                device=self.device)
 
             # AscendDSAMetadataBuilder.metadata[3:27] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #bN2End 每个核处理数据的BN2结束点
             # AscendDSAMetadataBuilder.metadata[27:51] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #mEnd 每个核处理数据的M结束点
@@ -434,9 +434,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             hf_config = self.model_config.hf_config
             if hf_config.model_type == 'deepseek_v4':
                 indexer_head_dim = hf_config.index_head_dim
-                from scipy.linalg import hadamard
-                if hadamard is None:
-                    raise ImportError("Please install scipy")
+                try:
+                    from scipy.linalg import hadamard
+                except ImportError as e:
+                    raise ImportError("Please install scipy") from e
                 log_dim = math.ceil(math.log2(indexer_head_dim))
                 dim_padded = 2 ** log_dim
                 AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device)
@@ -646,7 +647,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         common_prefix_len: int,
         common_attn_metadata: AscendCommonAttentionMetadata,
     ) -> AscendDSAPrefillMetadata:
-        num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc
 
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
@@ -656,77 +656,68 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         chunked_context_metadata = self.build_chunked_metadata(
             common_prefix_len, common_attn_metadata)
-        reqs_start = self.num_decodes  # prefill_start
+        # reqs_start: the start request position of prefill request
+        reqs_start = self.num_decodes
+        # reqs_start: the start token postion of prefill request
         tokens_start = self.num_decode_tokens
 
-
         max_query_len = self.query_lens[reqs_start:].max().item()
-        max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:num_reqs].max().item()
+        max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:].max().item()
         prefill_query_start_loc = query_start_loc[
             reqs_start:] - query_start_loc[reqs_start]
 
         prefill_input_positions = input_positions[tokens_start:]
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
 
-        # c4 rope
-        c4_mask = ((prefill_input_positions+1) % 4) == 0
-        c4_input_positions = prefill_input_positions[c4_mask]
-        c4_input_positions = (c4_input_positions + 1) - 4
-        c4_target_shape = (min(self.num_prefill_tokens, self.num_prefill_tokens // 4 + self.num_prefills),)
-        pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
-        c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
-        c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
+        def _get_padded_compressed_position(prefill_input_positions, compress_ratio):
+            # TODO(lxs): refactor me to get_compressed_pos_and_indices
+            if compress_ratio == 1:
+                return prefill_input_positions
+            mask = ((prefill_input_positions + 1) % compress_ratio) == 0
+            input_positions = prefill_input_positions[mask]
+            input_positions = (input_positions + 1) - compress_ratio
+            target_shape = (min(self.num_prefill_tokens,
+                                self.num_prefill_tokens // compress_ratio + self.num_prefills),)
+            pad_right = target_shape[0] - input_positions.shape[0]
+            pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
+            return pad_positions
 
-
-        # c128 rope
-        c128_mask = ((prefill_input_positions+1) % 128) == 0
-        c128_input_positions = prefill_input_positions[c128_mask]
-        c128_input_positions = (c128_input_positions + 1) - 128
-        c128_target_shape = (min(self.num_prefill_tokens, self.num_prefill_tokens // 128 + self.num_prefills),)
-        pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
-        c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
-        c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
+        compress_cos, compress_sin = get_cos_and_sin_dsa(_get_padded_compressed_position(prefill_input_positions, self.compressor_ratio))
 
         # tmp swa_block
-        prefill_seq_len = self.seq_lens[reqs_start:]
-        prefill_block = (prefill_seq_len + 128 - 1) // 128
-        block_cumsum = prefill_block.cumsum(dim=0)
-        end = block_cumsum[-1]
-        block_id = torch.arange(1, end + 1,
+        prefill_seq_lens = self.seq_lens[reqs_start:]
+        # TODO(cmq): refactor this magic number
+        prefill_swa_block = (prefill_seq_lens + 128 - 1) // 128
+        cumsum_prefill_swa_block = prefill_swa_block.cumsum(dim=0)
+        prefill_swa_block_ids = torch.arange(1, cumsum_prefill_swa_block[-1] + 1,
                                 dtype=self.block_table.dtype,
                                 device=self.block_table.device)
-        num_prefill = self.seq_lens[reqs_start:].shape[0]
-
-        #TODO modify max_model_len
-        prefill_block_table_shape = (num_prefill, 65536//128)
-
-        prefill_swa_block_table = torch.zeros(prefill_block_table_shape,
+        num_prefill = prefill_seq_lens.shape[0]
+        prefill_swa_block_table_shape = (num_prefill,
+                                         self.vllm_config.model_config.max_model_len // 128)
+        prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                          dtype=self.block_table.dtype,
                                          device=self.block_table.device)
 
         for i in range(num_prefill):
-            start_idx = block_cumsum[i] - prefill_block[i]
-            end_idx = block_cumsum[i]
-            prefill_swa_block_table[i, :prefill_block[i]] = block_id[start_idx:end_idx]
+            start_idx = cumsum_prefill_swa_block[i] - cumsum_prefill_swa_block[i]
+            end_idx = cumsum_prefill_swa_block[i]
+            prefill_swa_block_table[i, :prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
 
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
 
         # TODO: zyl refactor this for asc scheduling.
         decode_input_positions = input_positions[:tokens_start]
-        if self.compressor_ratio == 4:
-            mask = ((decode_input_positions+1) % 4) == 0
-            true_count = torch.sum(mask).item()
-            prefill_slot_mapping = self.slot_mapping[true_count:min(self.num_prefill_tokens, self.num_prefill_tokens // 4 + self.num_prefills)]
-        elif self.compressor_ratio == 128:
-            mask = ((decode_input_positions+1) % 128) == 0
-            true_count = torch.sum(mask).item()
-            prefill_slot_mapping = self.slot_mapping[true_count:min(self.num_prefill_tokens, self.num_prefill_tokens // 128 + self.num_prefills)]
-        else:
-            true_count = tokens_start
-            prefill_slot_mapping = self.slot_mapping[true_count:]
+        def _get_compressed_decode_token_start(decode_input_positions, compress_ratio):
+            # TODO(cmq): decode_input_positions is a device tensor, 
+            # this will introduce sync operation. Refactor me to torch.where instead
+            mask = ((decode_input_positions + 1) % compress_ratio) == 0
+            compressed_decode_num = mask.sum()
+            return compressed_decode_num
 
+        compressed_tokens_start = _get_compressed_decode_token_start(decode_input_positions, self.compressor_ratio)
 
-        block_table = self.block_table[reqs_start:, ...]
+        prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:]
 
         AscendDSAMetadataBuilder.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
@@ -741,7 +732,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             seq_lens=self.seq_lens[reqs_start:],
             context_lens=self.seq_lens[reqs_start:],
             input_positions=prefill_input_positions,
-            block_table=block_table,
+            block_table=self.block_table[reqs_start:, ...],
             prefill_swa_block_table=prefill_swa_block_table,
             slot_mapping = prefill_slot_mapping,
             swa_slot_mapping=prefill_swa_slot_mapping,
@@ -753,10 +744,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             chunked_context=chunked_context_metadata,
             sin=sin,
             cos=cos,
-            c4_sin=c4_sin,
-            c4_cos=c4_cos,
-            c128_sin=c128_sin,
-            c128_cos=c128_cos,
+            compress_sin=compress_sin,
+            compress_cos=compress_cos,
             start_pos=AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill],
         )
 
@@ -787,7 +776,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
 
-        block_table = self.block_table[:block_table_size, ...]
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
         # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
         # if self.graph_pad_size > self.num_decodes and \
@@ -800,47 +788,48 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
 
         decode_input_positions = input_positions_cpu
-        # c4 rope
-        c4_mask = ((decode_input_positions+1) % 4) == 0
-        c4_input_positions = decode_input_positions[c4_mask]
-        c4_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 4 + self.num_decodes),)
-        pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
-        c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
-        c4_pad_positions_gpu = c4_pad_positions.pin_memory().to(self.device, non_blocking=True)
-        # c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
-        c4_cos, c4_sin = get_cos_and_sin_dsa({"c4": c4_pad_positions_gpu}, use_cache=True)
 
-        # c128 rope
-        c128_mask = ((decode_input_positions+1) % 128) == 0
-        c128_input_positions = decode_input_positions[c128_mask]
-        c128_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 128 + self.num_decodes),)
-        pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
-        c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
-        c128_pad_positions_gpu = c128_pad_positions.pin_memory().to(self.device, non_blocking=True)
-        # c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
-        c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions_gpu},use_cache=True)
+        def _get_padded_compressed_position(decode_input_positions, compress_ratio):
+            # TODO(lxs): refactor me to get_compressed_pos_and_indices
+            if compress_ratio == 1:
+                return decode_input_positions
+            mask = ((decode_input_positions + 1) % compress_ratio) == 0
+            input_positions = decode_input_positions[mask]
+            # # why not - compress_ratio here?
+            # input_positions = (input_positions + 1) - compress_ratio
+            target_shape = (min(self.num_prefill_tokens,
+                                self.num_prefill_tokens // compress_ratio + self.num_prefills),)
+            pad_right = target_shape[0] - input_positions.shape[0]
+            pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
+            return pad_positions
+
+        layer_name = f"c{self.compressor_ratio}"
+        compress_cos, compress_sin = get_cos_and_sin_dsa(
+            {layer_name: _get_padded_compressed_position(input_positions, self.compressor_ratio)},
+            use_cache=True)
 
 
-        # TODO: zyl refactor this for asc scheduling.
-        if self.compressor_ratio == 4:
-            true_count = torch.sum(c4_mask).item()
-        elif self.compressor_ratio == 128:
-            true_count = torch.sum(c128_mask).item()
-        else:
-            true_count = self.num_decode_tokens
+        def _get_compressed_decode_token_start(decode_input_positions, compress_ratio):
+            # TODO(cmq): decode_input_positions is a device tensor, 
+            # this will introduce sync operation. Refactor me to torch.where instead
+            mask = ((decode_input_positions + 1) % compress_ratio) == 0
+            compressed_decode_num = mask.sum()
+            return compressed_decode_num
+
+        compressed_tokens_start = _get_compressed_decode_token_start(decode_input_positions, self.compressor_ratio)
+
+        slot_mapping = self.slot_mapping[:compressed_tokens_start]
 
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
-        slot_mapping = self.slot_mapping[:true_count]
 
         max_seqlen_kv = torch.max(query_start_loc_cpu).item()
         max_seqlen_q = torch.max(common_attn_metadata.seq_lens_cpu[:num_reqs][:self.num_decodes]).item()
-        decode_query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
         AscendDSAMetadataBuilder.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
-            block_table=block_table,
+            block_table=self.block_table[:block_table_size, ...],
             swa_block_table=common_attn_metadata.swa_block_table[:block_table_size, ...],
             slot_mapping=slot_mapping,
             swa_slot_mapping=decode_swa_slot_mapping,
@@ -855,10 +844,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
-            c4_sin=c4_sin,
-            c4_cos=c4_cos,
-            c128_sin=c128_sin,
-            c128_cos=c128_cos,
+            compress_sin=compress_sin,
+            compress_cos=compress_cos,
             cp_seq_len=cp_seq_len,
             batch_seq_mask=batch_seq_mask,
             start_pos=AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes])
@@ -1180,11 +1167,11 @@ class AscendDSAImpl(DSAAttentionImpl):
             attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
             kv
         )
-
+        compress_cos = attn_metadata.prefill.compress_cos[layer_name]
+        compress_sin = attn_metadata.prefill.compress_sin[layer_name]
         if self.compress_ratio > 1:
+            compress_topk_idxs = None
             if self.compress_ratio == 4:
-                compress_cos = attn_metadata.prefill.c4_cos[layer_name]
-                compress_sin = attn_metadata.prefill.c4_sin[layer_name]
                 compress_topk_idxs = self.indexer_select_qli(x=hidden_states,
                                                     qr=qr,
                                                     kv_cache=kv_cache,
@@ -1197,10 +1184,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key,
                                                     with_prefill=True)
-            elif self.compress_ratio == 128:
-                compress_topk_idxs = None
-                compress_cos = attn_metadata.prefill.c128_cos[layer_name]
-                compress_sin = attn_metadata.prefill.c128_sin[layer_name]
 
             coff = 2 if self.compressor_overlap else 1
             # start_pos = actual_seq_lengths_key - seq_lens_q
@@ -1416,9 +1399,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = self._partial_rope(q, cos, sin)
 
         if self.compress_ratio > 1:
+            compress_cos = attn_metadata.decode.compress_cos[layer_name]
+            compress_sin = attn_metadata.decode.compress_sin[layer_name]
+            compress_topk_idxs = None
             if self.compress_ratio == 4:
-                compress_cos = attn_metadata.decode.c4_cos[layer_name]
-                compress_sin = attn_metadata.decode.c4_sin[layer_name]
                 compress_topk_idxs = self.indexer_select_qli(x=hidden_states,
                                                     qr=qr,
                                                     kv_cache=kv_cache,
@@ -1431,11 +1415,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key,
                                                     with_prefill=False)
-
-            elif self.compress_ratio == 128:
-                compress_topk_idxs = None
-                compress_cos = attn_metadata.decode.c128_cos[layer_name]
-                compress_sin = attn_metadata.decode.c128_sin[layer_name]
 
             coff = 2 if self.compressor_overlap else 1
             # start_pos = actual_seq_lengths_key - seq_lens_q
@@ -1453,8 +1432,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm.weight,
-                s,
-                c,
+                compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
+                compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
                 kv_block_table = attn_metadata.decode.state_block_table,
                 score_block_table = attn_metadata.decode.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
@@ -1640,8 +1619,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             c4_indexer_score_state,
             self.indexcom_ape,
             self.indexcom_norm.weight,
-            s,
-            c,
+            compressed_sin.view(-1, compressed_sin.shape[-1]).to(torch.bfloat16),
+            compressed_cos.view(-1, compressed_cos.shape[-1]).to(torch.bfloat16),
             kv_block_table = kv_block_table,
             score_block_table = score_block_table,
             cu_seqlens = actual_seq_lengths_query,
@@ -1664,11 +1643,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
 
-
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
         if kv is not None:
             kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
-
             kv_scale = kv_scale.unsqueeze(-1)
 
         if soc_version not in {AscendDeviceType.A5}:
@@ -1726,5 +1703,3 @@ class AscendDSAImpl(DSAAttentionImpl):
             return_value = False
         )
         return topk_idxs
-
-

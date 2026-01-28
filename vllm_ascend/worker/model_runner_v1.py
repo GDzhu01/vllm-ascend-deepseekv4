@@ -3587,12 +3587,6 @@ class NPUModelRunner(GPUModelRunner):
         for new_req_data in scheduler_output.scheduled_new_reqs:
             req_id = new_req_data.req_id
             self.requests[req_id].state_id = new_req_data.state_id
-    
-    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
-        super()._update_states(scheduler_output)
-        for new_req_data in scheduler_output.scheduled_new_reqs:
-            req_id = new_req_data.req_id
-            self.requests[req_id].state_id = new_req_data.state_id
 
 
 @contextmanager
