@@ -20,6 +20,7 @@ on:
   pull_request:
     branches:
       - 'releases/v0.13.0'
+  types: [ labeled, synchronize ]
 
 # Bash shells do not use ~/.profile or ~/.bashrc so these shells need to be explicitly
 # declared as "shell: bash -el {0}" on steps that need to be properly activated.
@@ -37,6 +38,7 @@ concurrency:
 jobs:
   changes:
     runs-on: linux-aarch64-a2-0
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ready') && contains(github.event.pull_request.labels.*.name, 'ready-for-test') }}
     outputs:
       e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
       ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
@@ -72,6 +74,7 @@ jobs:
     strategy:
       matrix:
         vllm_version: [v0.13.0]
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ready') && contains(github.event.pull_request.labels.*.name, 'ready-for-test') }}
     uses: ./.github/workflows/_e2e_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
