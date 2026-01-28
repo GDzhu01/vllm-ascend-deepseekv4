@@ -227,10 +227,8 @@ class AscendDSAPrefillMetadata:
     chunked_context: Optional[ChunkedContextMetadata] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
-    c4_sin: torch.Tensor = None
-    c4_cos: torch.Tensor = None
-    c128_sin: torch.Tensor = None
-    c128_cos: torch.Tensor = None
+    compress_sin: torch.Tensor = None
+    compress_cos: torch.Tensor = None
     start_pos: Optional[torch.Tensor] = None
 
 @dataclass
@@ -254,10 +252,8 @@ class AscendDSADecodeMetadata:
     attn_mask: Optional[torch.Tensor] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
-    c4_sin: torch.Tensor = None
-    c4_cos: torch.Tensor = None
-    c128_sin: torch.Tensor = None
-    c128_cos: torch.Tensor = None
+    compress_sin: torch.Tensor = None
+    compress_cos: torch.Tensor = None
     cp_seq_len: torch.Tensor = None
     batch_seq_mask: torch.Tensor = None
     start_pos: torch.Tensor = None
@@ -786,8 +782,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             input_positions = decode_input_positions[mask]
             # # why not - compress_ratio here?
             # input_positions = (input_positions + 1) - compress_ratio
-            target_shape = (min(self.num_prefill_tokens,
-                                self.num_prefill_tokens // compress_ratio + self.num_prefills),)
+            target_shape = (min(self.num_decode_tokens,
+                                self.num_decode_tokens // compress_ratio + self.num_decodes),)
             pad_right = target_shape[0] - input_positions.shape[0]
             pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
             return pad_positions
