@@ -9,7 +9,7 @@
 # 3. tags push trigger image publish
 #   - is for final release image
 #   - Publish when tag with v* (pep440 version)  ===>  vllm-ascend:v1.2.3 / vllm-ascend:v1.2.3rc1
-name: Image Build and Push
+name: Image Build And Push
 on:
   pull_request:
     branches:
@@ -27,8 +27,8 @@ on:
     types: [ labeled, synchronize ]
   push:
     # Publish image when tagging, the Dockerfile in tag will be build as tag image
-    branches:
-      - 'releases/*'
+    # branches:
+    #   - 'releases/*'
     tags:
       - 'v*'
     paths:
@@ -81,7 +81,7 @@ jobs:
       dockerfile: ${{ matrix.build_meta.dockerfile }}
       suffix: ${{ matrix.build_meta.suffix }}
       quay_username: ${{ vars.QUAY_USERNAME }}
-      should_push: ${{ github.repository_owner == 'vllm-project' && github.event_name == 'push'}}
+      should_push: true
       workflow_dispatch_tag: ${{ inputs.tag }}
     secrets:
       QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}

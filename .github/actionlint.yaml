@@ -25,3 +25,5 @@ self-hosted-runner:
     - linux-aarch64-a2b3-1
     - linux-aarch64-a2b3-2
     - linux-aarch64-a2b3-4
+    - x86_github-runner-02
+    - arm64_github-runner-03
