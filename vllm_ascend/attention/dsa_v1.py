@@ -335,7 +335,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         AttentionCGSupport.UNIFORM_BATCH
     indexer_metadata = None
     hadamard = None
-    start_pos = None
+    start_pos_prefill: Optional[torch.Tensor] = None
+    start_pos_decode: Optional[torch.Tensor] = None
 
     """
     NOTE: Please read the comment at the top of the file before trying to
@@ -439,7 +440,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 log_dim = math.ceil(math.log2(indexer_head_dim))
                 dim_padded = 2 ** log_dim
                 AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device)
-        AscendDSAMetadataBuilder.start_pos = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
+        AscendDSAMetadataBuilder.start_pos_prefill = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
+        AscendDSAMetadataBuilder.start_pos_decode = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
+
 
 
     @classmethod
@@ -713,20 +716,23 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         if self.compressor_ratio == 4:
             mask = ((decode_input_positions+1) % 4) == 0
             true_count = torch.sum(mask).item()
+            prefill_slot_mapping = self.slot_mapping[true_count:min(self.num_prefill_tokens, self.num_prefill_tokens // 4 + self.num_prefills)]
         elif self.compressor_ratio == 128:
             mask = ((decode_input_positions+1) % 128) == 0
             true_count = torch.sum(mask).item()
+            prefill_slot_mapping = self.slot_mapping[true_count:min(self.num_prefill_tokens, self.num_prefill_tokens // 128 + self.num_prefills)]
         else:
             true_count = tokens_start
+            prefill_slot_mapping = self.slot_mapping[true_count:]
 
-        prefill_slot_mapping = self.slot_mapping[true_count:]
 
         block_table = self.block_table[reqs_start:, ...]
 
-        AscendDSAMetadataBuilder.start_pos.fill_(0)
+        AscendDSAMetadataBuilder.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
+        AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill] = self.seq_lens[reqs_start:] - seq_lens_q
 
-        AscendDSAMetadataBuilder.start_pos[reqs_start:self.seq_lens[reqs_start:].shape[0] + 1] = self.seq_lens[reqs_start:] - seq_lens_q
+        # AscendDSAMetadataBuilder.start_pos[reqs_start:self.seq_lens[reqs_start:].shape[0] + 1] = self.seq_lens[reqs_start:] - seq_lens_q
 
         return AscendDSAPrefillMetadata(
             attn_mask=self.attn_mask_builder.get_final_mla_mask(
@@ -751,7 +757,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             c4_cos=c4_cos,
             c128_sin=c128_sin,
             c128_cos=c128_cos,
-            start_pos=AscendDSAMetadataBuilder.start_pos,
+            start_pos=AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill],
         )
 
     def build_decode_metadata(
@@ -821,9 +827,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         max_seqlen_kv = torch.max(query_start_loc).item()
         max_seqlen_q = torch.max(self.seq_lens[:self.num_decodes]).item()
         decode_query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
-        AscendDSAMetadataBuilder.start_pos.fill_(0)
+        AscendDSAMetadataBuilder.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
-        AscendDSAMetadataBuilder.start_pos[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
+        AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
             block_table=block_table,
@@ -846,7 +852,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             c128_cos=c128_cos,
             cp_seq_len=cp_seq_len,
             batch_seq_mask=batch_seq_mask,
-            start_pos=AscendDSAMetadataBuilder.start_pos,)
+            start_pos=AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes])
         return decode_metadata
 
     def get_block_table_size(
@@ -1187,7 +1193,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compress_sin = attn_metadata.prefill.c128_sin[layer_name]
 
             coff = 2 if self.compressor_overlap else 1
-            start_pos = actual_seq_lengths_key - seq_lens_q
+            # start_pos = actual_seq_lengths_key - seq_lens_q
             # compressor
             compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
@@ -1410,7 +1416,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compress_sin = attn_metadata.decode.c128_sin[layer_name]
 
             coff = 2 if self.compressor_overlap else 1
-            start_pos = actual_seq_lengths_key - seq_lens_q
+            # start_pos = actual_seq_lengths_key - seq_lens_q
             # compressor
 
             s = compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16)
@@ -1430,7 +1436,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cu_seqlens = actual_seq_lengths_query,
                 seqused = None, #actual_seq_lengths_key,
                 start_pos = attn_metadata.decode.start_pos,
-                # start_pos = torch.zeros_like(start_pos),
                 rope_head_dim = self.rope_head_dim,
                 cmp_ratio = self.compress_ratio,
                 coff = coff,
@@ -1590,9 +1595,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = rotate_activation(q, attn_metadata)
 
         coff = 2 if self.compressor_overlap else 1
-        start_pos = actual_seq_lengths_key - seq_lens_q
+        # start_pos = actual_seq_lengths_key - seq_lens_q
 
-        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+        if with_prefill:
             kv_block_table = attn_metadata.prefill.state_block_table
             score_block_table = attn_metadata.prefill.state_block_table
         else:
