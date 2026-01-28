@@ -30,6 +30,8 @@ class KVStateManager:
         ) -> None:
         request_id = request.request_id
         if request_id not in self.req_to_state_id:
-            raise ValueError(f"Request {request_id} not allocated a state, unable to free.")
+            # NOTE(zxr): sometimes, a request may not allocate state but free, it should not raise an error
+            # raise ValueError(f"Request {request_id} not allocated a state, unable to free.")
+            return
         state_to_free = self.req_to_state_id.pop(request_id)
         self.states_pool.add(state_to_free)
