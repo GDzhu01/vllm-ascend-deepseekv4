@@ -509,11 +509,8 @@ class KVStateScheduler(Scheduler):
                 req_to_new_blocks[request.request_id] = (
                     self.kv_cache_manager.get_blocks(request.request_id)
                 )
-                # NOTE(zxr): when pd disaggregation, new_state can be None, use request.state_id to replace
-                if new_state is not None:
-                    req_to_new_state[request.request_id] = new_state
-                else:
-                    req_to_new_state[request.request_id] = request.state_id
+                # NOTE(zxr): when pd disaggregation, new_state can be None, use kv_state_manager.req_to_state_id to replace
+                req_to_new_state[request.request_id] = self.kv_state_manager.req_to_state_id[request.request_id]
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
