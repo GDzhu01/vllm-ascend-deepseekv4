@@ -36,10 +36,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # lint:
-  #   uses: ./.github/workflows/_pre_commit.yml
-  #   with:
-  #     vllm: v0.13.0
+  lint:
+    uses: ./.github/workflows/_pre_commit.yml
+    with:
+      vllm: v0.13.0
   changes:
     runs-on: linux-amd64-cpu-8-hk
     outputs:
