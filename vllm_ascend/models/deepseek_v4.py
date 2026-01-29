@@ -106,7 +106,6 @@ elif current_platform.is_xpu():
 
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
-from vllm_ascend.ops.pypto import HC_PRE, HC_POST
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ascend_config import get_ascend_config
 
@@ -860,32 +859,17 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc,dtype = torch.float32))
         self.hc_attn_scale = nn.Parameter(torch.empty(3,dtype = torch.float32))
         self.hc_ffn_scale = nn.Parameter(torch.empty(3,dtype = torch.float32))
-        self.hc_pre_func = HC_PRE()
-        self.hc_post_func = HC_POST()
         
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        shape, dtype = x.size(), x.dtype
-        if (envs_ascend.VLLM_ASCEND_ENABLE_PYPTO):
-            y, post,comb = self.hc_pre_func(x, hc_fn.bfloat16(), hc_scale, hc_base)
-            return y.to(dtype), post, comb
-        x = x.flatten(1).float() #(b,s,c*h)
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
-        pre, post, comb = hc_split_sinkhorn_ref(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
-        #pre=(b,s,c)   post=(b,s,c)  comb=(b,s,c,c)
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
-        return y.to(dtype), post, comb
+        y = torch.ops._C_ascend.npu_hc_pre(
+            x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps)
+        return y
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        if (envs_ascend.VLLM_ASCEND_ENABLE_PYPTO):
-            y = self.hc_post_func(x, residual.float(), post, comb)
-            return y.type_as(x)
-        #x=(b,s,h)  residual=(b,s,c, h), post=(b,s,c), comb=(b,s,c,c)
-        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
-        #y = (b,s,c,1)*(b,s,1,h) + torch.sum((b,s,c,c,1)*(b,s,c,1,h), dim=2)
-        #y = (b,s,c,h) + (bs,s,c,h)=(b,s,c,h)
-        return y.type_as(x)
+        y = torch.ops._C_ascend.npu_hc_post(
+            x.unsqueeze(dim=0), residual.unsqueeze(dim=0), post.unsqueeze(dim=0), comb.unsqueeze(dim=0))
+        return y.squeeze(dim=0)
     
     def forward(
         self,

@@ -255,7 +255,6 @@ def _select_experts_with_fusion_ops(
         else:
             input_ids = None
             tid2eid_ones = None
-        # print(f'softplussssssssssssssssssssssssssssssssssssssssssssssssssssssssssss')
         topk_weights, topk_ids, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
             x=router_logits,                        # 输入张量
             k=top_k,                        # 选取的专家数量
