@@ -1017,7 +1017,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
     # TODO: cast to bfloat16 to speed up
     def rope_single(self, x,cos,sin,inverse=False):
-        dtype= x.dtype
+        # dtype= x.dtype
         if inverse:
             sin = sin * -1
         tnd_layout = 1
@@ -1026,12 +1026,13 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             tnd_layout=0
             _,num_tokens,num_heads,rotary_dim = x.shape
-        x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
+        # x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
+        x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim), cos, sin, rotary_mode="interleave")
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
         else:
             x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
-        return x.to(dtype)
+        return x
 
     def get_compress_topk_idxs(
         self,
@@ -1209,8 +1210,10 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm.weight,
-                compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
-                compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
+                # compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
+                # compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
+                compress_sin.view(-1, compress_sin.shape[-1]),
+                compress_cos.view(-1, compress_cos.shape[-1]),
                 kv_block_table = attn_metadata.prefill.state_block_table,
                 score_block_table = attn_metadata.prefill.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
@@ -1425,8 +1428,10 @@ class AscendDSAImpl(DSAAttentionImpl):
             # start_pos = actual_seq_lengths_key - seq_lens_q
             # compressor
 
-            s = compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16)
-            c = compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16)
+            # s = compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16)
+            # c = compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16)
+            s = compress_sin.view(-1, compress_sin.shape[-1])
+            c = compress_cos.view(-1, compress_cos.shape[-1])
             compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
@@ -1609,8 +1614,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
-        s = compressed_sin.view(-1, compressed_sin.shape[-1]).to(torch.bfloat16)
-        c = compressed_cos.view(-1, compressed_cos.shape[-1]).to(torch.bfloat16)
+        # s = compressed_sin.view(-1, compressed_sin.shape[-1]).to(torch.bfloat16)
+        # c = compressed_cos.view(-1, compressed_cos.shape[-1]).to(torch.bfloat16)
+        s = compressed_sin.view(-1, compressed_sin.shape[-1])
+        c = compressed_cos.view(-1, compressed_cos.shape[-1])
 
         kv = torch.ops._C_ascend.compressor(
             x,
