@@ -19,7 +19,7 @@ on:
 jobs:
   e2e:
     name: singlecard
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     container:
       image: ${{ inputs.image }}
       env:
@@ -151,11 +151,9 @@ jobs:
 
       - name: Config mirrors
         run: |
-          # Fix me: use nginx cache rather than the pypi
-          # sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
-          # pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
-          # pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
-          pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
 
@@ -265,11 +263,11 @@ jobs:
 
       - name: Config mirrors
         run: |
-          sed -i 's|ports.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
-          pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
-          apt install git wget curl -y
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
+          apt install git -y
 
       - name: Set PTA from file
         run: |
