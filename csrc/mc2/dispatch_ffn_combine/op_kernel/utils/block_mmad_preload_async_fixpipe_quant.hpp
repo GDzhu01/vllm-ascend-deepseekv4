@@ -271,7 +271,7 @@ public:
     void Finalize(int32_t target, int32_t flag = 0)
     {
         for(;syncGroupIdx <= target; syncGroupIdx++) {
-            int32_t flagId = syncGroupIdx / 8 + flag;
+            int32_t flagId = syncGroupIdx / 12 + flag;
             AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(flagId);
         }
     }
