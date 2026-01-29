@@ -22,7 +22,6 @@ from vllm_ascend.utils import get_weight_prefetch_method
 from vllm.forward_context import get_forward_context
 from vllm_ascend.ascend_forward_context import MoECommType
 
-
 def select_experts(hidden_states: torch.Tensor,
                    router_logits: torch.Tensor,
                    top_k: int,
@@ -252,6 +251,7 @@ def _select_experts_with_fusion_ops(
         if tid2eid is not None:
             forward_context = get_forward_context()
             input_ids = forward_context.input_ids.to(torch.int64)
+            input_ids = forward_context.moe_comm_method.pad_and_split_input_ids(input_ids)
             # tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
             tid2eid_ones = tid2eid.to(torch.int32)    
             if forward_context.moe_comm_type == MoECommType.ALLGATHER:

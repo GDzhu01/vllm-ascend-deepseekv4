@@ -180,6 +180,21 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
         }
 
         return hidden_states, router_logits, None, context_metadata
+    
+    def pad_and_split_input_ids(
+        self,
+        input_ids,
+    ):
+        if not (self.replace_allreduce or self.enable_shared_expert_dp):
+            pad_size = self.tp_size - self.num_tokens
+            if pad_size > 0:
+                input_ids = nn.functional.pad(input_ids,(0, pad_size))
+
+            if self.tp_size > 1:
+                input_ids = torch.tensor_split(input_ids, self.tp_size, dim=0)
+                input_ids = input_ids[self.tp_rank]
+        return input_ids
+        
 
     def finalize(self,
                  hidden_states: torch.Tensor,
@@ -301,6 +316,22 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
 
         return hidden_states, router_logits, mc2_mask, context_metadata
 
+
+    def pad_and_split_input_ids(
+        self,
+        input_ids,
+    ):
+        if not self.replace_allreduce:
+            forward_context = get_forward_context()
+            target_pad_length = forward_context.padded_num_tokens
+            pad_size = target_pad_length - self.num_tokens
+            if pad_size > 0 and not self.enable_shared_expert_dp:
+                input_ids = nn.functional.pad(input_ids,(0, pad_size))
+
+            if self.tp_size > 1 and not self.enable_shared_expert_dp:
+                input_ids = torch.tensor_split(input_ids, self.tp_size, dim=0)
+                input_ids = input_ids[self.tp_rank]
+        return input_ids
 
 class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
     """
