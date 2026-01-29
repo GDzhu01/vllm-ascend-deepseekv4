@@ -126,8 +126,6 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         assert inputs_embeds is not None
         # masking inputs at position 0, as not needed by MTP
         inputs_embeds = torch.where(positions.unsqueeze(-1) == 0, 0, inputs_embeds)
-        inputs_embeds = self.enorm(inputs_embeds)
-        previous_hidden_states = self.hnorm(previous_hidden_states)
 
         hidden_states = (
             self.enorm(self.e_proj(inputs_embeds)) + self.hnorm(self.h_proj(previous_hidden_states))
@@ -140,7 +138,6 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         hidden_states, residual = self.mtp_block(
             positions=positions, hidden_states=hidden_states, residual=None
         )
-        hidden_states = residual + hidden_states
 
         hidden_states = self.hc_head(hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base)
 
