@@ -372,9 +372,10 @@ class NPUPlatform(Platform):
             speculative_config.enforce_eager:
             speculative_config.enforce_eager = False
         if hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
-            vllm_config.scheduler_config.scheduler_cls = (
-                "vllm_ascend.core.kv_state_scheduler.KVStateScheduler"
-            )
+            from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
+            kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
+                vllm_config)
+            vllm_config.scheduler_config = kv_state_scheduler_config
 
             # dsv4 not support chunked_prefill and prefix_caching now
             vllm_config.scheduler_config.enable_chunked_prefill = False

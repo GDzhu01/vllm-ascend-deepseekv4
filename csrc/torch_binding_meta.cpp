@@ -714,54 +714,9 @@ at::Tensor npu_quant_lightning_indexer_metadata_meta(
 
 at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
 {
-    constexpr int64_t SIZE = 8;
-    constexpr int64_t DIM_0 = 0;
-    constexpr int64_t DIM_1 = 1;
-    constexpr int64_t DIM_2 = 2;
-    constexpr int64_t DIM_3 = 3;
-    at::SmallVector<int64_t, SIZE> output_size = {residual.size(DIM_0), residual.size(DIM_1), residual.size(DIM_2), residual.size(DIM_3)};
-    at::Tensor out = at::empty(output_size, residual.options().dtype(residual.dtype()));
+    c10::SymIntArrayRef output_size = residual.sym_sizes();
+    at::Tensor out = at::empty_symint(output_size, residual.options().dtype(residual.dtype()));
     return out;
-}
-
-// step1，工具函数，检查输入shape
-void check_hc_post_shape_and_dtype(const at::Tensor& x, const at::Tensor& residual, const at::Tensor& post, const at::Tensor& com) {
-    constexpr int64_t HC_LIMIT = 4;
-    constexpr int64_t D_LIMIT = 4096;
-    // check x shape: [b, s, d]
-    TORCH_CHECK(x.dim() == 3, "Input tensor x's dim num should be 3, actual ", x.dim(), ".");
-    for (size_t i = 0; i < 3; i++) {
-        TORCH_CHECK(x.size(i) > 0, "Input tensor x's shape should be positive, but x.shape[", i, "] is :", x.size(i), ".");
-    }
-    auto batch = x.size(0);
-    auto sequence = x.size(1);
-    auto d = x.size(2);
-    TORCH_CHECK(d == D_LIMIT, "The d of x only support ", D_LIMIT, ", actual ", d, ".");
-    // check residual: [b, s, hc, d]
-    TORCH_CHECK(residual.dim() == 4, "Input tensor residual's dim num should be 4, actual ", residual.dim(), ".");
-    auto hc = residual.size(2);
-    TORCH_CHECK(residual.size(0) == batch, "The residual.shape[0] should be batch, actual residual.shape[0] is ", residual.size(0), ", batch is ", batch, ".");
-    TORCH_CHECK(residual.size(1) == sequence, "The residual.shape[1] should be sequence, actual residual.shape[1] is ", residual.size(1), ", sequence is ", sequence, ".");
-    TORCH_CHECK(hc == HC_LIMIT, "The hc of residual only support ", HC_LIMIT, ", actual ", hc, ".");
-    TORCH_CHECK(residual.size(3) == d, "The residual.shape[3] should be d, actual residual.shape[3] is ", residual.size(3), ", d is ", d, ".");
-    // check post [b, s, hc]
-    TORCH_CHECK(post.dim() == 3, "Input tensor post's dim num should be 3, actual ", post.dim(), ".");
-    TORCH_CHECK(post.size(0) == batch, "The post.shape[0] should be batch, actual post.shape[0] is ", post.size(0), ", batch is ", batch, ".");
-    TORCH_CHECK(post.size(1) == sequence, "The post.shape[1] should be sequence, actual post.shape[1] is ", post.size(1), ", sequence is ", sequence, ".");
-    TORCH_CHECK(post.size(2) == hc, "The post.shape[2] should be hc, actual post.shape[2] is ", post.size(2), ", hc is ", hc, ".");
-    // check com: [b, s, hc, hc]
-    TORCH_CHECK(com.dim() == 4, "Input tensor com's dim num should be 4, actual ", com.dim(), ".");
-    TORCH_CHECK(com.size(0) == batch, "The com.shape[0] should be batch, actual com.shape[0] is ", com.size(0), ", batch is ", batch, ".");
-    TORCH_CHECK(com.size(1) == sequence, "The com.shape[1] should be sequence, actual com.shape[1] is ", com.size(1), ", sequence is ", sequence, ".");
-    TORCH_CHECK(com.size(2) == hc, "The com.shape[2] should be hc, actual com.shape[2] is ", com.size(2), ", hc is ", hc, ".");
-    TORCH_CHECK(com.size(3) == hc, "The com.shape[3] should be hc, actual com.shape[3] is ", com.size(3), ", hc is ", hc, ".");
-    // check dtype
-    TORCH_CHECK(x.dtype() == at::kFloat || x.dtype() == at::kHalf || x.dtype() == at::kBFloat16,
-                "x should be FLOAT16, BFLOAT16, or FLOAT32.");
-    TORCH_CHECK(residual.dtype() == x.dtype(), "x's dtype should be equal to residual's dtype.");
-    TORCH_CHECK(post.dtype() == at::kFloat || post.dtype() == at::kHalf || post.dtype() == at::kBFloat16,
-                "post should be FLOAT16, BFLOAT16, or FLOAT32.");
-    TORCH_CHECK(com.dtype() == post.dtype(), "com's dtype should be equal to post's dtype.");
 }
 
 at::Tensor npu_hc_post_meta(
@@ -770,7 +725,6 @@ at::Tensor npu_hc_post_meta(
     const at::Tensor& post,
     const at::Tensor& comb)
 {
-    check_hc_post_shape_and_dtype(x, residual, post, comb);
     // construct the output tensor
     at::Tensor outputs = construct_hc_post_output_tensor(residual);
     return outputs;
@@ -779,27 +733,27 @@ at::Tensor npu_hc_post_meta(
 std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(const at::Tensor& x, int64_t hc_mult)
 {
     auto xDims = x.dim();
-    at::SmallVector<int64_t, 8> y_size;
-    at::SmallVector<int64_t, 8> post_size;
-    at::SmallVector<int64_t, 8> comb_frag_size;
+    at::SmallVector<c10::SymInt, 8> y_size;
+    at::SmallVector<c10::SymInt, 8> post_size;
+    at::SmallVector<c10::SymInt, 8> comb_frag_size;
     if (xDims == 4) {
-        auto batch = x.size(0);
-        auto size = x.size(1);
-        auto d = x.size(3);
+        auto batch = x.sym_size(0);
+        auto size = x.sym_size(1);
+        auto d = x.sym_size(3);
         y_size = {batch, size, d};
         post_size = {batch, size, hc_mult};
         comb_frag_size = {batch, size, hc_mult, hc_mult};
     } else if (xDims == 3){
-        auto bs = x.size(0);
-        auto d = x.size(2);
+        auto bs = x.sym_size(0);
+        auto d = x.sym_size(2);
         y_size = {bs, d};
         post_size = {bs, hc_mult};
         comb_frag_size = {bs, hc_mult, hc_mult};
     }
 
-    at::Tensor y = at::empty(y_size, x.options().dtype(at::kBFloat16));
-    at::Tensor post = at::empty(post_size, x.options().dtype(at::kFloat));
-    at::Tensor comb_frag = at::empty(comb_frag_size, x.options().dtype(at::kFloat));
+    at::Tensor y = at::empty_symint(c10::SymIntArrayRef(y_size), x.options().dtype(at::kBFloat16));
+    at::Tensor post = at::empty_symint(c10::SymIntArrayRef(post_size), x.options().dtype(at::kFloat));
+    at::Tensor comb_frag = at::empty_symint(c10::SymIntArrayRef(comb_frag_size), x.options().dtype(at::kFloat));
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
@@ -826,48 +780,10 @@ at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x, float epsil
     return yOut;
 }
 
-// 工具函数，检查输入shape
-void check_hc_pre_shape_and_dtype(const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base) {
-    constexpr int64_t HC_LIMIT = 4;
-    constexpr int64_t D_LIMIT = 4096;
-    constexpr int64_t MIX_HC_LIMIT = 24;
-    // check x shape: [b, s, hc, d]
-    auto xDims = x.dim();
-    TORCH_CHECK(xDims == 4 || xDims == 3, "Input tensor x's dim num should be 4, actual ", xDims, ".");
-    for (size_t i = 0; i < 3; i++) {
-        TORCH_CHECK(x.size(i) > 0, "Input tensor x's shape should be positive, but x.shape[", i, "] is :", x.size(i), ".");
-    }
-    auto hc = x.size(1);
-    auto d = x.size(2);
-    if (xDims == 4) {
-        hc = x.size(2);
-        d = x.size(3);
-    }
-    TORCH_CHECK(hc == HC_LIMIT, "The hc of x only support ", HC_LIMIT, ", actual ", hc, ".");
-    TORCH_CHECK(d == D_LIMIT, "The d of x only support ", D_LIMIT, ", actual ", d, ".");
-    // check hc_fn: [mix_hc, hc * d]
-    TORCH_CHECK(hc_fn.dim() == 2, "Input tensor hc_fn's dim num should be 2, actual ", hc_fn.dim(), ".");
-    auto mix_hc = hc_fn.size(0);
-    TORCH_CHECK(mix_hc == MIX_HC_LIMIT, "The mix_hc of hc_fn only support ", MIX_HC_LIMIT, ", actual ", mix_hc, ".");
-    TORCH_CHECK(hc_fn.size(1) == hc * d, "The hc_fn.shape[1] should be hc * d, actual hc_fn.shape[1] is ", hc_fn.size(1), ", hc is ", hc, ", d is ", d, ".");
-    // check hc_scale: [3]
-    TORCH_CHECK(hc_scale.dim() == 1, "Input tensor hc_scale's dim num should be 1, actual ", hc_scale.dim(), ".");
-    TORCH_CHECK(hc_scale.size(0) == 3, "Input tensor hc_scale's shape should be [3], actual [", hc_scale.size(0), "].");
-    // check hc_base: [mix_hc]
-    TORCH_CHECK(hc_base.dim() == 1, "Input tensor hc_base's dim num should be 1, actual ", hc_base.dim(), ".");
-    TORCH_CHECK(hc_base.size(0) == mix_hc, "The hc_base.shape[0] should be mix_hc, actual hc_base.shape[0] is ", hc_base.size(0), ", mix_hc is ", mix_hc, ".");
-    // check dtype
-    TORCH_CHECK(x.dtype() == at::kBFloat16, "x's dtype should be BFLOAT16.");
-    TORCH_CHECK(hc_fn.dtype() == at::kFloat, "hc_fn's dtype should be FLOAT32.");
-    TORCH_CHECK(hc_scale.dtype() == at::kFloat, "hc_scale's dtype should be FLOAT32.");
-    TORCH_CHECK(hc_base.dtype() == at::kFloat, "hc_base's dtype should be FLOAT32.");
-}
-
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_meta(
     const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base, 
     int64_t hc_mult, int64_t hc_sinkhorn_iters, double norm_eps, double hc_eps)
 {
-    check_hc_pre_shape_and_dtype(x, hc_fn, hc_scale, hc_base);
     // construct the output tensor
     auto output_tensors = construct_hc_pre_output_tensor(x, hc_mult);
     at::Tensor y = std::get<0>(output_tensors);

@@ -41,7 +41,6 @@ from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
-from vllm_ascend.ops.pypto import AttentionPostV4
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
 
 if TYPE_CHECKING:
@@ -991,7 +990,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_wgate = self.compressor.wgate
             self.compressor_norm = self.compressor.norm
             self.compressor_norm_eps = self.compressor.norm_eps
-        # self.npu_attention_post_func = AttentionPostV4()
 
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):

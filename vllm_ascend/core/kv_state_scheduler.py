@@ -18,9 +18,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import time
+from typing import Type, Union
 
+from vllm.config import SchedulerConfig, VllmConfig
 from vllm.distributed.ec_transfer.ec_connector.base import ECConnectorMetadata
 from vllm.distributed.kv_transfer.kv_connector.v1.base import \
     KVConnectorMetadata
@@ -30,6 +32,7 @@ from vllm.v1.core.sched.output import NewRequestData, SchedulerOutput
 from vllm.v1.core.sched.request_queue import (SchedulingPolicy,
                                               create_request_queue)
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.utils import record_function_or_nullcontext
@@ -39,6 +42,30 @@ from vllm_ascend.core.kv_state_manager import KVStateManager
 logger = init_logger(__name__)
 
 
+@dataclass
+class KVStateSchedulerConfig(SchedulerConfig):
+    scheduler_cls: Union[str, Type[object]] = (
+        "vllm_ascend.core.kv_state_scheduler.KVStateScheduler")
+
+    @classmethod
+    def initialize_from_config(cls, vllm_config: VllmConfig):
+        vllm_scheduler_config = vllm_config.scheduler_config
+        scheduler_config = {
+            field.name: getattr(vllm_scheduler_config, field.name)
+            for field in fields(vllm_scheduler_config) if field.init
+        }
+        if vllm_scheduler_config.async_scheduling:
+            scheduler_config["scheduler_cls"] = (
+                "vllm_ascend.core.kv_state_scheduler.AsyncKVStateScheduler")
+        else:
+            scheduler_config["scheduler_cls"] = (
+                "vllm_ascend.core.kv_state_scheduler.KVStateScheduler")
+        scheduler_config[
+            "max_model_len"] = vllm_config.model_config.max_model_len
+        scheduler_config[
+            "is_encoder_decoder"] = vllm_config.model_config.is_encoder_decoder
+        return cls(**scheduler_config)
+    
 @dataclass
 class KVStateNewRequestData(NewRequestData):
     state_id: int | None = None
@@ -681,3 +708,9 @@ class KVStateScheduler(Scheduler):
         # Return that we are ready.
         self.finished_recving_kv_req_ids.remove(request.request_id)
         return True
+    
+
+class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
