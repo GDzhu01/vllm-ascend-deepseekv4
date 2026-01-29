@@ -119,7 +119,7 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
     # 2. Calculate how many blocks are needed for each request
     # Formula: ceil(length / block_size) -> (length + block_size - 1) // block_size
     blocks_per_req = (length_list + block_size - 1) // block_size
-    total_blocks = blocks_per_req.sum().item() + 1
+    total_blocks = blocks_per_req.sum() + 1
 
     # 3. Allocate output tensor with zeros (this handles the padding automatically)
     # Shape: [total_blocks, block_size, n, d]
@@ -134,17 +134,17 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
     block_offset = 1
 
     for i in range(bs):
-        length = int(length_list[i].item())
-        num_blocks = int(blocks_per_req[i].item())
+        length = length_list[i]
+        num_blocks = blocks_per_req[i]
 
         if length > 0:
             # Slice the valid data for this request from the packed input
             # Shape: [length, n, d]
-            req_data = x[input_offset : input_offset + length]
+            req_data = x[input_offset: input_offset + length]
 
             # Select the assigned blocks in the output
             # Shape: [num_blocks, block_size, n, d]
-            target_blocks = out[block_offset : block_offset + num_blocks]
+            target_blocks = out[block_offset: block_offset + num_blocks]
 
             # View as a flat sequence to easily copy the data
             # Shape: [num_blocks * block_size, n, d]
@@ -1142,9 +1142,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
         actual_seq_lengths_key = attn_metadata.prefill.seq_lens
         num_decode_tokens = attn_metadata.num_decode_tokens
-        max_seqlen_kv =  torch.max(actual_seq_lengths_key).item()
+        max_seqlen_kv = actual_seq_lengths_key.max()
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-        max_seqlen_q = torch.max(seq_lens_q).item()
+        max_seqlen_q = seq_lens_q.max()
         compressed_kv_block_table = attn_metadata.prefill.block_table
         compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping
 
