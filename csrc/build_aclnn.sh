@@ -92,6 +92,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     TARGET_DIR="$SCRIPT_DIR/mc2/moe_combine_normal/op_kernel/utils/"
     echo "$TARGET_DIR"
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+    
     # CUSTOM_OPS_ARRAY=(
     #     "dispatch_ffn_combine"
     #     "dispatch_gmm_combine_decode"

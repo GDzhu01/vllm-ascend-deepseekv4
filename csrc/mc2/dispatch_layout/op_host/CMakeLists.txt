@@ -49,9 +49,9 @@
 # )
 
 if (BUILD_OPEN_PROJECT)
-#     target_sources(op_host_aclnnExc PRIVATE
-#         dispatch_layout_def.cpp
-#     )
+    target_sources(op_host_aclnnInner PRIVATE
+        dispatch_layout.cpp
+    )
     add_ops_compile_options(
         OP_NAME DispatchLayout
         OPTIONS --cce-auto-sync=off
