@@ -378,7 +378,11 @@ class NPUPlatform(Platform):
             vllm_config.scheduler_config = kv_state_scheduler_config
 
             # dsv4 not support chunked_prefill and prefix_caching now
-            vllm_config.scheduler_config.enable_chunked_prefill = False
+            # but in order to save memory, we allow d-node enable chunked prefill when using p/d disaggrgation
+            if vllm_config.kv_transfer_config is not None and vllm_config.kv_transfer_config.is_kv_consumer:
+                vllm_config.scheduler_config.enable_chunked_prefill = True
+            else:
+                vllm_config.scheduler_config.enable_chunked_prefill = False
             vllm_config.cache_config.enable_prefix_caching = False
 
     @classmethod
