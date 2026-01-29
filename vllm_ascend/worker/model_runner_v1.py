@@ -3503,35 +3503,6 @@ class NPUModelRunner(GPUModelRunner):
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
 
-    def batch_get_compressed_pos(
-        self,
-        old: np.ndarray,
-        new: np.ndarray,
-        ratio: int
-    ) -> (np.ndarray, np.ndarray):
-        """
-        多请求批量版：old/new都是np数组，为每个请求独立计算压缩pos
-        :param old: 多请求历史token数，shape=[num_reqs,]
-        :param new: 多请求本次调度token数，shape=[num_reqs,]
-        :param ratio: 压缩比
-        :return: 每个请求对应的压缩position_id列表
-        """
-        assert old.shape == new.shape, "old和new必须同shape"
-        assert ratio >= 1 and isinstance(ratio, int), "压缩比必须是≥1的整数"
-        assert np.all(old >= 0) and np.all(new >= 0), "token数不能为负"
-
-        len_old = old // ratio
-        len_new = (old + new) // ratio
-        l_diff = len_new - len_old
-        res = []
-        res_len = []
-        for i, l in enumerate(l_diff):
-            res.append(np.arange(len_old[i], len_old[i] + l))
-            res_len.append(l)
-        res = np.concatenate(res)
-        res_len = np.array(res_len)
-        return res, res_len
-
     def _compute_swa_meta(
         self,
         state_ids: np.ndarray,

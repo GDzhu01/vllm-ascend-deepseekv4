@@ -50,7 +50,8 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
         # Needs special handling for find_longest_cache_hit if eagle is enabled
         self.use_eagle = use_eagle
         cache_num_blocks = [
-            kv_cache_config.num_blocks for _ in kv_cache_config.kv_cache_groups
+            kv_cache_config.num_blocks // kv_cache_group.kv_cache_spec.compress_ratio for kv_cache_group in
+            kv_cache_config.kv_cache_groups
         ]
         self.block_pool = MultiBlockPool(
             cache_num_blocks,
