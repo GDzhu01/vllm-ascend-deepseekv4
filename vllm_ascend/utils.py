@@ -72,6 +72,7 @@ _SUBSCRIBED_COMPUTE_STREAMS = set()
 _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
+_ATNN_CALCULATION_STREAM = None
 
 
 def _print_callback_on_stream(*args):
@@ -351,6 +352,12 @@ def cp_chunkedprefill_comm_stream() -> torch.npu.Stream:
     if _CP_CHUNKEDPREFILL_COMM_STREAM is None:
         _CP_CHUNKEDPREFILL_COMM_STREAM = torch_npu.npu.Stream()
     return _CP_CHUNKEDPREFILL_COMM_STREAM
+
+def attention_calculation_stream() -> torch.npu.Stream:
+    global _ATNN_CALCULATION_STREAM
+    if _ATNN_CALCULATION_STREAM is None:
+        _ATNN_CALCULATION_STREAM = torch_npu.npu.Stream()
+    return _ATNN_CALCULATION_STREAM
 
 
 def adapt_patch(is_global_patch: bool = False):

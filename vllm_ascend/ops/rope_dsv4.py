@@ -174,8 +174,8 @@ class ComplexExpRotaryEmbedding(nn.Module):
         super().__init__()
         self.layername = layername
         self.rotary_dim = rotary_dim
-        # dtype = torch.get_default_dtype()
-        dtype = torch.float32
+        dtype = torch.get_default_dtype()
+        # dtype = torch.float32
         # 1. 生成 Config Key
         beta_fast = extra_kwargs.get("beta_fast", 32)
         beta_slow = extra_kwargs.get("beta_slow", 1)

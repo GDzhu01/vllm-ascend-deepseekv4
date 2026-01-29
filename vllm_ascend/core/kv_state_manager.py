@@ -22,6 +22,7 @@ class KVStateManager:
             raise ValueError(f"Request {request_id} already allocated, only allocate state while prefill.")
         state_to_allocate = self.states_pool.pop()
         self.req_to_state_id[request_id] = state_to_allocate
+        self.get_resource_usage()
         return state_to_allocate
 
     def free(
@@ -35,3 +36,10 @@ class KVStateManager:
             return
         state_to_free = self.req_to_state_id.pop(request_id)
         self.states_pool.add(state_to_free)
+
+    def get_resource_usage(self) -> tuple[int, int, int]:
+        # For monitoring usage, return
+        # (in use state nums, remained state nums, total state nums)
+        state_num_remain = len(self.states_pool)
+        state_num_in_use = self.max_num_seqs - state_num_remain
+        return (state_num_in_use, state_num_remain, self.max_num_seqs)
