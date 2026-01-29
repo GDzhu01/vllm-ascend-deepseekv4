@@ -250,6 +250,7 @@ class AscendDSADecodeMetadata:
     state_block_table: torch.Tensor
 
     query_start_loc: torch.tensor = None
+    query_start_loc_cpu: torch.tensor = None
     attn_mask: Optional[torch.Tensor] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
@@ -850,6 +851,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=max_seqlen_q,
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
+            query_start_loc_cpu=query_start_loc_cpu,
             state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],

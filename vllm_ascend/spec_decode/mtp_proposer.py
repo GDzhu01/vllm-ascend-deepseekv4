@@ -342,7 +342,7 @@ class MtpProposer(EagleProposer):
                                                num_decodes])
                             else:
                                 actual_size = len(
-                                    decode_metadata.actual_seq_lengths_q)
+                                    decode_metadata.query_start_loc_cpu)
 
                             decode_metadata.seq_lens_list = \
                                 decode_metadata.seq_lens_list[:actual_size]
