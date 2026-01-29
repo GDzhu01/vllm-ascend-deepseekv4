@@ -46,7 +46,7 @@ jobs:
       - name: Setup git proxy
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          OKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
           TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
       # NOTE: Do not update the version of checkout, there have some issue on self_hosted runner with the higher version
