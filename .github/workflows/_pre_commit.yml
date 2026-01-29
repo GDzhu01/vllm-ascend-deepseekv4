@@ -21,6 +21,7 @@ jobs:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-cpu
     env:
       GOPROXY: https://goproxy.io,direct
+      GITHUB_WORKSPACE: /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
     steps:
     - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
       uses: actions/checkout@v6
