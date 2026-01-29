@@ -7,8 +7,8 @@ on:
           required: true
           type: string
 
-permissions:
-  contents: write
+# permissions:
+#   contents: write
 
 jobs:
   pre-commit:
