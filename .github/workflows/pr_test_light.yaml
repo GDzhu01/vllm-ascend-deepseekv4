@@ -21,6 +21,7 @@ on:
   pull_request:
     branches:
       - 'releases/v0.13.0'
+
 # Bash shells do not use ~/.profile or ~/.bashrc so these shells need to be explicitly
 # declared as "shell: bash -el {0}" on steps that need to be properly activated.
 # It's used to activate ascend-toolkit environment variables.
@@ -39,8 +40,9 @@ jobs:
     uses: ./.github/workflows/_pre_commit.yml
     with:
       vllm: v0.13.0
+      runs-on: linux-amd64-cpu-8-hk
   changes:
-    runs-on: linux-aarch64-a2-0
+    runs-on: linux-amd64-cpu-8-hk
     outputs:
       e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
       ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
@@ -48,7 +50,9 @@ jobs:
       - name: Setup git proxy
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
+          OKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
       # NOTE: Do not update the version of checkout, there have some issue on self_hosted runner with the higher version
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
@@ -57,6 +61,7 @@ jobs:
           filters: |
             e2e_tracker:
               - '.github/workflows/pr_test_light.yaml'
+              - '.github/workflows/_e2e_test.yaml'
               - 'vllm_ascend/**'
               - 'csrc/**'
               - 'cmake/**'
@@ -79,7 +84,7 @@ jobs:
     uses: ./.github/workflows/_unit_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
-      runner: linux-amd64-cpu-16-hk
+      runner: linux-amd64-cpu-8-hk
       image: quay.nju.edu.cn/ascend/cann:8.2.rc2-910b-ubuntu22.04-py3.11
       type: pr
 
@@ -88,10 +93,9 @@ jobs:
     strategy:
       matrix:
         vllm_version: [v0.13.0]
-    if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/_e2e_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
-      runner: linux-aarch64-a2
+      runner: linux-aarch64-a2-1
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11
       type: light
