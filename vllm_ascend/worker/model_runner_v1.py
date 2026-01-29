@@ -1035,11 +1035,12 @@ class NPUModelRunner(GPUModelRunner):
                                                               num_actual_tokens_pcp_padded]
 
             # get kv_state id
-            state_ids = torch.tensor(
+            state_ids_cpu = torch.tensor(
                 [self.requests[req_id].state_id for req_id in req_ids],
                 dtype=torch.int32,
-                device=self.device,
-            )
+                device="cpu",
+            ).pin_memory()
+            state_ids = state_ids_cpu.to(self.device, non_blocking=True)
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1098,6 +1099,7 @@ class NPUModelRunner(GPUModelRunner):
                 num_computed_tokens_cpu=self.input_batch.
                 num_computed_tokens_cpu_tensor[:num_reqs],
                 positions=self.positions.gpu,
+                positions_cpu=self.positions.cpu,
                 attn_state=self.attn_state,
                 max_query_len=max_num_scheduled_tokens,
                 decode_token_per_req=self.decode_token_per_req,
@@ -2108,6 +2110,7 @@ class NPUModelRunner(GPUModelRunner):
                     state_block_table=self.state_block_table.gpu,
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     positions=self.positions.gpu,
+                    positions_cpu=self.positions.cpu,
                     attn_state=self.attn_state,
                     max_query_len=max_query_len,
                     decode_token_per_req=self.decode_token_per_req,

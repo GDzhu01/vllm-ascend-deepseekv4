@@ -767,11 +767,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     ) -> AscendDSADecodeMetadata:
         num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
+        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu[:self.num_decodes + 1]
 
         input_positions = common_attn_metadata.positions[:self.
                                                          num_actual_tokens].long(
                                                          )
         input_positions = input_positions[:self.num_decode_tokens]
+
+        input_positions_cpu = common_attn_metadata.positions_cpu[:self.
+                                                         num_actual_tokens].long(
+                                                         )
+        input_positions_cpu = input_positions_cpu[:self.num_decode_tokens]
 
         # Notice that num_decodes != num_decode_tokens in SpecDecoding Scenario
         # actual_seq_lengths_q = query_start_loc_cpu[1:self.num_decodes +
@@ -793,15 +799,16 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
 
-        decode_input_positions = input_positions
+        decode_input_positions = input_positions_cpu
         # c4 rope
         c4_mask = ((decode_input_positions+1) % 4) == 0
         c4_input_positions = decode_input_positions[c4_mask]
         c4_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 4 + self.num_decodes),)
         pad_right = c4_target_shape[0] - c4_input_positions.shape[0]
         c4_pad_positions = F.pad(c4_input_positions, (0, pad_right), value=0.0)
+        c4_pad_positions_gpu = c4_pad_positions.pin_memory().to(self.device, non_blocking=True)
         # c4_cos, c4_sin = get_cos_and_sin_dsa(c4_pad_positions)
-        c4_cos, c4_sin = get_cos_and_sin_dsa({"c4": c4_pad_positions},use_cache=True)
+        c4_cos, c4_sin = get_cos_and_sin_dsa({"c4": c4_pad_positions_gpu}, use_cache=True)
 
         # c128 rope
         c128_mask = ((decode_input_positions+1) % 128) == 0
@@ -809,8 +816,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         c128_target_shape = (min(self.num_decode_tokens, self.num_decode_tokens // 128 + self.num_decodes),)
         pad_right = c128_target_shape[0] - c128_input_positions.shape[0]
         c128_pad_positions = F.pad(c128_input_positions, (0, pad_right), value=0.0)
+        c128_pad_positions_gpu = c128_pad_positions.pin_memory().to(self.device, non_blocking=True)
         # c128_cos, c128_sin = get_cos_and_sin_dsa(c128_pad_positions)
-        c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions},use_cache=True)
+        c128_cos, c128_sin = get_cos_and_sin_dsa({"c128": c128_pad_positions_gpu},use_cache=True)
 
 
         # TODO: zyl refactor this for asc scheduling.
@@ -824,8 +832,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
         slot_mapping = self.slot_mapping[:true_count]
 
-        max_seqlen_kv = torch.max(query_start_loc).item()
-        max_seqlen_q = torch.max(self.seq_lens[:self.num_decodes]).item()
+        max_seqlen_kv = torch.max(query_start_loc_cpu).item()
+        max_seqlen_q = torch.max(common_attn_metadata.seq_lens_cpu[:num_reqs][:self.num_decodes]).item()
         decode_query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
         AscendDSAMetadataBuilder.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
