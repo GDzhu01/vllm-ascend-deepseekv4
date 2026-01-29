@@ -1325,7 +1325,7 @@ class MooncakeConnectorWorker:
 
         # kv_transfer variables
         self.block_size = vllm_config.cache_config.block_size
-        if self.vllm_config.model_config.is_deepseek_mla:
+        if self.vllm_config.model_config.is_deepseek_mla or hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
             self.tp_num_need_pulls = 1
         else:
             num_d_block_heads = max(1,
