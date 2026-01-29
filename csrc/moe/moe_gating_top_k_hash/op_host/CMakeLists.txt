@@ -58,7 +58,7 @@ add_ops_compile_options(
                 -Wno-deprecated-declarations
                 -Werror
                 -mllvm -cce-aicore-hoist-movemask=false
-                # --op_relocatable_kernel_binary=true
+                --op_relocatable_kernel_binary=true
                 # --op_relocatable_kernel_binary=true
 )
 
