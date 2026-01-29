@@ -6,13 +6,13 @@ on:
         vllm:
           required: true
           type: string
-
-permissions:
-  contents: read
+        runner:
+          required: true
+          type: string
 
 jobs:
   pre-commit:
-    runs-on: linux-amd64-cpu-8-hk
+    runs-on: ${{ inputs.runner }}
     container:
       # Build it from https://github.com/nv-action/vllm-benchmarks/blob/main/Dockerfile
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-cpu
