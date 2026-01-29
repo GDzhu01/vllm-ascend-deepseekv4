@@ -40,6 +40,7 @@ jobs:
     uses: ./.github/workflows/_pre_commit.yml
     with:
       vllm: v0.13.0
+      runs-on: linux-amd64-cpu-8-hk
   changes:
     runs-on: linux-amd64-cpu-8-hk
     outputs:
