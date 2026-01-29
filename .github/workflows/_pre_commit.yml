@@ -21,14 +21,8 @@ jobs:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-cpu
     env:
       GOPROXY: https://goproxy.io,direct
-      GITHUB_WORKSPACE: /__w/vllm-ascend/vllm-ascend-deepseekv4
+      GITHUB_WORKSPACE: /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
     steps:
-    - name: Set PTA from file
-      run: |
-        TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
-        TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-
     - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
       uses: actions/checkout@v6
 
@@ -54,7 +48,6 @@ jobs:
         VLLM_TARGET_DEVICE=empty python3 -m pip install . --extra-index https://download.pytorch.org/whl/cpu/
     - name: Install vllm-ascend-deepseekv4 dev
       run: |
-        git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend-deepseekv4
         pip install -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
     - name: Run pre-commit
       env:
@@ -63,4 +56,5 @@ jobs:
         TERM: xterm-256color
         SHELLCHECK_OPTS: "--exclude=SC2046,SC2006,SC2086" # Exclude SC2046, SC2006, SC2086 for actionlint
       run: |
+        git config --global --add safe.directory $GITHUB_WORKSPACE
         pre-commit run --all-files --hook-stage manual
