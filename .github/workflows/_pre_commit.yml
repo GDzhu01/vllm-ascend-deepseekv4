@@ -48,7 +48,6 @@ jobs:
         VLLM_TARGET_DEVICE=empty python3 -m pip install . --extra-index https://download.pytorch.org/whl/cpu/
     - name: Install vllm-ascend-deepseekv4 dev
       run: |
-        git config --global --add safe.directory $GITHUB_WORKSPACE/vllm-ascend-deepseekv4
         pip install -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
     - name: Run pre-commit
       env:
@@ -57,5 +56,5 @@ jobs:
         TERM: xterm-256color
         SHELLCHECK_OPTS: "--exclude=SC2046,SC2006,SC2086" # Exclude SC2046, SC2006, SC2086 for actionlint
       run: |
-        git config --global --add safe.directory $GITHUB_WORKSPACE/vllm-ascend-deepseekv4
+        git config --global --add safe.directory $GITHUB_WORKSPACE
         pre-commit run --all-files --hook-stage manual
