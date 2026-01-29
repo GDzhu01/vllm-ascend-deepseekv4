@@ -436,6 +436,22 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
 
         return hidden_states, router_logits, None, None
 
+    def all_gather_input_id_with_dp_group(self,
+                                          input_ids: torch.Tensor
+    ) -> torch.Tensor:
+        if self.moe_config.dp_size > 1:
+            forward_context = get_forward_context()
+            max_tokens_across_dp = forward_context.max_tokens_across_dp
+            pad_size = max_tokens_across_dp - self.num_tokens
+            if pad_size > 0:
+                input_ids = nn.functional.pad(input_ids,
+                                                  (0, 0, 0, pad_size))
+
+            # All-gather across DP group
+            input_ids = self.moe_config.dp_group.all_gather(
+                input_ids, 0)
+        return input_ids
+
     def finalize(self,
                  hidden_states: torch.Tensor,
                  reduce_results: bool,
