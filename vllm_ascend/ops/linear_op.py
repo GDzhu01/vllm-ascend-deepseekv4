@@ -736,7 +736,7 @@ def _get_row_parallel_op(
         return ShardedCPRowParallelOp(layer)
     if "down_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
         return MLPRowParallelOp(layer)
-    if "o_proj" in prefix and oproj_tp_enable():
+    if ("o_proj" in prefix or "wo_b" in prefix) and oproj_tp_enable():
         return OProjRowParallelOp(layer)
     if matmul_allreduce_enable():
         return MatmulAllreduceRowParallelOp(layer)
