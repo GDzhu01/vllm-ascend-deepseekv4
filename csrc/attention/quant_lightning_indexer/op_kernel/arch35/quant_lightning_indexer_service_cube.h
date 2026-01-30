@@ -234,7 +234,6 @@ __aicore__ inline void QLIMatmul<QLIT>::KeyNd2Nz(uint64_t s2L1RealSize, uint64_t
     // 默认一块buf最多放两份
     DataCopy(keyL1_[(keyL1BufIdx_ % KEY_BUF_NUM) * KEY_BUFFER_OFFSET],
              keyGm_[runInfo.tensorKeyOffset + s2GmOffset * constInfo_.headDim], nd2nzPara);
-
 }
 
 // blkNum, blkSize, N2, D
@@ -357,7 +356,6 @@ __aicore__ inline void QLIMatmul<QLIT>::Fixp(uint64_t s1gGmOffset, uint64_t s2Gm
     Fixpipe<float, float, QLI_CFG_ROW_MAJOR_UB>(mm1ResUB_[(runInfo.loop % 2) * CeilDiv(constInfo_.mBaseSize, 2) * constInfo_.s2BaseSize + 
                                                 CeilDiv(s1gGmOffset, 2) * fixpipeParams.dstStride + s2GmOffset],
                                         cL0_[(l0BufIdx_ % L0_BUF_NUM) * L0C_BUFFER_OFFSET], fixpipeParams); // 将matmul结果从L0C搬运到UB
-
 }
 
 template <typename QLIT>
@@ -376,7 +374,6 @@ __aicore__ inline void QLIMatmul<QLIT>::AllocEventID()
     
     SetFlag<HardEvent::FIX_M>(FIX_M_EVENT + 0);
     SetFlag<HardEvent::FIX_M>(FIX_M_EVENT + 1);
-
 }
 
 template <typename QLIT>
@@ -395,7 +392,6 @@ __aicore__ inline void QLIMatmul<QLIT>::FreeEventID()
     
     WaitFlag<HardEvent::FIX_M>(FIX_M_EVENT + 0);
     WaitFlag<HardEvent::FIX_M>(FIX_M_EVENT + 1);
-
 }
 } // namespace QLIKernel
 #endif

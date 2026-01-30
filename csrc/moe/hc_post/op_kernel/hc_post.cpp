@@ -21,13 +21,17 @@
 
 #include "kernel_operator.h"
 #if defined(__DAV_C310__)
-  #include "arch35/hc_post_full_load.h"
+  #include "hc_post_float32.h"
+  #include "hc_post_bfloat16.h"
     using namespace HcPostRegBase;
 #endif
 #include "hc_post_d_split.h"
 
 using namespace AscendC;
 using namespace HcPost;
+
+#define HC_POST_FLOAT 0
+#define HC_POST_BFLOAT16 1
 
 extern "C" __global__ __aicore__ void hc_post(GM_ADDR x, GM_ADDR residual, GM_ADDR post,
     GM_ADDR comb, GM_ADDR y, GM_ADDR workspace, GM_ADDR tiling)
@@ -36,10 +40,17 @@ extern "C" __global__ __aicore__ void hc_post(GM_ADDR x, GM_ADDR residual, GM_AD
     #if defined(__DAV_C310__)
         GET_TILING_DATA_WITH_STRUCT(HcPostTilingData, tilingData, tiling);
         const HcPostTilingData *__restrict hcPostTilingData = &tilingData;
-        HcPostRegBaseFullLoad<DTYPE_X, DTYPE_POST> op;
-        op.Init(x, residual, post, comb, y, workspace, hcPostTilingData, &pipe);
-        op.Process();
-        return;
+        if (TILING_KEY_IS(HC_POST_FLOAT)) {
+            HcPostRegBaseFloat32<DTYPE_POST> op;
+            op.Init(x, residual, post, comb, y, workspace, hcPostTilingData, &pipe);
+            op.Process();
+            return;
+        } else if (TILING_KEY_IS(HC_POST_BFLOAT16)) {
+            HcPostRegBaseBfloat16<DTYPE_X, DTYPE_POST> op;
+            op.Init(x, residual, post, comb, y, workspace, hcPostTilingData, &pipe);
+            op.Process();
+            return;
+        }
     #else
         GET_TILING_DATA_WITH_STRUCT(HcPostTilingData, tilingData, tiling);
         const HcPostTilingData *__restrict hcPostTilingData = &tilingData;

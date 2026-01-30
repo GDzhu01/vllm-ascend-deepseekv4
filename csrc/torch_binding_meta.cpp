@@ -678,11 +678,15 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     int64_t num_heads_kv,
     int64_t head_dim,
     const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q,
     const c10::optional<at::Tensor> &seqused_kv,
     int64_t batch_size,
     int64_t max_seqlen_q,
     int64_t max_seqlen_kv,
-    int64_t topk,
+    int64_t ori_topk,
+ 	int64_t cmp_topk,
     int64_t cmp_ratio,
     int64_t ori_mask_mode,
     int64_t cmp_mask_mode,
@@ -691,26 +695,58 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     c10::string_view layout_q,
     c10::string_view layout_kv,
     bool has_ori_kv,
-    bool has_cmp_kv)
+    bool has_cmp_kv,
+    const c10::string_view device)
 {
+    constexpr int64_t OUTPUT_SIZE = 1024;
     at::Tensor output;
     if (cu_seqlens_q.has_value()) {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
-    }else {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device("npu"));
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
+    } else if (cu_seqlens_ori_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_ori_kv.value().device()));
+    } else if (cu_seqlens_cmp_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_cmp_kv.value().device()));
+    } else if (seqused_q.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_q.value().device()));
+    } else if (seqused_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_kv.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
     }
     return output;
 }
 
 at::Tensor npu_quant_lightning_indexer_metadata_meta(
-    at::Tensor &query, int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode, 
+    int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode, 
     const c10::optional<at::Tensor> &actual_seq_lengths_query, const c10::optional<at::Tensor> &actual_seq_lengths_key, int64_t batch_size, 
     int64_t max_seqlen_q, int64_t max_seqlen_k, const c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, 
-    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio)
+    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio, const c10::string_view device)
 {
-    at::Tensor output = torch::empty({1024}, torch::dtype(torch::kInt32).device(query.device()));
+    constexpr int64_t OUTPUT_SIZE = 1024;
+    at::Tensor output;
+    if (actual_seq_lengths_query.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_query.value().device()));
+    } else if (actual_seq_lengths_key.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_key.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
+    }
+
     return output;
 }
+
 
 at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
 {
@@ -913,6 +949,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("compressor", &vllm_ascend::meta::compressor_meta);
     // npu_quant_lightning_indexer
     ops.impl("npu_quant_lightning_indexer", &vllm_ascend::meta::npu_quant_lightning_indexer_meta);
+    // npu_quant_lightning_indexer_metadata
+    ops.impl("npu_quant_lightning_indexer_metadata", &vllm_ascend::meta::npu_quant_lightning_indexer_metadata_meta);
     // npu_sparse_attn_sharedkv
     ops.impl("npu_sparse_attn_sharedkv", &vllm_ascend::meta::npu_sparse_attn_sharedkv_meta);
     // npu_sparse_attn_sharedkv_metadata

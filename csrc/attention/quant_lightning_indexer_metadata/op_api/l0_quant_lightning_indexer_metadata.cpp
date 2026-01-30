@@ -44,7 +44,6 @@ const aclTensor* QuantLightningIndexerMetadata(
     char* layoutKeyOptional,
     int64_t sparseCountOptional,
     int64_t sparseModeOptional,
-    bool isFdOptional,
     int64_t preTokensOptional,
     int64_t nextTokensOptional,
     int64_t cmpRatioOptional,
@@ -53,7 +52,7 @@ const aclTensor* QuantLightningIndexerMetadata(
   L0_DFX(QuantLightningIndexerMetadata, actualSeqLengthsQueryOptional, actualSeqLengthsKeyOptional, aicCoreNum, aivCoreNum, socVersion,
                          numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode, batchSizeOptional, maxSeqlenQOptional,  
                          maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional, sparseCountOptional, sparseModeOptional,
-                         isFdOptional, preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData);
+                         preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData);
 
   static internal::AicpuTaskSpace space("QuantLightningIndexerMetadata");
 
@@ -61,11 +60,11 @@ const aclTensor* QuantLightningIndexerMetadata(
       QuantLightningIndexerMetadata,
       OP_ATTR_NAMES({"aic_core_num", "aiv_core_num", "soc_version", "num_heads_q", "num_heads_k", "head_dim", "query_quant_mode",
                      "key_quant_mode", "batch_size", "max_seqlen_q", "max_seqlen_k", "layout_query", "layout_key", "sparse_count",
-                     "sparse_mode", "is_fd", "pre_tokens", "next_tokens", "cmp_ratio"}),
+                     "sparse_mode", "pre_tokens", "next_tokens", "cmp_ratio"}),
       OP_INPUT(actualSeqLengthsQueryOptional, actualSeqLengthsKeyOptional), OP_OUTPUT(metaData),
       OP_ATTR(aicCoreNum, aivCoreNum, socVersion, numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode,
               batchSizeOptional, maxSeqlenQOptional, maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional, 
-              sparseCountOptional, sparseModeOptional, isFdOptional, preTokensOptional, nextTokensOptional, cmpRatioOptional));
+              sparseCountOptional, sparseModeOptional, preTokensOptional, nextTokensOptional, cmpRatioOptional));
   OP_CHECK(ret == ACL_SUCCESS,
            OP_LOGE(ACLNN_ERR_INNER_NULLPTR,
                    "QuantLightningIndexerMetadata"

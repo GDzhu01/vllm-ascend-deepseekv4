@@ -14,8 +14,8 @@
  */
 
 #if defined(__DAV_C310__) 
-    #include "arch35/hc_pre_sinkhorn_regbase_perf.h"
-    #include "arch35/hc_pre_sinkhorn_regbase_base.h"
+    #include "hc_pre_sinkhorn_regbase_perf.h"
+    #include "hc_pre_sinkhorn_regbase_base.h"
 #else
     #include "hc_pre_sinkhorn_perf.h"
     #include "hc_pre_sinkhorn_base.h"

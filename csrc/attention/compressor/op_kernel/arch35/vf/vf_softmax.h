@@ -88,7 +88,7 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
     MaskReg preg_all;
     MaskReg preg_136;
     preg_all = CreateMask<T, MaskPattern::ALL>();
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1,
         src0_2, src1_2, src2_2, src3_2, src0_3, src1_3, src2_3, src3_3;
@@ -122,11 +122,6 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
     __ubuf__ float *x_softmax_3_0 = x_softmax + (ReduceSize * RowSize * 3);
     __ubuf__ float *x_softmax_3_1 = x_softmax + (ReduceSize * RowSize * 3) + RowSize / 2;
 
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0_0, minValue);
         Duplicate(max1_0, minValue);
@@ -451,7 +446,7 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
     MaskReg preg_all;
     MaskReg preg_136;
     preg_all = CreateMask<T, MaskPattern::ALL>();
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1;
     RegTensor<float> max0_0, max1_0, max2_0, max3_0, max0_1, max1_1, max2_1, max3_1;
@@ -471,11 +466,6 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
     __ubuf__ float *x_softmax_2 = x_softmax + (ReduceSize * RowSize * 2);
     __ubuf__ float *x_softmax_3 = x_softmax + (ReduceSize * RowSize * 3);
 
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0_0, minValue);
         Duplicate(max1_0, minValue);
@@ -684,7 +674,7 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
     preg_all = CreateMask<T, MaskPattern::ALL>();
     preg_LHalf = CreateMask<T, MaskPattern::VL32>();
     Not(preg_HHalf, preg_LHalf, preg_all);
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> max0, max1, max2, max3;
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1;
@@ -704,12 +694,7 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
     __ubuf__ float *x_softmax_1 = x_softmax + (ReduceSize * RowSize);
     __ubuf__ float *x_softmax_2 = x_softmax + (ReduceSize * RowSize * 2);
     __ubuf__ float *x_softmax_3 = x_softmax + (ReduceSize * RowSize * 3);
-    
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
+
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0, minValue);
         Duplicate(max1, minValue);

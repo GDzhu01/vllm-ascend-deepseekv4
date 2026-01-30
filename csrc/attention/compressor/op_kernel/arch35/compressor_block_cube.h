@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file compressor_block_cube.h
@@ -16,7 +16,6 @@
 #ifndef COMPRESSOR_BLOCK_CUBE_H
 #define COMPRESSOR_BLOCK_CUBE_H
 
-#include "kernel_operator.h"
 #include "../compressor_comm.h"
 
 using namespace AscendC;
@@ -80,6 +79,7 @@ private:
     GlobalTensor<int32_t> sequsedGm_;
     GlobalTensor<int32_t> startPosGm_;
     bool isExistSeqUsed = false;
+    bool isExistStartPos = false;
 
     // =================================L1 Buffer=================================
     static constexpr uint32_t L1_X_SIZE = 128 * 1024;
@@ -130,7 +130,6 @@ private:
     // =================================Loop======================================
     uint32_t curBIdx_ = 0;
     uint32_t curSIdx_ = 0;
-
 };
 
 template <typename COMP>
@@ -159,8 +158,11 @@ template <typename COMP> __aicore__ inline void CompressorBlockCube<COMP>::Init(
     xGm_.SetGlobalBuffer((__gm__ X_T *)x);
     wkvGm_.SetGlobalBuffer((__gm__ X_T *)wKv);
     wgateGm_.SetGlobalBuffer((__gm__ X_T *)wGate);
-    startPosGm_.SetGlobalBuffer((__gm__ int32_t *)startPos);
     isExistSeqUsed = (seqUsed != nullptr);
+    isExistStartPos = (startPos != nullptr);
+    if (isExistStartPos) {
+        startPosGm_.SetGlobalBuffer((__gm__ int32_t *)startPos);
+    }
     if (isExistSeqUsed) {
         sequsedGm_.SetGlobalBuffer((__gm__ int32_t *)seqUsed);
     }
@@ -235,7 +237,6 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyWeightGmToL1(const RunInfo
     // hIdx: hidden_size轴的索引ID
     // kBase: hidden_size轴单次往L1搬运的长度, 128
     // nLoopIdx: D方向L1搬运的循环ID, 0/1
-    //      
     //      coff=1时, nLoopIdx=0, 搬运wkv nBase, nLoopIdx=1, 搬运wgate nBase
     if constexpr (COMP::coff == COFF::OVERLAP) {
         // coff=2时, constInfo_.dBaseSize = 64, wkv和wgate在D轴各占一半
@@ -277,7 +278,10 @@ __aicore__ inline uint32_t CompressorBlockCube<COMP>::GetSeqUsed(uint32_t bIdx)
 template <typename COMP>
 __aicore__ inline uint32_t CompressorBlockCube<COMP>::GetStartPos(uint32_t bIdx)
 {
-    return (uint32_t)startPosGm_.GetValue(bIdx);
+    if (isExistStartPos) {
+        return (uint32_t)startPosGm_.GetValue(bIdx);
+    }
+    return 0;
 }
 
 template <typename COMP>
@@ -294,6 +298,8 @@ template <typename COMP>
 __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &info, LocalTensor<X_T> xL1Tensor,
     uint32_t hIdx, uint32_t kBase, uint32_t mStart, uint32_t mDealSize, bool isLastM)
 {
+    uint32_t bStartPos;
+    uint32_t bSeqUsed;
     bool copyLastCmpBlock = false;
     if constexpr (COMP::coff == COFF::OVERLAP) {
         if (mStart == 0) {
@@ -304,13 +310,18 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
                 if (curBIdx_ == 0) {
                     copyLastCmpBlock = true;
                 } else {
-                    curBIdx_--;
-                    uint32_t bStartPos = GetStartPos(curBIdx_);
-                    uint32_t bSeqUsed = GetSeqUsed(curBIdx_);
-                    curSIdx_ = (bStartPos + bSeqUsed + constInfo_.cmpRatio - 1) / constInfo_.cmpRatio * constInfo_.cmpRatio - constInfo_.cmpRatio - bStartPos;
+                    // 取上一个batch的尾
+                    // S=0时向前取B
+                    do {
+                        curBIdx_ = (curBIdx_ - 1 + constInfo_.batchSize) % constInfo_.batchSize;
+                        bStartPos = GetStartPos(curBIdx_);
+                        bSeqUsed = GetSeqUsed(curBIdx_);
+                    } while (bSeqUsed == 0);
+
+                    curSIdx_ = bStartPos + bSeqUsed == 0 ? 0 : max(Trunc(bStartPos + bSeqUsed - 1, constInfo_.cmpRatio), bStartPos) - bStartPos;
                 }
             } else {
-                curSIdx_ = curSIdx_ - constInfo_.cmpRatio;
+                curSIdx_ = curSIdx_ < constInfo_.cmpRatio ? 0 : curSIdx_ - constInfo_.cmpRatio;
             }
         }
         if (isLastM) {
@@ -326,8 +337,14 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
     uint32_t ubOffset = mStart * (32 / sizeof(X_T));
     uint32_t mSizeFinish = 0;
     if (copyLastCmpBlock) {
-        uint32_t bStartPos = GetStartPos(constInfo_.batchSize - 1);
-        uint32_t bSeqUsed = GetSeqUsed(constInfo_.batchSize - 1);
+        uint32_t lastBIdx = constInfo_.batchSize;
+        // S=0时向前取B
+        do {
+            lastBIdx = (lastBIdx - 1 + constInfo_.batchSize) % constInfo_.batchSize;
+            bStartPos = GetStartPos(lastBIdx);
+            bSeqUsed = GetSeqUsed(lastBIdx);
+        } while (bSeqUsed == 0);
+
         uint32_t copySeqCnt = (bStartPos + bSeqUsed) % constInfo_.cmpRatio;
         if (copySeqCnt == 0) {
             copySeqCnt = constInfo_.cmpRatio;
@@ -337,7 +354,7 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
         }
         uint64_t tmpSeqId = bSeqUsed- copySeqCnt;
         uint32_t rOffset = (bStartPos + bSeqUsed - copySeqCnt) % constInfo_.cmpRatio * (32 / sizeof(X_T));
-        uint64_t sIdx = GetTIdxByBatch(constInfo_.batchSize - 1) + tmpSeqId;
+        uint64_t sIdx = GetTIdxByBatch(lastBIdx) + tmpSeqId;
         uint64_t gmOffset = sIdx * constInfo_.hSize + hIdx;
         uint32_t nValue = copySeqCnt;
         uint32_t dValue = kBase;
@@ -351,12 +368,20 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
         ubOffset += constInfo_.cmpRatio * (32 / sizeof(X_T));
         mSizeFinish += constInfo_.cmpRatio;
     }
+    
     while (mSizeFinish < mDealSize) {
         if (curBIdx_ > info.bEnd) {
             break;
         }
         uint32_t bSeqUsed = GetSeqUsed(curBIdx_);
         uint32_t bStartPos = GetStartPos(curBIdx_);
+
+        // 如果S=0，直接到下一个B
+        if (bSeqUsed == 0) {
+            curBIdx_++;
+            curSIdx_ = 0;
+            continue;
+        }
 
         uint32_t headHolderCnt = (bStartPos + curSIdx_) % constInfo_.cmpRatio;
         uint32_t canCopyCnt = bSeqUsed - curSIdx_;
@@ -381,7 +406,7 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyXGmToL1(const RunInfo &inf
         uint32_t srcDValue = constInfo_.hSize;
         uint32_t dstNzC0Stride = (info.dealTcNum * constInfo_.cmpRatio + 15) / 16 * 16;
         if constexpr (COMP::coff == COFF::OVERLAP) {
-            dstNzC0Stride = (info.dealTcNum * constInfo_.cmpRatio + constInfo_.cmpRatio + 15) / 16 * 16; // TODO: L1->L0搬运时未16对齐
+            dstNzC0Stride = (info.dealTcNum * constInfo_.cmpRatio + constInfo_.cmpRatio + 15) / 16 * 16;
         }
         CopySingleMatrixNDToNZ(xL1Tensor[ubOffset], xGm_[gmOffset], nValue, dValue, srcDValue, dstNzC0Stride);
         ubOffset += (canCopyCnt + tailHolderCnt) * (32 / sizeof(X_T));
@@ -541,15 +566,12 @@ __aicore__ inline void CompressorBlockCube<COMP>::ComputeMm1(const RunInfo &info
                             LocalTensor<X_T> aL0Tensor = tmpBufL0A.GetWithOffset<X_T>((L0A_PP_SIZE / sizeof(X_T)), l0abBufId * L0A_PP_SIZE);
                             LocalTensor<X_T> bL0Tensor = tmpBufL0B.GetWithOffset<X_T>((L0B_PP_SIZE / sizeof(X_T)), l0abBufId * L0B_PP_SIZE);
                             // 当Coff=2时，nL1=0时计算的是pre数据，nL1=N_L1_BASE时计算的是cur数据
-                            // LoadAToL0(mL1, nL1);
                             uint32_t K_L0_BASE = K_L1_BASE;
                             LoadAToL0(aL0Tensor, xL1Tensor, mL1, mDealSize, K_L0_BASE, mSize, (nL1 > 0));
-                            // LoadBToL0(nL1);
                             uint32_t N_L0_BASE = N_L1_BASE;
                             LoadBToL0(bL0Tensor, wL1Tensor, nL1, N_L0_BASE, N_L0_BASE, K_L0_BASE);
                             SetFlag<HardEvent::MTE1_M>(L0AB_EVENT0 + l0abBufId);
                             WaitFlag<HardEvent::MTE1_M>(L0AB_EVENT0 + l0abBufId);
-                            // Mmad();
                             MatrixMmad(cL0Tensor, aL0Tensor, bL0Tensor, mDealSize, N_L0_BASE, K_L0_BASE, (h == 0) && (kL1Idx == 0));
                             SetFlag<HardEvent::M_MTE1>(L0AB_EVENT0 + l0abBufId);
                             l0abBufId = (l0abBufId + 1) % 2;
@@ -557,12 +579,10 @@ __aicore__ inline void CompressorBlockCube<COMP>::ComputeMm1(const RunInfo &info
                         if ((h + K_SIZE >= hSize) && (kL1Idx + 1 == K_L1_LOOP)) {
                             SetFlag<HardEvent::M_FIX>(L0C_EVENT0 + l0cBufId);
                             WaitFlag<HardEvent::M_FIX>(L0C_EVENT0 + l0cBufId);
-                            // FixPipe();
                             uint32_t mSizeAlign = (mDealSize + 15) / 16 * 16;
                             uint32_t nSizeAlign = N_L1_BASE;
                             uint32_t nIdx = nL1 / N_L1_BASE;
                             CopyL0CDataToUb(mm1ResTensor, cL0Tensor, (mL1 == 0) ? 0 : 1, mSizeAlign, nSizeAlign, nIdx);
-                            // DumpTensorForDim2(cL0Tensor, 1, 128 * 128, 1024, 16);
                         }
                         SetFlag<HardEvent::FIX_M>(L0C_EVENT0 + l0cBufId);
                     }
@@ -584,7 +604,6 @@ __aicore__ inline void CompressorBlockCube<COMP>::ComputeMm1(const RunInfo &info
             wBufId = (wBufId + 1) % 2;
         }
     }
-
 }
 
 } // namespace Compressor

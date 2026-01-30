@@ -1,18 +1,23 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 #include "register/op_def_registry.h"
 
 namespace ops {
 class Compressor : public OpDef {
 public:
+    static constexpr uint32_t ROPE_HEAD_DIM_VALUE = 64;
+    static constexpr uint32_t CMP_RATIO_VALUE = 4;
+    static constexpr uint32_t COFF_VALUE = 1;
+    static constexpr uint32_t ROTARY_MODE_VALUE = 1;
+
     explicit Compressor(const char *name) : OpDef(name)
     {
         this->Input("x")
@@ -97,11 +102,11 @@ public:
             .ParamType(REQUIRED)
             .DataTypeList({ge::DT_FLOAT})
             .FormatList({ge::FORMAT_ND});
-        this->Attr("rope_head_dim").AttrType(REQUIRED).Int(64);
-        this->Attr("cmp_ratio").AttrType(REQUIRED).Int(4);
-        this->Attr("coff").AttrType(OPTIONAL).Int(1);
+        this->Attr("rope_head_dim").AttrType(REQUIRED).Int(ROPE_HEAD_DIM_VALUE);
+        this->Attr("cmp_ratio").AttrType(REQUIRED).Int(CMP_RATIO_VALUE);
+        this->Attr("coff").AttrType(OPTIONAL).Int(COFF_VALUE);
         this->Attr("norm_eps").AttrType(OPTIONAL).Float(1e-6f);
-        this->Attr("rotary_mode").AttrType(OPTIONAL).Int(1);
+        this->Attr("rotary_mode").AttrType(OPTIONAL).Int(ROTARY_MODE_VALUE);
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)

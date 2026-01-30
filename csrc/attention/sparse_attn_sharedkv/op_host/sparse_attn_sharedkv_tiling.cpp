@@ -104,12 +104,6 @@ ge::graphStatus SASInfoParser::GetNpuInfo()
         OP_LOGE(opName_, "SOC Version[%d] is not support.", (int32_t)socVersion_);
         return GRAPH_FAILED;
     }
-    // OP_CHECK_IF(context_->GetWorkspaceSizes(1) == nullptr, OP_LOGE(opName_, "workSpaceSize got from ge is nullptr"),
-    //            return ge::GRAPH_FAILED);
-    // OP_CHECK_IF(context_->GetRawTilingData() == nullptr,
-    //            OP_LOGE(context_->GetNodeName(), "RawTilingData got from GE context is nullptr."),
-    //            return ge::GRAPH_FAILED);
-    // ascendcPlatform.GetCoreMemSize(platform_ascendc::CoreMemType::L2, l2CacheSize_);
 
     return ge::GRAPH_SUCCESS;
 }
@@ -195,9 +189,10 @@ ge::graphStatus SASInfoParser::GetInOutDataType()
 ge::graphStatus SASInfoParser::GetSASTemplateMode(SASTilingInfo &sasInfo)
 {
     if (opParamInfo_.oriKv.desc != nullptr) {
-        if (opParamInfo_.cmpKv.desc != nullptr && opParamInfo_.cmpSparseIndices.tensor != nullptr) {
+        if (opParamInfo_.cmpKv.desc != nullptr && opParamInfo_.cmpSparseIndices.tensor != nullptr &&
+            opParamInfo_.cmpBlockTable.desc != nullptr) {
             sasInfo.perfMode = SASTemplateMode::SCFA_TEMPLATE_MODE;
-        } else if (opParamInfo_.cmpKv.desc != nullptr) {
+        } else if (opParamInfo_.cmpKv.desc != nullptr && opParamInfo_.cmpBlockTable.desc != nullptr) {
             sasInfo.perfMode = SASTemplateMode::CFA_TEMPLATE_MODE;
         } else {
             sasInfo.perfMode = SASTemplateMode::SWA_TEMPLATE_MODE;
@@ -513,11 +508,8 @@ void SASInfoParser::GenerateInfo(SASTilingInfo &sasInfo)
     sasInfo.cmpKvType = cmpKvType_;
     sasInfo.outputType = outputType_;
 
-    // sasInfo.l2CacheSize = l2CacheSize_;
-
     sasInfo.totalBlockNum = (opParamInfo_.oriKv.tensor != nullptr) ?
         opParamInfo_.oriKv.tensor->GetStorageShape().GetDim(0) : 0;
-    // sasInfo.pageAttentionFlag = (kvStorageMode_ == KvStorageMode::PAGE_ATTENTION);
     sasInfo.sparseBlockSize = 1;
     sasInfo.blockSize = oriBlockSize_;
     sasInfo.oriBlockSize = oriBlockSize_;
@@ -546,7 +538,6 @@ void SASInfoParser::GenerateInfo(SASTilingInfo &sasInfo)
 
 ge::graphStatus SASInfoParser::Parse(SASTilingInfo &sasInfo)
 {
-
     if (context_ == nullptr) {
         OP_LOGE("SparseFlashAttention", "tiling context is nullptr!");
         return ge::GRAPH_FAILED;
@@ -591,13 +582,6 @@ ge::graphStatus SASInfoParser::Parse(SASTilingInfo &sasInfo)
 
 ge::graphStatus SASTilingCheck::Process()
 {
-    // Init();
-    // if (CheckSinglePara() != ge::GRAPH_SUCCESS ||
-    //     CheckParaExistence() != ge::GRAPH_SUCCESS ||
-    //     CheckFeature() != ge::GRAPH_SUCCESS ||
-    //     CheckMultiParaConsistency() != ge::GRAPH_SUCCESS) {
-    //     return ge::GRAPH_FAILED;
-    // }
     return ge::GRAPH_SUCCESS;
 }
 
@@ -710,10 +694,7 @@ ge::graphStatus SparseAttnSharedkvTiling::DoOpTiling(SASTilingInfo *tilingInfo)
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
 
     // -------------set tilingkey-----------------
-    // DT_Q, DT_KV, DT_OUT, PAGE_ATTENTION, FLASH_DECODE, LAYOUT_T, KV_LAYOUT_T
-    // uint32_t qType = static_cast<uint32_t>(tilingInfo->qType);
-    // uint32_t oriKvType = static_cast<uint32_t>(tilingInfo->oriKvType);
-    // uint32_t outputType = static_cast<uint32_t>(tilingInfo->outputType);
+    // FLASH_DECODE, LAYOUT_T, KV_LAYOUT_T, TEMPLATE_MODE
     uint32_t qLayout = static_cast<uint32_t>(tilingInfo->qLayout);
     uint32_t inputKvLayout = static_cast<uint32_t>(tilingInfo->kvLayout);
 

@@ -420,7 +420,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         self.compressor_ratio = 1
         if AscendDSAMetadataBuilder.indexer_metadata is None:
-            AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048), dtype = torch.int32, device=self.device)
+            AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((1024), dtype = torch.int32, device=self.device)
             usedCoreNum = 24
             mBaseSize = 256
             s2BaseSize = 2048
@@ -993,6 +993,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_wgate = self.compressor.wgate
             self.compressor_norm = self.compressor.norm
             self.compressor_norm_eps = self.compressor.norm_eps
+        self.cu_seqlens_ori_kv = torch.tensor([]).npu()
+        self.cu_seqlens_cmp_kv = torch.tensor([]).npu()
+        self.seqused_q = torch.tensor([]).npu()
 
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
@@ -1247,6 +1250,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -1257,7 +1263,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1280,11 +1287,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(actual_seq_lengths_key),
-                topk=self.index_topk, #
+                cmp_topk=self.index_topk, #
                 cmp_ratio=self.compress_ratio, #
                 ori_mask_mode=4, # 4:sliding window
                 cmp_mask_mode=3, # 3:causal
@@ -1293,7 +1303,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1321,6 +1332,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -1333,7 +1347,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1478,6 +1493,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -1489,7 +1507,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1512,11 +1531,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(actual_seq_lengths_key),
-                topk=self.index_topk, #
+                cmp_topk=self.index_topk, #
                 cmp_ratio=self.compress_ratio, #
                 ori_mask_mode=4, # 4:sliding window
                 cmp_mask_mode=3, # 3:causal
@@ -1525,7 +1547,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1553,6 +1576,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 num_heads_kv=1,
                 head_dim=self.head_dim,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+                seqused_q = self.seqused_q,
                 seqused_kv=actual_seq_lengths_key,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -1565,7 +1591,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=(sliding_window_state != None),
-                has_cmp_kv=(self.compress_ratio != 1)
+                has_cmp_kv=(self.compress_ratio != 1),
+                device=str(hidden_states.device)
             )
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1699,10 +1726,39 @@ class AscendDSAImpl(DSAAttentionImpl):
             qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
+            actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
+            actual_seq_lengths_key = attn_metadata.prefill.seq_lens
+            num_decode_tokens = attn_metadata.num_decode_tokens
+            max_seqlen_kv = actual_seq_lengths_key.max()
+            seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
+            max_seqlen_q = seq_lens_q.max()
         else:
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
+            max_seqlen_q = attn_metadata.decode.max_seqlen_q
+            max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
+
+        indexer_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+            num_heads_q=self.n_local_heads,
+            num_heads_k=1,
+            head_dim=self.head_dim,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            actual_seq_lengths_query=qlens,
+            actual_seq_lengths_key=kvlens,
+            batch_size=len(kvlens),
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_kv,
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=512,
+            sparse_mode=3,
+            pre_tokens = (1<<63)-1,
+            next_tokens = (1<<63)-1,
+            cmp_ratio = 4,
+            device=str(x.device)
+        )
 
         topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,
@@ -1713,7 +1769,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,
-            metadata=attn_metadata.indexer_metadata,
+            metadata=indexer_metadata,
             query_quant_mode=0,
             key_quant_mode=0,
             layout_query="TND",

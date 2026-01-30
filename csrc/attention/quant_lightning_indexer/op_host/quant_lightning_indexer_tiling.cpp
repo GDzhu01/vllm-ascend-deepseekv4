@@ -220,11 +220,8 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
         OP_LOGE(opName_,  "outside of PA, input attr layout_query and input attr layout_key must be the same,"
                   "but now layout_key is %s, layout_query is %s.",
          layout_key.c_str(),  layout_query.c_str()), return ge::GRAPH_FAILED);
-    // OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
-    //             OP_LOGE(opName_, "input attr sparse_count must > 0 and <= 2048, but now sparse_count is %u",
-    //                    *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
-    OP_CHECK_IF(*opParamInfo_.sparseCount != 512,
-                OP_LOGE(opName_, "input attr sparse_count must be 512, but now sparse_count is %u",
+    OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
+                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= 2048, but now sparse_count is %u",
                        *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
     OP_CHECK_IF(!((*opParamInfo_.sparseMode == 0) || (*opParamInfo_.sparseMode == SPARSE_MODE_LOWER)),
                 OP_LOGE(opName_, "input attr sparse_mode only supported 0 or 3, but now sparseMode is %u.",
@@ -470,17 +467,31 @@ ge::graphStatus QLIInfoParser::GetGSize()
 ge::graphStatus QLIInfoParser::GetBatchSize()
 {
     // 获取B基准值
-    // 1、非TND/NTD时, 以query的batch_size维度为基准;
-    // 2、TND/NTD时, actual_seq_lens_q必须传入, 以actual_seq_lens_q数组的长度为B轴大小
-    if (qLayout_ == DataLayout::TND) {
-        return GetActualSeqLenSize(bSize_, opParamInfo_.actualSeqLengthsQ.tensor, "input actual_seq_lengths_query");
-    } else {  // BSND
+    // 1、非TND时, 以query的batch_size维度为基准;
+    // 2、Q和K都为TND时, actual_seq_lens_q必须传入, 以actual_seq_lens_q数组的长度为B轴大小
+    // 3、Q为TND，K为PA_BSND时，以actual_seq_lens_k数组的长度为B轴大小
+    if (qLayout_ == DataLayout::BSND) {
         bSize_ = opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_ZERO);
         OP_LOGI(context_->GetNodeName(), "b: %d, s: %d, n: %d,d :%d",
             opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_ZERO),
             opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_ONE),
             opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_TWO),
             opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_THREE));
+        return ge::GRAPH_SUCCESS;
+    } else {  // TND
+        uint32_t bSizeQuery;
+        uint32_t bSizeKey;
+        GetActualSeqLenSize(bSizeQuery, opParamInfo_.actualSeqLengthsQ.tensor, "input actual_seq_lengths_query");
+        GetActualSeqLenSize(bSizeKey, opParamInfo_.actualSeqLengthsK.tensor, "input actual_seq_lengths_key");
+        if (kLayout_ == DataLayout::TND) {
+            OP_CHECK_IF(bSizeQuery != bSizeKey,
+                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query is %u, %u respectively, they must be same.",
+                        bSizeQuery, bSizeKey),
+                return ge::GRAPH_FAILED);
+            bSize_ = bSizeQuery;
+        } else {
+            bSize_ = bSizeKey; // Q为TND，batch从Key中获取
+        }
         return ge::GRAPH_SUCCESS;
     }
 }
@@ -692,7 +703,10 @@ ge::graphStatus QLIInfoParser::ValidateInputShapesMatch()
     OP_CHECK_IF((opParamInfo_.attenOut.shape->GetStorageShape().GetDim(outN2Dim + 1) != *opParamInfo_.sparseCount),
                OP_LOGE(opName_, "output sparse_indices shape last dim must be same as attr sparse_count."),
                return ge::GRAPH_FAILED);
-
+    // -----------------------check metadata-------------------
+     OP_CHECK_IF((opParamInfo_.metadata.tensor->GetShapeSize() != METADATA_LIMIT),
+                OP_LOGE(opName_, "input metadata dim 0 must be %u.", METADATA_LIMIT),
+                return ge::GRAPH_FAILED);
     return ge::GRAPH_SUCCESS;
 }
 

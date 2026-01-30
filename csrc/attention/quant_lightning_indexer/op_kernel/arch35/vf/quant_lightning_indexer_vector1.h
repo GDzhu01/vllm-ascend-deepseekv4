@@ -36,7 +36,6 @@ __aicore__ inline void MulWeightAndReduceSum(LocalTensor<uint32_t> out,//out [1,
 
     __VEC_SCOPE__
     {
-
         AscendC::MicroAPI::RegTensor<float> regQK[2];
         AscendC::MicroAPI::RegTensor<float> regw;
         AscendC::MicroAPI::RegTensor<float> regwBrc;        

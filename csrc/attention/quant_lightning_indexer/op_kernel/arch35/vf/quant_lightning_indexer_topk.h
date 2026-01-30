@@ -19,7 +19,6 @@
 #include "vf_topk.h"
 
 namespace topk {
-
 class LITopk {
 public:
     static __aicore__ inline uint32_t GetSharedTmpBufferSize(uint32_t topK)

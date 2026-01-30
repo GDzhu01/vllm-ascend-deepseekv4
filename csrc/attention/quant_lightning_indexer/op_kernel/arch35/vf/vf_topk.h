@@ -15,11 +15,7 @@
 
 #ifndef VF_TOP_K_H
 #define VF_TOP_K_H
-
-#define DIV(x, y) (((x + y - 1) / y))
-
 namespace topk {
-    
 template<typename T>
 __simd_vf__ void HistogramsFirstVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__ uint32_t* inputBuf, uint16_t vfLoop, bool init)
 {
@@ -634,7 +630,7 @@ __aicore__ inline void LiTopKVF(const LocalTensor<uint32_t>& outputIdxLocal,
 
     uint16_t histogramsLoopNum = (s2SeqLen + repeatSize8 - 1) / repeatSize8; 
     uint16_t inputLoopNum = (s2SeqLen + repeatSize32 - 1) / repeatSize32;
-    uint16_t topkLoopNum = DIV(topK, 64);
+    uint16_t topkLoopNum = (topK + 64 - 1) / 64;
 
     // find kth-value
     HistogramsFirstVFImpl<uint32_t>(histogramsBuf, inputBuf, histogramsLoopNum, flag);

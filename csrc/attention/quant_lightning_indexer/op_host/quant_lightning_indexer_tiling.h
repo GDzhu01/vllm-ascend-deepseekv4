@@ -81,6 +81,7 @@ constexpr uint32_t G_SIZE_LIMIT = 64;
 constexpr uint32_t BLOCK_SIZE_LIMIT = 1024;
 constexpr uint32_t BLOCK_SIZE_FACTOR = 16;
 constexpr uint32_t SPARSE_MODE_LOWER = 3;
+constexpr uint32_t METADATA_LIMIT = 1024;
 
 // -----------算子TilingData定义---------------
 BEGIN_TILING_DATA_DEF(QLITilingData)
