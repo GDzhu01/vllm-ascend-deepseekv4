@@ -38,6 +38,7 @@ from vllm_ascend.compilation.acl_graph import (
     get_draft_graph_params, get_graph_params,
     update_draft_graph_params_workspaces, update_graph_params_workspaces)
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
+from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
@@ -1147,7 +1148,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q = triton_q_rms(q, self.eps)
         q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
         q_pe = self.rope_single(q_pe, cos, sin)
         q = torch.cat([q_nope, q_pe], dim=-1)
@@ -1393,7 +1394,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.multistream_dsa_preprocess:
             torch.npu.current_stream().wait_stream(
                 attention_calculation_stream())
-        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps) # qnorm
+        q = triton_q_rms(q, self.eps)
         q = self._partial_rope(q, cos, sin)
 
         if self.compress_ratio > 1:
