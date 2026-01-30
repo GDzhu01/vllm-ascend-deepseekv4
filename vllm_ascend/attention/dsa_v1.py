@@ -821,8 +821,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
 
-        max_seqlen_kv = torch.max(query_start_loc_cpu).item()
-        max_seqlen_q = torch.max(common_attn_metadata.seq_lens_cpu[:num_reqs][:self.num_decodes]).item()
+        max_seqlen_kv = torch.max(common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
+        max_seqlen_q = torch.max(query_start_loc_cpu).item()
         AscendDSAMetadataBuilder.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
@@ -1195,8 +1195,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm.weight,
-                # compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
-                # compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
                 compress_sin.view(-1, compress_sin.shape[-1]),
                 compress_cos.view(-1, compress_cos.shape[-1]),
                 kv_block_table = attn_metadata.prefill.state_block_table,
@@ -1416,13 +1414,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     with_prefill=False)
 
             coff = 2 if self.compressor_overlap else 1
-            # start_pos = actual_seq_lengths_key - seq_lens_q
-            # compressor
 
-            # s = compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16)
-            # c = compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16)
-            s = compress_sin.view(-1, compress_sin.shape[-1])
-            c = compress_cos.view(-1, compress_cos.shape[-1])
+            # compressor
             compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
@@ -1431,8 +1424,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_score_state,
                 self.compressor_ape,
                 self.compressor_norm.weight,
-                compress_sin.view(-1, compress_sin.shape[-1]).to(torch.bfloat16),
-                compress_cos.view(-1, compress_cos.shape[-1]).to(torch.bfloat16),
+                compress_sin.view(-1, compress_sin.shape[-1]),
+                compress_cos.view(-1, compress_cos.shape[-1]),
                 kv_block_table = attn_metadata.decode.state_block_table,
                 score_block_table = attn_metadata.decode.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
@@ -1605,10 +1598,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
-        # s = compressed_sin.view(-1, compressed_sin.shape[-1]).to(torch.bfloat16)
-        # c = compressed_cos.view(-1, compressed_cos.shape[-1]).to(torch.bfloat16)
-        s = compressed_sin.view(-1, compressed_sin.shape[-1])
-        c = compressed_cos.view(-1, compressed_cos.shape[-1])
 
         kv = torch.ops._C_ascend.compressor(
             x,
@@ -1618,8 +1607,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             c4_indexer_score_state,
             self.indexcom_ape,
             self.indexcom_norm.weight,
-            compressed_sin.view(-1, compressed_sin.shape[-1]).to(torch.bfloat16),
-            compressed_cos.view(-1, compressed_cos.shape[-1]).to(torch.bfloat16),
+            compressed_sin.view(-1, compressed_sin.shape[-1]),
+            compressed_cos.view(-1, compressed_cos.shape[-1]),
             kv_block_table = kv_block_table,
             score_block_table = score_block_table,
             cu_seqlens = actual_seq_lengths_query,
