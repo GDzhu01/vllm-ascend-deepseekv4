@@ -1793,9 +1793,9 @@ void check_hc_pre_shape_and_dtype(const at::Tensor& x, const at::Tensor& hc_fn, 
     TORCH_CHECK(hc_base.size(0) == mix_hc, "The hc_base.shape[0] should be mix_hc, actual hc_base.shape[0] is ", hc_base.size(0), ", mix_hc is ", mix_hc, ".");
     // check dtype
     TORCH_CHECK(x.dtype() == at::kBFloat16, "x's dtype should be BFLOAT16.");
-    TORCH_CHECK(hc_fn.dtype() == at::kFloat, "hc_fn's dtype should be FLOAT32.");
-    TORCH_CHECK(hc_scale.dtype() == at::kFloat, "hc_scale's dtype should be FLOAT32.");
-    TORCH_CHECK(hc_base.dtype() == at::kFloat, "hc_base's dtype should be FLOAT32.");
+//     TORCH_CHECK(hc_fn.dtype() == at::kFloat, "hc_fn's dtype should be FLOAT32.");
+//     TORCH_CHECK(hc_scale.dtype() == at::kFloat, "hc_scale's dtype should be FLOAT32.");
+//     TORCH_CHECK(hc_base.dtype() == at::kFloat, "hc_base's dtype should be FLOAT32.");
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
@@ -1815,6 +1815,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
     if (xDims == 3) {
         x_flattened = x_float.flatten(1, -1);
     }
+    // at::Tensor x_flattened = x.flatten(2, -1);
+    // if (xDims == 3) {
+    //     x_flattened = x.flatten(1, -1);
+    // }
     auto mixes = at::linear(x_flattened, hc_fn);
 
     // call hc_pre_sinkhorn
@@ -1822,7 +1826,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
     at::Tensor y = std::get<0>(output_tensors);
     at::Tensor post = std::get<1>(output_tensors);
     at::Tensor comb_frag = std::get<2>(output_tensors);
-    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
+    at::Tensor fp32_mixes = mixes.to(at::kFloat);
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn, fp32_mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
                     y, post, comb_frag);
     y = y.to(original_type);
 

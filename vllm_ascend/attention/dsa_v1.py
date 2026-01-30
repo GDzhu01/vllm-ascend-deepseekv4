@@ -437,7 +437,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     raise ImportError("Please install scipy") from e
                 log_dim = math.ceil(math.log2(indexer_head_dim))
                 dim_padded = 2 ** log_dim
-                AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device)
+                AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device).to(torch.bfloat16)
         AscendDSAMetadataBuilder.start_pos_prefill = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
         AscendDSAMetadataBuilder.start_pos_decode = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
 
@@ -1008,7 +1008,8 @@ class AscendDSAImpl(DSAAttentionImpl):
     def rope_single(self, x,cos,sin,inverse=False):
         # dtype= x.dtype
         if inverse:
-            sin = sin * -1
+            # sin = sin * -1
+            sin = -sin
         tnd_layout = 1
         if len(x.shape)==3:
             num_tokens,num_heads,rotary_dim = x.shape

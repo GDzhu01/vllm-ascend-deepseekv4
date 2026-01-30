@@ -853,6 +853,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_eps = config.hc_eps
         mix_hc = (2 + hc_mult) * hc_mult
         hc_dim = hc_mult * config.dim
+        # self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
+        # self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
         self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.float32))
         self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.float32))
         self.hc_attn_base = nn.Parameter(torch.empty(mix_hc,dtype = torch.float32))
@@ -1257,6 +1259,13 @@ class AscendDeepseekV4ForCausalLM(
                 param.data.copy_(narrow_weight)
                 loaded_params.add(name)
                 continue
+            
+            # if "hc_attn_fn" in name or "hc_ffn_fn" in name:
+            #     param = params_dict[name]
+            #     cast_weight = loaded_weight.to(torch.bfloat16)
+            #     param.data.copy_(cast_weight)
+            #     loaded_params.add(name)
+            #     continue
 
             is_fusion_moe_shared_experts_layer = (
                 rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)
