@@ -1388,10 +1388,10 @@ class AscendDSAImpl(DSAAttentionImpl):
                 torch.npu.current_stream().wait_event(before_norm_event)
 
             qr = q = self.wq_a(hidden_states) # bs
-            q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
         if self.multistream_dsa_preprocess:
             torch.npu.current_stream().wait_stream(
                 attention_calculation_stream())
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
         q = triton_q_rms(q, self.eps)
         q = self._partial_rope(q, cos, sin)
 
