@@ -1,5 +1,6 @@
 ﻿from typing import Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 from vllm.config import CUDAGraphMode
@@ -15,6 +16,7 @@ from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
+from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
 from vllm_ascend.spec_decode.eagle_proposer import EagleProposer
 from vllm_ascend.utils import ProfileExecuteDuration, lmhead_tp_enable
@@ -342,7 +344,7 @@ class MtpProposer(EagleProposer):
                                                num_decodes])
                             else:
                                 actual_size = len(
-                                    decode_metadata.query_start_loc_cpu)
+                                    decode_metadata.query_start_loc_cpu) - 1
 
                             decode_metadata.seq_lens_list = \
                                 decode_metadata.seq_lens_list[:actual_size]
@@ -409,6 +411,7 @@ class MtpProposer(EagleProposer):
                 hidden_states = hidden_states[last_token_indices]
                 slot_mapping = attn_metadata_i.slot_mapping[last_token_indices]
                 attn_metadata_i.slot_mapping.fill_(-1)
+                attn_metadata_i.swa_slot_mapping.fill_(-1)
                 attn_metadata_i.query_start_loc = self.arange[:batch_size + 1]
                 last_token_indices = self.arange[:batch_size]
                 if getattr(attn_metadata_i, "num_decode_tokens", 0):
@@ -467,15 +470,22 @@ class MtpProposer(EagleProposer):
             # When disable_padded_drafter_batch=False, it should not to be updating these params, maybe.
             if decode_metadata is not None and (self.speculative_config.disable_padded_drafter_batch or \
                     aclgraph_runtime_mode != CUDAGraphMode.FULL):
-                decode_metadata.actual_seq_lengths_q = self.arange_cpu[
-                    1:batch_size + 1].tolist()
-                if aclgraph_runtime_mode == CUDAGraphMode.FULL:
-                    decode_metadata.actual_seq_lengths_q = \
-                        builder.pad_actual_seq_len_q_mtp_disable_pad(
-                            graph_pad_size - batch_size,
-                            batch_size,
-                            decode_metadata.actual_seq_lengths_q)
-                decode_metadata.cos, decode_metadata.sin = get_cos_and_sin_mla(
+                # decode_metadata.actual_seq_lengths_q = self.arange_cpu[
+                #     1:batch_size + 1].tolist()
+
+                decode_metadata.query_start_loc = self.arange[:batch_size + 1]
+                decode_metadata.query_start_loc_cpu = self.arange_cpu[:batch_size + 1]
+
+                decode_metadata.max_seqlen_q += 1
+                decode_metadata.max_seqlen_kv = batch_size
+
+                # if aclgraph_runtime_mode == CUDAGraphMode.FULL:
+                #     decode_metadata.actual_seq_lengths_q = \
+                #         builder.pad_actual_seq_len_q_mtp_disable_pad(
+                #             graph_pad_size - batch_size,
+                #             batch_size,
+                #             decode_metadata.actual_seq_lengths_q)
+                decode_metadata.cos, decode_metadata.sin = get_cos_and_sin_dsa(
                     positions[:batch_size])
             # NOTE(woosuk): We should handle the case where the draft model
             # generates tokens beyond the max model length. Since it is complex
@@ -529,6 +539,14 @@ class MtpProposer(EagleProposer):
                                              self.pcp_size] = slot_mapping
             else:
                 attn_metadata_i.slot_mapping[:batch_size] = slot_mapping
+
+                swa_slot_mapping, swa_block_table = \
+                    self.runner._compute_swa_meta_mtp(common_attn_metadata.state_ids, positions[:batch_size], torch.from_numpy(np.array([1 for i in range(batch_size)])).to("npu"))
+
+                swa_slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
+                attn_metadata_i.swa_slot_mapping[:batch_size] = swa_slot_mapping
+                attn_metadata_i.swa_block_table = swa_block_table
+
             if self.speculative_config.disable_padded_drafter_batch:
                 self.positions[batch_size:num_input_tokens] = 0
                 self.input_ids[batch_size:num_input_tokens] = 0
