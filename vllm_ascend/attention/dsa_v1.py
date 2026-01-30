@@ -696,7 +696,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                          device=self.block_table.device)
 
         for i in range(num_prefill):
-            start_idx = cumsum_prefill_swa_block[i] - cumsum_prefill_swa_block[i]
+            start_idx = cumsum_prefill_swa_block[i] - prefill_swa_block[i]
             end_idx = cumsum_prefill_swa_block[i]
             prefill_swa_block_table[i, :prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
 
@@ -704,16 +704,18 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         # TODO: zyl refactor this for asc scheduling.
         decode_input_positions = input_positions[:tokens_start]
-        def _get_compressed_decode_token_start(decode_input_positions, compress_ratio):
+        def _get_compressed_decode_token_start_and_end(decode_input_positions, compress_ratio):
             # TODO(cmq): decode_input_positions is a device tensor, 
             # this will introduce sync operation. Refactor me to torch.where instead
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
             compressed_decode_num = mask.sum()
-            return compressed_decode_num
 
-        compressed_tokens_start = _get_compressed_decode_token_start(decode_input_positions, self.compressor_ratio)
+            end = min(self.num_prefill_tokens, self.num_prefill_tokens // compress_ratio + self.num_prefills)
+            return compressed_decode_num, end
 
-        prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:]
+        compressed_tokens_start, compressed_tokens_end = _get_compressed_decode_token_start_and_end(decode_input_positions, self.compressor_ratio)
+
+        prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:compressed_tokens_end]
 
         AscendDSAMetadataBuilder.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
