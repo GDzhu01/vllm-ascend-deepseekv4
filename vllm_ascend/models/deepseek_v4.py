@@ -107,6 +107,7 @@ elif current_platform.is_xpu():
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
 from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
+from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.ascend_config import get_ascend_config
 
 logger = init_logger(__name__)
@@ -395,14 +396,14 @@ class DeepseekV4MoE(nn.Module):
         # See DeepseekV2DecoderLayer for more details.
         if hidden_states.dtype != torch.float16:
             if not self.is_rocm_aiter_moe_enabled:
-                final_hidden_states *= self.routed_scaling_factor
+                if self.shared_experts is not None:
+                    assert shared_output is not None
+                    final_hidden_states = muls_add_triton(final_hidden_states, shared_output, self.routed_scaling_factor)
+                else:
+                    final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            shared_output *= 1.0 / self.routed_scaling_factor
-
-        if self.shared_experts is not None:
-            assert shared_output is not None
-            final_hidden_states += shared_output
+            final_hidden_states = muls_add_triton(shared_output, final_hidden_states, 1.0 / self.routed_scaling_factor)
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
