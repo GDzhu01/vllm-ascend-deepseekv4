@@ -1254,9 +1254,13 @@ class AscendDSAImpl(DSAAttentionImpl):
         cos = attn_metadata.cos[layer_name]
         sin = attn_metadata.sin[layer_name]
         num_tokens = o_proj_input.shape[0]
-        o_nope, o_pe = o_proj_input.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        o_pe = self.rope_single(o_pe, cos, sin, True)
-        o = torch.cat([o_nope, o_pe], dim=-1)
+        if not has_prefill:
+            triton_apply_rope_partial_in_place(o_proj_input[:decode_tokens], -sin, cos)
+            o = o_proj_input
+        else:
+            o_nope, o_pe = o_proj_input.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+            o_pe = self.rope_single(o_pe, cos, sin, True)
+            o = torch.cat([o_nope, o_pe], dim=-1)
 
         # o
         o = o.view(num_tokens, self.n_local_groups, -1)
@@ -1610,9 +1614,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
         ## rope
-        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
+        if not with_prefill:
+            q = triton_apply_rope_partial_in_place(q, sin, cos)
+        else:
+            q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+            q_pe = self.rope_single(q_pe, cos, sin)
+            q = torch.cat([q_nope, q_pe], dim=-1)
 
         q = rotate_activation(q, attn_metadata)
 
