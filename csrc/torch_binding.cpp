@@ -1826,8 +1826,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
     at::Tensor y = std::get<0>(output_tensors);
     at::Tensor post = std::get<1>(output_tensors);
     at::Tensor comb_frag = std::get<2>(output_tensors);
-    at::Tensor fp32_mixes = mixes.to(at::kFloat);
-    EXEC_NPU_CMD(aclnnHcPreSinkhorn, fp32_mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
+
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
                     y, post, comb_frag);
     y = y.to(original_type);
 
