@@ -31,7 +31,7 @@ from vllm_ascend.utils import refresh_block_size
 
 # isort: off
 from vllm_ascend.utils import (
-    ASCEND_QUANTIZATION_METHOD, COMPRESSED_TENSORS_METHOD,
+    ASCEND_QUANTIZATION_METHOD, COMPRESSED_TENSORS_METHOD, FP8_METHOD,
     COMPILATION_PASS_KEY, AscendDeviceType, enable_sp, get_ascend_device_type,
     update_aclgraph_sizes, update_cudagraph_capture_sizes,
     update_default_aclgraph_sizes, check_kv_extra_config)
@@ -88,7 +88,7 @@ class NPUPlatform(Platform):
     dispatch_key: str = "PrivateUse1"
 
     supported_quantization: list[str] = [
-        ASCEND_QUANTIZATION_METHOD, COMPRESSED_TENSORS_METHOD
+        ASCEND_QUANTIZATION_METHOD, COMPRESSED_TENSORS_METHOD, FP8_METHOD
     ]
 
     def is_sleep_mode_available(self) -> bool:
@@ -139,6 +139,8 @@ class NPUPlatform(Platform):
 
         from vllm_ascend.quantization.compressed_tensors.compressed_tensors import \
             AscendCompressedTensorsConfig  # noqa: F401
+        from vllm_ascend.quantization.fp8.fp8 import \
+            AscendFp8Config  # noqa: F401
         from vllm_ascend.quantization.quant_config import \
             AscendQuantConfig  # noqa: F401
 
@@ -398,24 +400,24 @@ class NPUPlatform(Platform):
         global _CUSTOM_OP_REGISTERED
         if _CUSTOM_OP_REGISTERED:
             return
-        CUR_DIR = os.path.dirname(os.path.realpath(__file__))
-        CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                       "custom_transformer")
-        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                "custom_transformer","op_api","lib")
-        if os.path.exists(CUSTOM_OPP_PATH):
-            current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
-                                                   "")
-            if current_cust_opp_path:
-                os.environ[
-                    "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
-            else:
-                os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
-            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
-                                        "")
-            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
-            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
-        _CUSTOM_OP_REGISTERED = True
+        # CUR_DIR = os.path.dirname(os.path.realpath(__file__))
+        # CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+        #                                "custom_transformer")
+        # CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+        #                         "custom_transformer","op_api","lib")
+        # if os.path.exists(CUSTOM_OPP_PATH):
+        #     current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
+        #                                            "")
+        #     if current_cust_opp_path:
+        #         os.environ[
+        #             "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
+        #     else:
+        #         os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+        #     current_ld_path = os.environ.get("LD_LIBRARY_PATH",
+        #                                 "")
+        #     os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
+        #     print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
+        # _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):

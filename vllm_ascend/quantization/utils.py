@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, Type
 import torch
 from vllm.logger import logger
 
-from vllm_ascend.utils import COMPRESSED_TENSORS_METHOD
+from vllm_ascend.utils import COMPRESSED_TENSORS_METHOD, FP8_METHOD
 
 from .w4a4_flatquant_dynamic import AscendW4A4FlatQuantDynamicLinearMethod
 from .w4a8_dynamic import (AscendW4A8DynamicFusedMoEMethod,
@@ -14,7 +14,7 @@ from .w8a8_dynamic import (AscendW8A8DynamicFusedMoEMethod,
                            AscendW8A8DynamicLinearMethod)
 from .w8a8_pdmix import (AscendW8A8PDMixFusedMoeMethod,
                          AscendW8A8PDMixLinearMethod)
-from .w8a8mxfp8 import AscendW8A8MXFP8DynamicLinearMethod
+from .w8a8mxfp8 import AscendW8A8MXFP8DynamicLinearMethod, AscendW8A8MXFP8DynamicFusedMoEMethod
 from .w8a16 import AscendW8A16LinearMethod
 
 ASCEND_QUANTIZATION_METHOD_MAP: Dict[str, Dict[str, Type[Any]]] = {
@@ -44,6 +44,7 @@ ASCEND_QUANTIZATION_METHOD_MAP: Dict[str, Dict[str, Type[Any]]] = {
     },
     "W8A8_MXFP8": {
         "linear": AscendW8A8MXFP8DynamicLinearMethod,
+        "moe": AscendW8A8MXFP8DynamicFusedMoEMethod,
     },
 }
 
@@ -81,6 +82,9 @@ def get_quant_method(quant_description: Dict[str, Any],
     if quant_description.get("quant_method") == COMPRESSED_TENSORS_METHOD:
         return get_quant_method_llmcompressor(layer)
 
+    if quant_description.get("quant_method") == FP8_METHOD:
+        return get_quant_method_fp8(layer_type)
+ 
     return get_quant_method_modelslim(quant_description, prefix, layer_type,
                                       packed_modules_mapping, tid2eid=tid2eid)
 
@@ -90,6 +94,27 @@ def get_quant_method_llmcompressor(layer: torch.nn.Module):
     if layer.scheme is None:
         raise ValueError("A scheme must be defined for each layer")
     return layer.scheme
+
+
+def get_quant_method_fp8(
+        layer_type: str,
+        packed_modules_mapping: Optional[Dict[str, Any]] = None):
+    logger.info_once("Using the vLLM Ascend modelslim Quantization now!")
+    if packed_modules_mapping is None:
+        packed_modules_mapping = dict()
+    
+    quant_type = "W8A8_MXFP8"
+    if quant_type in ASCEND_QUANTIZATION_METHOD_MAP.keys():
+        method_map = ASCEND_QUANTIZATION_METHOD_MAP[quant_type]
+        if layer_type in method_map.keys():
+            method_cls = method_map[layer_type]
+            return method_cls()
+        else:
+            raise NotImplementedError(
+                f"Currently, vLLM Ascend doesn't support {quant_type} for {layer_type}."
+            )
+    raise NotImplementedError("Currently, vLLM Ascend only supports following quant types:" \
+                                f"{list(ASCEND_QUANTIZATION_METHOD_MAP.keys())}")
 
 
 def get_quant_method_modelslim(

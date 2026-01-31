@@ -47,7 +47,11 @@ class GroupCoordinatorPatch(GroupCoordinator):
 
         self_device_group = None
         self_cpu_group = None
-        hccl_pg_options = create_hccl_pg_options(group_name)
+        # hccl_pg_options = create_hccl_pg_options(group_name)
+        import torch_npu
+        # 新增hccl_config，指定为hccl_op_expansion_mode为2（代表AICPU_TS），另外指定为5（代表CCU_MS）
+        hccl_pg_options = torch_npu._C._distributed_c10d.ProcessGroupHCCL.Options()
+        hccl_pg_options.hccl_config ={"hccl_op_expansion_mode":2}
 
         for ranks in group_ranks:
             device_group = torch.distributed.new_group(

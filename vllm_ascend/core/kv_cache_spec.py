@@ -66,12 +66,10 @@ class Compress4AttentionSpec(CompressAttentionSpec):
 
     @property
     def compress_kv_size_bytes(self) -> int:
-        base_page_size = self.block_size * (
-            self.nope_dim * get_dtype_size(self.nope_dtype) + \
+        base_page_size = self.nope_dim * get_dtype_size(self.nope_dtype) + \
             self.rope_dim * get_dtype_size(self.rope_dtype) + \
             self.scale_dim * get_dtype_size(self.scale_dtype)
-        )
-        return pad_to_128(base_page_size) // self.compress_ratio
+        return self.block_size * pad_to_128(base_page_size) // self.compress_ratio
 
     @property
     def indexer_k_size_bytes(self) -> int:
@@ -120,12 +118,10 @@ class Compress128AttentionSpec(CompressAttentionSpec):
         Returns:
             The page size
         """
-        base_page_size = self.block_size * (
-            self.nope_dim * get_dtype_size(self.nope_dtype) + \
+        base_page_size = self.nope_dim * get_dtype_size(self.nope_dtype) + \
             self.rope_dim * get_dtype_size(self.rope_dtype) + \
             self.scale_dim * get_dtype_size(self.scale_dtype)
-        )
-        base_page_size = pad_to_128(base_page_size)
+        base_page_size = self.block_size * pad_to_128(base_page_size)
         page_size = base_page_size // self.compress_ratio
 
         return page_size

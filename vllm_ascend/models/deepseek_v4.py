@@ -506,11 +506,11 @@ class Compressor(nn.Module):
 
         self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32))
         self.wkv = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wkv",
             return_bias=False,)
         self.wgate = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wgate",
             return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
@@ -703,7 +703,7 @@ class DeepseekV4Attention(nn.Module):
             self.n_heads * self.head_dim // self.n_groups,
             self.n_groups * config.o_lora_rank,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wo_a",
             return_bias=False,
         )        
@@ -864,12 +864,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_pre(
-            x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps)
+        y = torch.ops.custom.npu_hc_pre(
+            # x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps)
+            x, hc_fn, hc_scale, hc_base)  # TODO 需要添加传参
         return y
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_post(
+        y = torch.ops.custom.npu_hc_post(
             x.unsqueeze(dim=0), residual.unsqueeze(dim=0), post.unsqueeze(dim=0), comb.unsqueeze(dim=0))
         return y.squeeze(dim=0)
     
@@ -1231,6 +1232,13 @@ class AscendDeepseekV4ForCausalLM(
                 name = name.replace('.w2.','.down_proj.')
             if '.w3.' in name:
                 name = name.replace('.w3.','.up_proj.')
+                
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
+            
+            # TODO 需要支持MTP
+            if ".mtp" in name:
+                continue
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')

@@ -196,7 +196,7 @@ class AscendFusedMoE(FusedMoE):
                 self.moe_config,tid2eid=self.tid2eid)
         else:
             self.quant_method = self.quant_config.get_quant_method(
-                self, self.layer_name, tid2eid=self.tid2eid)
+                self, self.layer_name)
 
         assert self.quant_method is not None
 
