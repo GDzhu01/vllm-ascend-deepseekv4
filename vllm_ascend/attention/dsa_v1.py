@@ -40,6 +40,7 @@ from vllm_ascend.compilation.acl_graph import (
     update_draft_graph_params_workspaces, update_graph_params_workspaces)
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.triton.rms_norm import triton_q_rms
+from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
@@ -1428,11 +1429,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             )[0]
         return attn_output
 
-    def _partial_rope(self, x, cos, sin):
-        x_nope, x_pe = x.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        x_pe = self.rope_single(x_pe, cos, sin)
-        return torch.cat([x_nope, x_pe], dim=-1)
-
     def _forward_decode(
         self,
         layer_name,
@@ -1461,7 +1457,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if self.multistream_dsa_preprocess else None
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-        kv = self._partial_rope(kv, cos, sin)
+        kv = triton_apply_rope_partial_in_place(kv, sin, cos)
 
         # swa exec kv
         torch_npu.npu_scatter_nd_update_(
@@ -1481,7 +1477,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 attention_calculation_stream())
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
         q = triton_q_rms(q, self.eps)
-        q = self._partial_rope(q, cos, sin)
+        q = triton_apply_rope_partial_in_place(q, sin, cos)
 
         if self.compress_ratio > 1:
             compress_cos = attn_metadata.decode.compress_cos[layer_name]
