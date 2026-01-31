@@ -75,6 +75,8 @@ def get_value_from_lines(lines: List[str], key: str) -> str:
 
 def get_chip_type() -> str:
     try:
+        if env.SOC_VERSION is 'ascend910_95':
+            return env.SOC_VERSION
         npu_info_lines = subprocess.check_output(
             ['npu-smi', 'info', '-l']).decode().strip().split('\n')
         npu_id = int(get_value_from_lines(npu_info_lines, 'NPU ID'))
@@ -199,6 +201,7 @@ def get_general_soc_version():
         "ascend310p3vir02": "_310P",
         "ascend310p3vir04": "_310P",
         "ascend310p3vir08": "_310P",
+        "ascend910_95": "ascend910_95",
         "ascend910_9579": "ascend910_95",
     }
     return soc_to_general_soc[soc_version]

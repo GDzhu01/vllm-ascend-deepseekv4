@@ -39,6 +39,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
 
         "compressor"
         "quant_lightning_indexer"
+        "quant_lightning_indexer_metadata"
         "lightning_indexer_quant_metadata"
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
@@ -133,6 +134,41 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
+elif [[ "$SOC_VERSION" =~ ^ascend910_95 ]]; then
+    # ASCEND910B (A2) series
+    # depdendency: catlass
+    git config --global --add safe.directory "$ROOT_DIR"
+    CATLASS_PATH=${ROOT_DIR}/csrc/third_party/catlass/include
+    if [[ ! -d "${CATLASS_PATH}" ]]; then
+        echo "depdendency catlass is missing, try to fetch it..."
+        if ! git submodule update --init --recursive; then
+            echo "fetch failed"
+            exit 1
+        fi
+    fi
+    ABSOLUTE_CATLASS_PATH=$(cd "${CATLASS_PATH}" && pwd)
+    export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
+
+    CUSTOM_OPS_ARRAY=(
+        "moe_gating_top_k_hash"
+        
+        "indexer_compress_epilog"
+        "inplace_partial_rotary_mul"
+        "kv_compress_epilog"
+        "compressor"
+        "quant_lightning_indexer"
+        "quant_lightning_indexer_metadata"
+        "sparse_attn_sharedkv"
+        "sparse_attn_sharedkv_metadata"
+
+        "hc_pre_sinkhorn"
+        "hc_pre_inv_rms"
+        "hc_post"
+    )
+
+
+    CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
+    SOC_ARG="ascend910_95"
 else
     # others
     # currently, no custom aclnn ops for other series
