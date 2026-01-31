@@ -869,7 +869,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         decode_input_positions = input_positions_cpu
 
-        def _get_padded_compressed_position(decode_input_positions, compress_ratio):
+        def _get_padded_compressed_position(decode_input_positions, compress_ratio, device):
             # TODO(lxs): refactor me to get_compressed_pos_and_indices
             if compress_ratio == 1:
                 return decode_input_positions
@@ -881,11 +881,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                 self.num_decode_tokens // compress_ratio + self.num_decodes),)
             pad_right = target_shape[0] - input_positions.shape[0]
             pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
-            return pad_positions
+            gpu_pad_positions = pad_positions.pin_memory().to(device, non_blocking=True)
+            return gpu_pad_positions
 
         layer_name = f"c{self.compressor_ratio}"
         compress_cos, compress_sin = get_cos_and_sin_dsa(
-            {layer_name: _get_padded_compressed_position(input_positions, self.compressor_ratio)},
+            {layer_name: _get_padded_compressed_position(decode_input_positions, self.compressor_ratio, input_positions.device)},
             use_cache=True)
 
 
@@ -893,7 +894,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             # TODO(cmq): decode_input_positions is a device tensor, 
             # this will introduce sync operation. Refactor me to torch.where instead
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
-            compressed_decode_num = mask.sum()
+            compressed_decode_num = mask.sum().item()
             return compressed_decode_num
 
         compressed_tokens_start = _get_compressed_decode_token_start(decode_input_positions, self.compressor_ratio)
