@@ -1121,7 +1121,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.attn_sink = kwargs['attn_sink']
 
         ascend_config = get_ascend_config()
-        self.wo_a_transpose = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1).transpose(2,1)
+        self.wo_a_transpose = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1).transpose(2,1).contiguous()
         self.multistream_dsa_preprocess = ascend_config.multistream_dsa_preprocess
         # self.enable_shared_expert_dp = ascend_config.enable_shared_expert_dp
         # self.enable_prefetch = ascend_config.weight_prefetch_config.enabled
