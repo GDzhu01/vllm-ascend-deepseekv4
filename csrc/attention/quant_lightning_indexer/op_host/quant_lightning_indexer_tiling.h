@@ -64,7 +64,7 @@ constexpr uint32_t ATTR_SPARSE_MODE_INDEX = 5;
 constexpr uint32_t ATTR_PRE_TOKENS_INDEX = 6;
 constexpr uint32_t ATTR_NEXT_TOKENS_INDEX = 7;
 constexpr uint32_t ATTR_CMP_RATIO_INDEX = 8;
-constexpr uint32_t ATTR_RETURN_VALUE_INDEX = 9;
+constexpr uint32_t ATTR_RETURN_VALUES_INDEX = 9;
 // Dim Index
 constexpr uint32_t DIM_IDX_ZERO = 0;
 constexpr uint32_t DIM_IDX_ONE = 1;
@@ -96,6 +96,7 @@ TILING_DATA_FIELD_DEF(uint32_t, blockSize)
 TILING_DATA_FIELD_DEF(uint32_t, maxBlockNumPerBatch)
 TILING_DATA_FIELD_DEF(uint32_t, sparseMode)
 TILING_DATA_FIELD_DEF(uint32_t, cmpRatio)
+TILING_DATA_FIELD_DEF(uint32_t, returnValues)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(QuantLightningIndexer, QLITilingData)
 
@@ -115,16 +116,17 @@ struct QLIParaInfo {
     TilingOptionalParaInfo metadata = {nullptr, nullptr};
     TilingRequiredParaInfo attenOut = {nullptr, nullptr};
 
-    const int32_t *queryQuantMode = nullptr;
-    const int32_t *keyQuantMode = nullptr;
+    const int64_t *queryQuantMode = nullptr;
+    const int64_t *keyQuantMode = nullptr;
     const char *layOutQuery = nullptr;
     const char *layOutKey = nullptr;
-    const int32_t *blockSize = nullptr;
-    const int32_t *sparseMode = nullptr;
-    const int32_t *sparseCount = nullptr;
+    const int64_t *blockSize = nullptr;
+    const int64_t *sparseMode = nullptr;
+    const int64_t *sparseCount = nullptr;
     const int64_t *preTokens = nullptr;
     const int64_t *nextTokens = nullptr;
     const int64_t *cmpRatio = nullptr;
+    const bool *returnValues = nullptr;
 };
 
 // -----------算子Tiling入参信息类---------------
@@ -153,6 +155,7 @@ public:
     int64_t preTokens = 0;
     int64_t nextTokens = 0;
     uint32_t cmpRatio = 1;
+    bool returnValues = false;
     // DType
     ge::DataType inputQType = ge::DT_FLOAT16;
     ge::DataType inputKType = ge::DT_FLOAT16;

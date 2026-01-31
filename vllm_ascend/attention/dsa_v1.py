@@ -730,6 +730,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         AscendDSAMetadataBuilder.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
+        print(f'seq_lens_q: {seq_lens_q}')
         AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill] = self.seq_lens[reqs_start:] - seq_lens_q
 
         # AscendDSAMetadataBuilder.start_pos[reqs_start:self.seq_lens[reqs_start:].shape[0] + 1] = self.seq_lens[reqs_start:] - seq_lens_q
@@ -1155,9 +1156,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
         actual_seq_lengths_key = attn_metadata.prefill.seq_lens
         num_decode_tokens = attn_metadata.num_decode_tokens
-        max_seqlen_kv = actual_seq_lengths_key.max()
+        max_seqlen_kv = actual_seq_lengths_key.max().item()
         seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-        max_seqlen_q = seq_lens_q.max()
+        max_seqlen_q = seq_lens_q.max().item()
         compressed_kv_block_table = attn_metadata.prefill.block_table
         compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping
 
@@ -1729,9 +1730,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
             actual_seq_lengths_key = attn_metadata.prefill.seq_lens
             num_decode_tokens = attn_metadata.num_decode_tokens
-            max_seqlen_kv = actual_seq_lengths_key.max()
+            max_seqlen_kv = actual_seq_lengths_key.max().item()
             seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-            max_seqlen_q = seq_lens_q.max()
+            max_seqlen_q = seq_lens_q.max().item()
         else:
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
@@ -1739,14 +1740,48 @@ class AscendDSAImpl(DSAAttentionImpl):
             max_seqlen_q = attn_metadata.decode.max_seqlen_q
             max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
 
+        
+        # print("==== npu_quant_lightning_indexer_metadata args before====")
+
+        # def _print_tensor(name, t):
+        #     if isinstance(t, torch.Tensor):
+        #         print(f"{name}: "
+        #             f"dtype={t.dtype}, "
+        #             f"shape={tuple(t.shape)}, "
+        #             f"device={t.device}, "
+        #             f"value_sample={t.flatten()[:8]}")
+        #     else:
+        #         print(f"{name}: {t} (type={type(t)})")
+
+        # _print_tensor("actual_seq_lengths_query", qlens)
+        # _print_tensor("actual_seq_lengths_key", kvlens)
+
+        # print(f"num_heads_q = {self.n_local_heads}")
+        # print(f"num_heads_k = {1}")
+        # print(f"head_dim = {self.inderxer_dim}")
+        # print(f"query_quant_mode = {0}")
+        # print(f"key_quant_mode = {0}")
+        # print(f"batch_size = {len(kvlens)}")
+        # print(f"max_seqlen_q = {max_seqlen_q.item()}")
+        # print(f"max_seqlen_k = {max_seqlen_kv.item()}")
+        # print(f"layout_query = {'TND'}")
+        # print(f"layout_key = {'PA_BSND'}")
+        # print(f"sparse_count = {512}")
+        # print(f"sparse_mode = {3}")
+        # print(f"pre_tokens = {(1<<63)-1}")
+        # print(f"next_tokens = {(1<<63)-1}")
+        # print(f"cmp_ratio = {4}")
+        # print(f"device = {str(x.device)}")
+
+        # print("==============================================")
         indexer_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+            actual_seq_lengths_query=qlens.clone(),
+            actual_seq_lengths_key=kvlens.clone(),
             num_heads_q=self.n_local_heads,
             num_heads_k=1,
-            head_dim=self.head_dim,
+            head_dim=self.inderxer_dim,
             query_quant_mode=0,
             key_quant_mode=0,
-            actual_seq_lengths_query=qlens,
-            actual_seq_lengths_key=kvlens,
             batch_size=len(kvlens),
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_kv,
@@ -1759,6 +1794,45 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio = 4,
             device=str(x.device)
         )
+        # print("==== npu_quant_lightning_indexer_metadata args ====")
+
+        # def _print_tensor(name, t):
+        #     if isinstance(t, torch.Tensor):
+        #         print(f"{name}: "
+        #             f"dtype={t.dtype}, "
+        #             f"shape={tuple(t.shape)}, "
+        #             f"device={t.device}, "
+        #             f"value_sample={t.flatten()[:8]}")
+        #     else:
+        #         print(f"{name}: {t} (type={type(t)})")
+
+        # _print_tensor("actual_seq_lengths_query", qlens)
+        # _print_tensor("actual_seq_lengths_key", kvlens)
+
+        # print(f"num_heads_q = {self.n_local_heads}")
+        # print(f"num_heads_k = {1}")
+        # print(f"head_dim = {self.inderxer_dim}")
+        # print(f"query_quant_mode = {0}")
+        # print(f"key_quant_mode = {0}")
+        # print(f"batch_size = {len(kvlens)}")
+        # print(f"max_seqlen_q = {max_seqlen_q.item()}")
+        # print(f"max_seqlen_k = {max_seqlen_kv.item()}")
+        # print(f"layout_query = {'TND'}")
+        # print(f"layout_key = {'PA_BSND'}")
+        # print(f"sparse_count = {512}")
+        # print(f"sparse_mode = {3}")
+        # print(f"pre_tokens = {(1<<63)-1}")
+        # print(f"next_tokens = {(1<<63)-1}")
+        # print(f"cmp_ratio = {4}")
+        # print(f"device = {str(x.device)}")
+
+        # print("==============================================")
+        
+        # metadata = indexer_metadata.reshape(-1,8)
+        # for i in range(int(1024/8)):
+        #     print(metadata[i, :])
+            
+        # print("==============================================")
 
         topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,

@@ -72,7 +72,7 @@ public:
     static constexpr LI_LAYOUT Q_LAYOUT_T = QLIT::layout;
     static constexpr LI_LAYOUT K_LAYOUT_T = QLIT::keyLayout;
 
-    using SCORE_T = uint32_t;
+    using SCORE_T = typename QLIT::scoreType;
 
     QLIMatmul<QLIT> matmulService;
     QLIVector<QLIT> vectorService;
@@ -506,14 +506,14 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
 
     //vec 把整个s2的score存储在GM，大小为s1BaseSize * 16K * 4
     GlobalTensor<SCORE_T> scoreGm; //存放vec核写出的score
-    uint64_t singleCoreScoreSize = constInfo.s1BaseSize * CeilAlign(constInfo.kSeqSize, constInfo.s2BaseSize)  * sizeof(SCORE_T);
+    uint64_t singleCoreScoreSize = constInfo.s1BaseSize * QLICommon::Align((uint64_t)constInfo.kSeqSize, (uint64_t)constInfo.s2BaseSize)  * sizeof(SCORE_T);
     scoreGm.SetGlobalBuffer((__gm__ SCORE_T *)(workspace + aiCoreIdx * singleCoreScoreSize));
     offset += GetBlockNum() * singleCoreScoreSize;
 
     //vec 存储需要LD的s1对应的s2的score，大小为s1BaseSize * 16K * 4，一个核内最多有两个s1BaseSize需要LD
     GlobalTensor<SCORE_T> LDScoreGm; //存放进行LD的s2 score
     LDScoreGm.SetGlobalBuffer((__gm__ SCORE_T *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * CeilAlign(constInfo.kSeqSize, constInfo.s2BaseSize) * sizeof(SCORE_T);
+    offset += GetBlockNum() * constInfo.s1BaseSize * QLICommon::Align((uint64_t)constInfo.kSeqSize, (uint64_t)constInfo.s2BaseSize) * sizeof(SCORE_T);
 
     // (aic, 8, 2, 16)
     // (aic, s1_cube, 头尾，16ele)

@@ -15,7 +15,8 @@
 
 #ifndef VF_TOP_K_H
 #define VF_TOP_K_H
-namespace topk {
+
+namespace topkb32 {
 template<typename T>
 __simd_vf__ void HistogramsFirstVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__ uint32_t* inputBuf, uint16_t vfLoop, bool init)
 {

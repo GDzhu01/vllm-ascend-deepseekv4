@@ -20,7 +20,9 @@ namespace aicpu {
 uint32_t
 QuantLightningIndexerMetadataCpuKernel::Compute(CpuKernelContext &ctx) {
     bool success = Prepare(ctx);
-    if (!success) return KERNEL_STATUS_PARAM_INVALID;
+    if (!success) {
+        return KERNEL_STATUS_PARAM_INVALID;
+    }
     SplitResult splitRes {aicCoreNum_, aivCoreNum_};
     success = BalanceSchedule(splitRes) && GenMetaData(splitRes);
     return success ? KERNEL_STATUS_OK : KERNEL_STATUS_PARAM_INVALID;
