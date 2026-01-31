@@ -201,8 +201,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
             kwargs_mc2 = self.get_dispatch_mc2_kwargs_A5(hidden_states, topk_weights,
                                                          topk_ids, expert_map,
                                                          global_redundant_expert_num,
-                                                         comm_quant_mode=4,
-                                                         y_dtype=kwargs.get("y_dtype", torch.float8_e4m3fn))
+                                                         comm_quant_mode=0)
         else:
             kwargs_mc2 = self.get_dispatch_mc2_kwargs(hidden_states, topk_weights,
                                                     topk_ids, expert_map,
@@ -228,7 +227,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
 
         group_list_type = 0
         return TokenDispatchResult(hidden_states=expand_x,
-                                   dynamic_scale=dynamic_scale,
+                                   dynamic_scale=None,
                                    group_list=expert_token_nums,
                                    group_list_type=group_list_type,
                                    context_metadata=context_metadata)
@@ -244,6 +243,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
         expand_scales = context_metadata["expand_scales"]
 
         assert expert_map is not None
+        moe_expert_num = len(expert_map)
 
         kwargs_mc2 = {
             "expand_x": hidden_states,
@@ -251,8 +251,8 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
             "expert_scales": topk_weights.to(torch.float32),
             "expert_shard_type": 0,
             "shared_expert_rank_num": 0,
-            "moe_expert_num": self.moe_expert_num,
-            "global_bs": self.global_bs,
+            "moe_expert_num": moe_expert_num,
+            "global_bs": 0,
         }
 
         if self.with_quant:
@@ -371,7 +371,7 @@ class TokenDispatcherWithAllGather(MoETokenDispatcher):
                        with_quant: bool = False,
                        dynamic_eplb: bool = False,
                        pertoken_scale: Optional[torch.Tensor] = None):
-        self.with_quant = with_quant
+        # self.with_quant = with_quant
         self.original_shape = hidden_states.shape
 
         num_tokens = hidden_states.shape[:-1].numel()
