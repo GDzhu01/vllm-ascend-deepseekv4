@@ -26,22 +26,18 @@ from torch import nn
 from vllm.attention.backends.abstract import AttentionMetadata
 from vllm.attention.layer import DSAAttention
 from vllm.config import CacheConfig, get_current_vllm_config
-from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.forward_context import ForwardContext, get_forward_context
 
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.utils.torch_utils import direct_register_custom_op
 
-from vllm_ascend.ascend_config import get_ascend_config
 
 
 from dataclasses import dataclass
 
 import torch
 
-from vllm.attention.layer import MLAAttention
 from vllm.config import CacheConfig
-from vllm.model_executor.custom_op import CustomOp
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.mla import (MLAModules,
                                             MultiHeadLatentAttentionWrapper)

@@ -1,48 +1,31 @@
 from dataclasses import dataclass
-from typing import (TYPE_CHECKING, ClassVar, NamedTuple, Optional, Tuple, Type,
+from typing import (TYPE_CHECKING, ClassVar, Optional, Tuple, Type,
                     TypeVar)
 
-import numpy as np
 import math
 import torch
 import torch_npu
 import torch.nn.functional as F
 import vllm.envs as envs_vllm
 from vllm.attention.backends.abstract import AttentionBackend, DSAAttentionImpl
-from vllm.attention.backends.utils import PAD_SLOT_ID
 from vllm.config import VllmConfig, get_current_vllm_config
-from vllm.forward_context import ForwardContext, get_forward_context
-from vllm.logger import logger
-from vllm.model_executor.layers.linear import UnquantizedLinearMethod
+from vllm.forward_context import get_forward_context
 from vllm.utils.math_utils import cdiv, round_down
-# from vllm.v1.attention.backends.mla.common import MLACommonMetadataBuilder
 from vllm.v1.attention.backends.utils import AttentionCGSupport
 from vllm.v1.kv_cache_interface import AttentionSpec, MLAAttentionSpec
 from vllm.v1.attention.backends.utils import (
     AttentionMetadataBuilder,
-    CommonAttentionMetadata,
     split_decodes_and_prefills,
 )
 from vllm.distributed import get_tensor_model_parallel_world_size
 
-from vllm_ascend import envs
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
-from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
-                                         enable_cp,
-                                         maybe_save_kv_layer_to_connector,
-                                         split_decodes_and_prefills,
-                                         trans_rope_weight, transdata,
-                                         wait_for_kv_layer_from_connector)
-from vllm_ascend.compilation.acl_graph import (
-    get_draft_graph_params, get_graph_params,
-    update_draft_graph_params_workspaces, update_graph_params_workspaces)
+from vllm_ascend.attention.utils import AscendCommonAttentionMetadata,split_decodes_and_prefills
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
-from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
-from vllm_ascend.quantization.w8a8 import AscendW8A8LinearMethod
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
 
@@ -51,20 +34,6 @@ if TYPE_CHECKING:
 
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
-
-
-def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int):
-    def _get_window_topk_idxs():
-        if start_pos >= window_size - 1:
-            return torch.arange(window_size)
-        elif start_pos > 0:
-            return F.pad(torch.arange(start_pos + 1), (0, window_size - start_pos - 1), value=-1)
-        else:
-            base = torch.arange(seqlen).unsqueeze(1)
-            matrix = (base - window_size + 1).clamp(0) + torch.arange(min(seqlen, window_size))
-            matrix = torch.where(matrix > base, -1, matrix)
-            return matrix
-    return _get_window_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
 
 
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
@@ -82,19 +51,6 @@ def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
 def rotate_activation(x: torch.Tensor, attn_metadata) -> torch.Tensor:
     hidden_size = x.size(-1)
     return hadamard_transform_ref(x, scale=hidden_size ** -0.5, attn_metadata=attn_metadata)
-import math
-
-
-def get_compress_topk_idxs(ratio: int, bsz: int, seqlen: int, start_pos: int, offset: int):
-    def _get_compress_topk_idxs():
-        if start_pos > 0:
-            return torch.arange(0, start_pos // ratio) + offset
-        else:
-            matrix = torch.arange(seqlen // ratio).repeat(seqlen, 1)
-            mask = matrix >= torch.arange(1, seqlen + 1).unsqueeze(1) // ratio
-            matrix = torch.where(mask, -1, matrix + offset)
-            return matrix
-    return _get_compress_topk_idxs().unsqueeze(0).expand(bsz, -1, -1)
 
 
 def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 128):
@@ -738,7 +694,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
         AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill] = self.seq_lens[reqs_start:] - seq_lens_q
 
-        # AscendDSAMetadataBuilder.start_pos[reqs_start:self.seq_lens[reqs_start:].shape[0] + 1] = self.seq_lens[reqs_start:] - seq_lens_q
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.n_heads // tp_size
         index_topk = 512
@@ -752,7 +707,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            ori_mask_mode=4, # 4:sliding window
+            ori_mask_mode=4,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -770,10 +725,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            topk=index_topk, #
-            cmp_ratio=4, #
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            topk=index_topk,
+            cmp_ratio=4,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -791,9 +746,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            cmp_ratio=128, #
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            cmp_ratio=128,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -1133,25 +1088,6 @@ class AscendDSAImpl(DSAAttentionImpl):
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
-    def compress_forward(self,
-            x: torch.Tensor,
-            kv_cache: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-            wkx,
-            wgate,
-            norm_weight,
-            sin,
-            cos,
-            attentionmeatdata,
-            rope_head_dim,
-            compress_ratio,
-            rotary_mode
-    ):
-        kv = self.kernel_compress(x)# self.wkv, self.wgate, self.kv_state, self.score_state
-        return kv
-
-    def kernel_compreess(self,
-                         x):
-        return None
 
     # TODO: cast to bfloat16 to speed up
     def rope_single(self, x,cos,sin,inverse=False):
@@ -1173,12 +1109,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
         return x
 
-    def get_compress_topk_idxs(
-        self,
-        x
-    ):
-        return None
-
     def forward(
         self,
         layer_name,
@@ -1195,25 +1125,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             return output.fill_(0)
 
         output_padded = output
-        # if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
-        #     output[...]  =  self._forward_single_op_prefill(
-        #         hidden_states,
-        #         kv_cache,
-        #         attn_metadata,
-        #         kv_state,
-        #         layer_name
-        #     )
-        # elif attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
-        #     output[...]  =  self._forward_single_op_decode(
-        #         hidden_states,
-        #         kv_cache,
-        #         attn_metadata,
-        #         kv_state,
-        #         layer_name
-        #     )
-        # return output_padded
-
-
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
@@ -1291,10 +1202,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         sin = attn_metadata.prefill.sin[layer_name]
         actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
         actual_seq_lengths_key = attn_metadata.prefill.seq_lens
-        num_decode_tokens = attn_metadata.num_decode_tokens
-        max_seqlen_kv = actual_seq_lengths_key.max()
-        seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
-        max_seqlen_q = seq_lens_q.max()
         compressed_kv_block_table = attn_metadata.prefill.block_table
         compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping
 
@@ -1339,7 +1246,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     with_prefill=True)
 
             coff = 2 if self.compressor_overlap else 1
-            # start_pos = actual_seq_lengths_key - seq_lens_q
+
             # compressor
             compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
@@ -1354,7 +1261,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table = attn_metadata.prefill.state_block_table,
                 score_block_table = attn_metadata.prefill.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
-                seqused = None, #actual_seq_lengths_key,
+                seqused = None,
                 start_pos = attn_metadata.prefill.start_pos,
                 rope_head_dim = self.rope_head_dim,
                 cmp_ratio = self.compress_ratio,
@@ -1365,8 +1272,6 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
-            # elif self.compressor.rotate:
-            #     compressed_kv = rotate_activation(compressed_kv, attn_metadata)
 
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
@@ -1385,7 +1290,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c1_metadata,
                 softmax_scale=self.softmax_scale,
-                ori_mask_mode=4, # 4:sliding window
+                ori_mask_mode=4,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1396,7 +1301,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 q,
                 ori_kv=sliding_window_kv_padded,
                 cmp_kv=kv_cache[0],
-                cmp_sparse_indices=compress_topk_idxs, # B T D
+                cmp_sparse_indices=compress_topk_idxs,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
@@ -1404,9 +1309,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c4_metadata,
                 softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio, #
-                ori_mask_mode=4, # 4:sliding window
-                cmp_mask_mode=3, # 3:causal
+                cmp_ratio=self.compress_ratio,
+                ori_mask_mode=4,
+                cmp_mask_mode=3,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1424,9 +1329,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c128_metadata,
                 softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio, #
-                ori_mask_mode=4, # 4:sliding window
-                cmp_mask_mode=3, # 3:causal
+                cmp_ratio=self.compress_ratio,
+                ori_mask_mode=4,
+                cmp_mask_mode=3,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1476,11 +1381,11 @@ class AscendDSAImpl(DSAAttentionImpl):
             if before_norm_event:
                 torch.npu.current_stream().wait_event(before_norm_event)
 
-            qr = q = self.q_norm(self.wq_a(hidden_states)) # bs
+            qr = q = self.q_norm(self.wq_a(hidden_states))
         if self.multistream_dsa_preprocess:
             torch.npu.current_stream().wait_stream(
                 attention_calculation_stream())
-        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q = triton_q_rms(q, self.eps)
         q = triton_apply_rope_partial_in_place(q, sin, cos)
 
@@ -1518,7 +1423,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table = attn_metadata.decode.state_block_table,
                 score_block_table = attn_metadata.decode.state_block_table,
                 cu_seqlens = actual_seq_lengths_query,
-                seqused = None, #actual_seq_lengths_key,
+                seqused = None,
                 start_pos = attn_metadata.decode.start_pos,
                 rope_head_dim = self.rope_head_dim,
                 cmp_ratio = self.compress_ratio,
@@ -1541,7 +1446,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c1_metadata,
                 softmax_scale=self.softmax_scale,
-                ori_mask_mode=4, # 4:sliding window
+                ori_mask_mode=4,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1560,9 +1465,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c4_metadata,
                 softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio, #
-                ori_mask_mode=4, # 4:sliding window
-                cmp_mask_mode=3, # 3:causal
+                cmp_ratio=self.compress_ratio,
+                ori_mask_mode=4,
+                cmp_mask_mode=3,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1580,9 +1485,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c128_metadata,
                 softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio, #
-                ori_mask_mode=4, # 4:sliding window
-                cmp_mask_mode=3, # 3:causal
+                cmp_ratio=self.compress_ratio,
+                ori_mask_mode=4,
+                cmp_mask_mode=3,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
@@ -1605,12 +1510,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_key: torch.Tensor,
         with_prefill: bool = False,
     ):
-        seqlen, _ = x.size()  # [T, H]
-        bsz = 1
-        ratio = self.compress_ratio
-        rd = self.rope_head_dim
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
-        seq_lens_q = actual_seq_lengths_query[1:] - actual_seq_lengths_query[:-1]
         q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
         ## rope
@@ -1622,9 +1522,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             q = torch.cat([q_nope, q_pe], dim=-1)
 
         q = rotate_activation(q, attn_metadata)
-
         coff = 2 if self.compressor_overlap else 1
-        # start_pos = actual_seq_lengths_key - seq_lens_q
 
         if with_prefill:
             kv_block_table = attn_metadata.prefill.state_block_table

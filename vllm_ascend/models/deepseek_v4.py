@@ -34,14 +34,10 @@ import torch
 import torch_npu
 from torch import nn
 from transformers import DeepseekV2Config, DeepseekV3Config, DeepseekV4Config
-import vllm_ascend.envs as envs_ascend
 
 from vllm._aiter_ops import rocm_aiter_ops
-from vllm.attention.backends.abstract import AttentionBackend
-from vllm.attention.layer import Attention
-from vllm.attention.ops.common import pack_seq_triton, unpack_seq_triton
 from vllm.compilation.decorators import support_torch_compile
-from vllm.config import CacheConfig, ParallelConfig, VllmConfig, get_current_vllm_config
+from vllm.config import CacheConfig, ParallelConfig, VllmConfig
 from vllm.distributed import (
     get_ep_group,
     get_pp_group,
@@ -49,26 +45,18 @@ from vllm.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_gather,
 )
-from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
-from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
-from vllm.model_executor.layers.layernorm import LayerNorm, RMSNorm
+from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     MergedColumnParallelLinear,
-    QKVParallelLinear,
     ReplicatedLinear,
     RowParallelLinear,
 )
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
-from vllm.model_executor.layers.mla import MLAModules, MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.quantization.utils.fp8_utils import (
-    per_token_group_quant_fp8,
-)
-from vllm.model_executor.layers.rotary_embedding import get_rope
 from vllm.model_executor.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -80,14 +68,6 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.model_executor.models.utils import sequence_parallel_chunk
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
-from vllm.utils.deep_gemm import fp8_mqa_logits, fp8_paged_mqa_logits
-from vllm.utils.torch_utils import direct_register_custom_op
-from vllm.v1.attention.backends.mla.indexer import (
-    DeepseekV32IndexerBackend,
-    DeepseekV32IndexerMetadata,
-)
-from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
-from vllm.v1.worker.workspace import current_workspace_manager
 
 from vllm.model_executor.models.interfaces import MixtureOfExperts, SupportsEagle, SupportsLoRA, SupportsPP
 from vllm.model_executor.models.utils import (
@@ -98,14 +78,7 @@ from vllm.model_executor.models.utils import (
     maybe_prefix,
 )
 
-if current_platform.is_cuda_alike():
-    from vllm import _custom_ops as ops
-elif current_platform.is_xpu():
-    from vllm._ipex_ops import ipex_ops as ops
-
-
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
-from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.ascend_config import get_ascend_config
@@ -1079,27 +1052,6 @@ class AscendDeepseekV4ForCausalLM(
         self.config = config
         self.quant_config = quant_config
 
-        qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 0)
-        qk_rope_head_dim = getattr(config, "qk_rope_head_dim", 0)
-        # self.use_mha = config.model_type == "deepseek" or all(
-        #     dim == 0 for dim in (qk_nope_head_dim, qk_rope_head_dim)
-        # )
-
-
-
-        # `packed_modules_mapping` needs to be modified before
-        # initializing DeepseekV4Model, as it is passed inplace to
-        # quantization config init and may be used to select the
-        # quant_method for relevant layers during initialization.
-        # self.fuse_qkv_a_proj = (
-        #     hasattr(config, "q_lora_rank") and config.q_lora_rank is not None
-        # )
-        # if self.fuse_qkv_a_proj:
-        #     self.packed_modules_mapping["fused_qkv_a_proj"] = [
-        #         "q_a_proj",
-        #         "kv_a_proj_with_mqa",
-        #     ]
-
         self.model = self.model_cls(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
@@ -1260,13 +1212,6 @@ class AscendDeepseekV4ForCausalLM(
                 param.data.copy_(narrow_weight)
                 loaded_params.add(name)
                 continue
-            
-            # if "hc_attn_fn" in name or "hc_ffn_fn" in name:
-            #     param = params_dict[name]
-            #     cast_weight = loaded_weight.to(torch.bfloat16)
-            #     param.data.copy_(cast_weight)
-            #     loaded_params.add(name)
-            #     continue
 
             is_fusion_moe_shared_experts_layer = (
                 rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)
