@@ -1,4 +1,4 @@
-/**
+ /**
  * This program is free software, you can redistribute it and/or modify it.
  * Copyright (c) 2025 Huawei Technologies Co., Ltd.
  * This file is a part of the CANN Open Software.
@@ -9,10 +9,10 @@
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
- /*!
- * \file quant_lightning_indexer_metadata.h
- * \brief
- */
+/*!
+* \file quant_lightning_indexer_metadata.h
+* \brief
+*/
 
 #ifndef QUANT_LIGHTNING_INDEXER_METADATA_H
 #define QUANT_LIGHTNING_INDEXER_METADATA_H
@@ -20,41 +20,60 @@
 #include <cstdint>
 
 namespace optiling {
-const uint32_t AIC_CORE_NUM = 36;
-const uint32_t AIV_CORE_NUM = 36 * 2;
-const uint32_t MAX_LD_NUM = AIC_CORE_NUM;
+
+// Constants
+static constexpr uint32_t AIC_CORE_NUM = 36;
+static constexpr uint32_t AIV_CORE_NUM = 72;
 constexpr uint32_t QLI_META_SIZE = 1024;
 using QLI_METADATA_T = int32_t;
 
-namespace detail {
-    // 分核功能模块输出：LD信息，包含需要归约的数据索引及其分核信息
-    struct LDResult {
-        // 1、归约任务的索引信息
-        uint32_t ldNum = 0U;                        // 归约任务数量
-        uint32_t ldBN2Idx[MAX_LD_NUM];                // 每个归约任务的BN2索引，脚标为归约任务的序号，最大为核数-1
-        uint32_t ldMIdx[MAX_LD_NUM];                  // 每个归约任务的GS1索引，脚标为归约任务的序号
-        uint32_t ldS2SplitNum[MAX_LD_NUM];            // 每个归约任务的S2核间切分份数，脚标为归约任务的序号
-        
-        // 2、FD负载均衡阶段，归约任务的分核（vec）信息
-        uint32_t ldUsedVecNum = 0U;                 // 归约过程使用的vector数量
-        uint32_t ldBalanceMBaseSize = 0U;           //  规约过程中，m方向基本块大小
-        uint32_t ldBalanceMSplitNum[MAX_LD_NUM];      // 每个归约任务m轴切分份数，脚标为归约任务的序号
-        uint32_t ldBalanceMTailSize[MAX_LD_NUM];      // 每个归约任务m轴切分的最后一份的大小，脚标为归约任务的序号
-        uint32_t ldBalanceEndIdx1[AIV_CORE_NUM];    // FD负载均衡阶段，每个vector的一级索引，脚标为vector ID，值为归约任务的ID
-        uint32_t ldBalanceEndIdx2[AIV_CORE_NUM];    // FD负载均衡阶段，每个vector的二级索引，脚标为vector ID，值为归约任务的m轴切分ID
-    };
+static constexpr uint32_t LI_METADATA_SIZE = 8;
+static constexpr uint32_t LD_METADATA_SIZE = 8;
 
-    struct QliMetaData { // __attribute__((aligned(8)))
-        uint32_t usedCoreNum = 0U;                  // 使用的核数量
-        uint32_t mBaseSize = 0U;                    
-        uint32_t s2BaseSize = 0U;
-        uint32_t bN2End[AIC_CORE_NUM];                  // 每个核处理数据的BN2结束点
-        uint32_t mEnd[AIC_CORE_NUM];                    // 每个核处理数据的M结束点
-        uint32_t s2End[AIC_CORE_NUM];                   // 每个核处理数据的S2结束点
-        uint32_t headLdDataIdx[AIC_CORE_NUM];           // 每个core处理的第1个归约任务的数据应存放的workspace位置
-        struct LDResult ldRes;                      // LD信息
+// LI Metadata Index Definitions
+static constexpr uint32_t LI_CORE_ENABLE_INDEX = 0;
+static constexpr uint32_t LI_BN2_START_INDEX = 1;
+static constexpr uint32_t LI_M_START_INDEX = 2;
+static constexpr uint32_t LI_S2_START_INDEX = 3;
+static constexpr uint32_t LI_BN2_END_INDEX = 4;
+static constexpr uint32_t LI_M_END_INDEX = 5;
+static constexpr uint32_t LI_S2_END_INDEX = 6;
+static constexpr uint32_t LI_FIRST_LD_DATA_WORKSPACE_IDX_INDEX = 7;
+
+// LD Metadata Index Definitions
+static constexpr uint32_t LD_CORE_ENABLE_INDEX = 0;
+static constexpr uint32_t LD_BN2_IDX_INDEX = 1;
+static constexpr uint32_t LD_M_IDX_INDEX = 2;
+static constexpr uint32_t LD_WORKSPACE_IDX_INDEX = 3;
+static constexpr uint32_t LD_WORKSPACE_NUM_INDEX = 4;
+static constexpr uint32_t LD_M_START_INDEX = 5;
+static constexpr uint32_t LD_M_NUM_INDEX = 6;
+
+ /**
+ * @brief 获取属性的绝对索引
+ * @param coreIdx 核索引
+ * @param metaIdx 元数据索引
+ * @param isAIV 是否为AIV数据，默认为false
+ * @return 返回属性的绝对索引
+ */
+#ifdef __CCE_AICORE__
+__aicore__ inline uint32_t GetAttrAbsIndex(uint32_t coreIdx, uint32_t metaIdx, bool isAIV=false)
+{
+    if (isAIV) {
+        return LI_METADATA_SIZE * AIC_CORE_NUM + LD_METADATA_SIZE * coreIdx + metaIdx;
+    } else {
+        return LI_METADATA_SIZE * coreIdx + metaIdx;
+    }
+}
+#endif
+
+namespace detail {
+    struct QliMetaData {
+        uint32_t LIMetadata[AIC_CORE_NUM][LI_METADATA_SIZE];
+        uint32_t LDMetadata[AIV_CORE_NUM][LD_METADATA_SIZE];
     };
 };
+
 static_assert(QLI_META_SIZE * sizeof(QLI_METADATA_T) >= sizeof(detail::QliMetaData));
 };
 

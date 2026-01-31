@@ -17,7 +17,7 @@
 #define VF_ROPE_H
 
 #include "kernel_operator.h"
-#include "op_kernel/math_util.h"
+#include "../../compressor_comm.h"
 
 using namespace AscendC;
 
@@ -116,22 +116,24 @@ __aicore__ inline void StoreOneTensorForDtypeT(__local_mem__ T *output, MicroAPI
     } 
 }
 
-template <typename T>
+template <typename T, typename ROPET>
 __aicore__ inline void HalfAlignVF(
-    const LocalTensor<T>& sinTensor, const LocalTensor<T>& cosTensor, const LocalTensor<T>& inTensor,
-    const LocalTensor<T>& outTensor, uint32_t dLen, uint32_t dAlign, uint16_t currSNum, uint16_t currDNum)
+    const LocalTensor<ROPET>& sinTensor, const LocalTensor<ROPET>& cosTensor, const LocalTensor<T>& inTensor,
+    const LocalTensor<ROPET>& outTensor, uint32_t dLen, uint16_t currSNum, uint16_t currDNum)
 {
-    __local_mem__ T* sinUb = (__local_mem__ T*)sinTensor.GetPhyAddr();
-    __local_mem__ T* cosUb = (__local_mem__ T*)cosTensor.GetPhyAddr();
+    __local_mem__ ROPET* sinUb = (__local_mem__ ROPET*)sinTensor.GetPhyAddr();
+    __local_mem__ ROPET* cosUb = (__local_mem__ ROPET*)cosTensor.GetPhyAddr();
     __local_mem__ T* inUb = (__local_mem__ T*)inTensor.GetPhyAddr();
-    __local_mem__ T* outUb = (__local_mem__ T*)outTensor.GetPhyAddr();
+    __local_mem__ ROPET* outUb = (__local_mem__ ROPET*)outTensor.GetPhyAddr();
     uint32_t halfD = dLen / HALF_INTERLEAVE_COEF;
-    uint32_t halfDAlign = Ops::Base::CeilAlign(halfD, static_cast<uint32_t>(BLOCK_TYPE_SIZE / sizeof(T)));
-    uint16_t repeatTimes = Ops::Base::CeilDiv(halfD, VL_FLOAT32_SIZE);
+
+    uint32_t dAlign = Compressor::Align(dLen, static_cast<uint32_t>(BLOCK_TYPE_SIZE / sizeof(T)));
+    uint32_t halfDAlign = Compressor::Align(halfD, static_cast<uint32_t>(BLOCK_TYPE_SIZE / sizeof(T)));
+    uint16_t repeatTimes = Compressor::CeilDivT(halfD, VL_FLOAT32_SIZE);
     __local_mem__ T* currInUb;
-    __local_mem__ T* currOutUb;
-    __local_mem__ T* currSinUb;
-    __local_mem__ T* currCosUb;
+    __local_mem__ ROPET* currOutUb;
+    __local_mem__ ROPET* currSinUb;
+    __local_mem__ ROPET* currCosUb;
 
     __VEC_SCOPE__
     {
@@ -157,9 +159,9 @@ __aicore__ inline void HalfAlignVF(
                     uint32_t halfOffset = offset + halfDAlign;
                     LoadTwoTensorForDtypeT<T>(
                         currInUb, currInUb, vregIn, vregHalfIn, preg, preg, offset, halfOffset);
-                    LoadTwoTensorForDtypeT<T>(
+                    LoadTwoTensorForDtypeT<ROPET>(
                         currSinUb, currSinUb, vregSin, vregHalfSin, preg, preg, offset, halfOffset);
-                    LoadTwoTensorForDtypeT<T>(
+                    LoadTwoTensorForDtypeT<ROPET>(
                         currCosUb, currCosUb, vregCos, vregHalfCos, preg, preg, offset, halfOffset);
 
                     MicroAPI::Mul(vregSin, vregSin, vregHalfIn, preg);
@@ -169,8 +171,8 @@ __aicore__ inline void HalfAlignVF(
                     MicroAPI::Mul(vregHalfCos, vregHalfCos, vregHalfIn, preg);
                     MicroAPI::Add(vregHalfOut, vregHalfOut, vregHalfCos, preg);
 
-                    StoreOneTensorForDtypeT<T>(currOutUb, vregOut, preg, offset);
-                    StoreOneTensorForDtypeT<T>(currOutUb, vregHalfOut, preg, halfOffset);
+                    StoreOneTensorForDtypeT<ROPET>(currOutUb, vregOut, preg, offset);
+                    StoreOneTensorForDtypeT<ROPET>(currOutUb, vregHalfOut, preg, halfOffset);
                 }
             }
         }
@@ -187,7 +189,7 @@ __aicore__ inline void InterleaveModeVF(
     __local_mem__ T* inUb = (__local_mem__ T*)inTensor.GetPhyAddr();
     __local_mem__ ROPET* outUb = (__local_mem__ ROPET*)outTensor.GetPhyAddr();
     uint16_t repeatTimes = dLen / VL_FLOAT32_SIZE;//(每个寄存器256字节，最多存放数据256/4=64element，因此需要使用寄存器的数量)
-    uint32_t dAlignLen = Ops::Base::CeilAlign(dLen, static_cast<uint32_t>(BLOCK_TYPE_SIZE / sizeof(T)));
+    uint32_t dAlignLen = Compressor::Align(dLen, static_cast<uint32_t>(BLOCK_TYPE_SIZE / sizeof(T)));
     //Dlen(8对齐、32/4)RD=64
     uint16_t loopNum = repeatTimes / 2;//(开两个寄存器)
     uint32_t tailNum = dLen - loopNum * 2 * VL_FLOAT32_SIZE;//(尾块数据数)
@@ -200,9 +202,7 @@ __aicore__ inline void InterleaveModeVF(
     __local_mem__ ROPET* currCosUb;
     __local_mem__ ROPET* tailSinUb;
     __local_mem__ ROPET* tailCosUb;
-    // printf("interleavemode\n");
-    // printf("dLen:[%u]----currSNum:[%u]--currDNum:[%u]--loopNum[%u]---tailNum[%u]--tailTwoVL[%u]--tailOneVL[%u]--tailLen[%u]",
-    // dLen,currSNum,currDNum,loopNum,tailNum,tailTwoVL,tailOneVL,tailLen);
+
     __VEC_SCOPE__
     {
         MicroAPI::RegTensor<float> vregFormerCos;

@@ -15,7 +15,7 @@
  */
 
 /*!
- * \file hc_post_full_load.h
+ * \file hc_post_d_split.h
  * \brief
  */
 #ifndef HC_POST_D_SPLIT_H

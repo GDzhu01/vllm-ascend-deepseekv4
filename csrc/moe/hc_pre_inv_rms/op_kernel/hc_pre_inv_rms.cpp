@@ -14,7 +14,7 @@
  */
 #include "hc_pre_inv_rms_full_load.h"
 #if defined(__DAV_C310__) 
-  #include "arch35/hc_pre_inv_rms_full_load_regbase.h"
+  #include "hc_pre_inv_rms_full_load_regbase.h"
   using namespace HcPreInvRmsRegbase;
 #endif
 #include "kernel_operator.h"

@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file compressor_comm.h
@@ -64,6 +64,11 @@ enum class COFF : std::uint8_t {
 enum class ROTARY_MODE : std::uint8_t {
     HALF = static_cast<std::uint8_t>(1),
     INTERLEAVE = static_cast<std::uint8_t>(2)
+};
+
+enum class EMPTY_TENSOR_MODE:uint8_t {
+    NON_EMPTY = 0,
+    EMPTY_X = 1
 };
 
 template <X_LAYOUT X_L, X_DTYPE X_T, COFF C, ROTARY_MODE Rotary_Mode, typename... Args>
@@ -173,28 +178,28 @@ struct BlockInfo {
 };
 
 // BUFFER的字节数
-static constexpr uint32_t BUFFER_SIZE_BYTE_32B = 32;
-static constexpr uint32_t BUFFER_SIZE_BYTE_64B = 64;
-static constexpr uint32_t BUFFER_SIZE_BYTE_256B = 256;
-static constexpr uint32_t BUFFER_SIZE_BYTE_512B = 512;
-static constexpr uint32_t BUFFER_SIZE_BYTE_1K = 1024;
-static constexpr uint32_t BUFFER_SIZE_BYTE_2K = 2048;
-static constexpr uint32_t BUFFER_SIZE_BYTE_4K = 4096;
-static constexpr uint32_t BUFFER_SIZE_BYTE_8K = 8192;
-static constexpr uint32_t BUFFER_SIZE_BYTE_16K = 16384;
-static constexpr uint32_t BUFFER_SIZE_BYTE_32K = 32768;
-static constexpr uint32_t BUFFER_SIZE_BYTE_64K = 65536;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_32B = 32;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_64B = 64;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_256B = 256;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_512B = 512;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_1K = 1024;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_2K = 2048;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_4K = 4096;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_8K = 8192;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_16K = 16384;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_32K = 32768;
+inline constexpr uint32_t BUFFER_SIZE_BYTE_64K = 65536;
 
 // BLOCK和REPEAT的字节数
-static constexpr uint64_t BYTE_BLOCK = 32UL;
-static constexpr uint32_t REPEAT_BLOCK_BYTE = 256U;
+inline constexpr uint64_t BYTE_BLOCK = 32UL;
+inline constexpr uint32_t REPEAT_BLOCK_BYTE = 256U;
 // BLOCK和REPEAT的FP32元素数
-static constexpr uint32_t FP32_BLOCK_ELEMENT_NUM = BYTE_BLOCK / sizeof(float); // 8
-static constexpr uint32_t FP32_REPEAT_ELEMENT_NUM = REPEAT_BLOCK_BYTE / sizeof(float); // 64
-static constexpr uint32_t REPEAT_STRIDE_NUM = REPEAT_BLOCK_BYTE / BYTE_BLOCK; // 8
-static constexpr uint32_t REPEAT_MAX_NUM = 255;
-static constexpr uint32_t BRCB_NUM = 8;
-static constexpr uint32_t MAX_R = 256;
+inline constexpr uint32_t FP32_BLOCK_ELEMENT_NUM = BYTE_BLOCK / sizeof(float); // 8
+inline constexpr uint32_t FP32_REPEAT_ELEMENT_NUM = REPEAT_BLOCK_BYTE / sizeof(float); // 64
+inline constexpr uint32_t REPEAT_STRIDE_NUM = REPEAT_BLOCK_BYTE / BYTE_BLOCK; // 8
+inline constexpr uint32_t REPEAT_MAX_NUM = 255;
+inline constexpr uint32_t BRCB_NUM = 8;
+inline constexpr uint32_t MAX_R = 256;
 
 template <typename T>
 __aicore__ inline void CopySingleMatrixNDToNZ(LocalTensor<T> l1Tensor, const GlobalTensor<T> gmTensor,

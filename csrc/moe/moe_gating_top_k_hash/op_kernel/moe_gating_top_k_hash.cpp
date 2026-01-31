@@ -17,7 +17,7 @@
 #include "moe_gating_top_k_hash_without_group.h"
 #include "moe_gating_top_k_hash_generalized.h"
 #if defined(__DAV_C310__) 
-  #include "arch35/moe_gating_top_k_hash_regbase.h"
+  #include "moe_gating_top_k_hash_regbase.h"
   using namespace MoeGatingTopKHashRegbaseNS;
 #endif
 #define TILING_KEY_PER_GROUP_COUNT_32 0

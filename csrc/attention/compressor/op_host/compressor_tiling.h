@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file compressor_tiling.h
@@ -74,6 +74,14 @@ namespace optiling {
     constexpr uint32_t COMPRESSOR_DIM_INDEX_1 = 1;
     constexpr uint32_t COMPRESSOR_DIM_INDEX_2 = 2;
     constexpr uint32_t COMPRESSOR_DIM_INDEX_3 = 3;
+
+    // CONSTRAINTS
+    constexpr uint32_t MAX_HIDDEN_SIZE = 10240;
+    constexpr uint32_t MIN_HIDDEN_SIZE = 1024;
+    constexpr uint32_t ALIGN_FACTOR_HIDDEN_SIZE = 512;
+    constexpr uint32_t MAX_BLOCK_SIZE = 1024;
+    constexpr uint32_t MIN_BLOCK_SIZE = 16;
+    constexpr uint32_t ALIGN_FACTOR_BLOCK_SIZE = 16;
     
 struct CompressorCompileInfo {
     int64_t core_num;
@@ -88,6 +96,16 @@ struct OptionalParaInfo {
     const gert::CompileTimeTensorDesc *desc;
     const gert::StorageShape *shape;
     const gert::Tensor *tensor;
+};
+
+enum class LayoutType {
+    LAYOUT_BSH,
+    LAYOUT_TH    
+};
+
+enum class EMPTY_TENSOR_MODE:uint8_t {
+    NON_EMPTY = 0,
+    EMPTY_X = 1
 };
 
 CMP_EXTERN_C ge::graphStatus TilingCompressor(gert::TilingContext *context);
@@ -105,9 +123,11 @@ struct CompressorBaseShapeInfo {
     uint32_t drSize = 0; // Dr
 };
 
-constexpr uint32_t ROPE_HEAD_DIM[] {64};
-constexpr uint32_t COFF[] {1, 2};
-constexpr uint32_t CMP_RATIO[] {2, 4, };
+const std::vector<int> ROPE_HEAD_DIM {64};
+const std::vector<int> COFF {1, 2};
+const std::vector<int> CMP_RATIO {2, 4, 8, 16, 32, 64, 128};
+const std::vector<int> ROTARY_MODE {1, 2};
+const std::vector<uint32_t> HEAD_DIM {128, 512};
 
 enum class ROTARY_MODE:uint8_t {
     HALF = 1,
@@ -140,19 +160,25 @@ struct CompressorContext {
     const int *cmpRatio;
     const float *normEps;
     const int *rotaryMode;
-    
+    EMPTY_TENSOR_MODE emptyTensorMode;
+
+    ge::DataType dtype = ge::DT_BF16; 
+    LayoutType layout = LayoutType::LAYOUT_BSH; 
+
     size_t *workSpaces;
     uint64_t tilingKey;
     uint32_t blockDim;
 };
 
+static std::string DataTypeToSerialString(ge::DataType type);
+
 class CompressorTiling {
 public:
-    CompressorTiling() = default;
+    explicit CompressorTiling(CompressorContext *context) : context_(context) {}
     ~CompressorTiling() = default;
 
     static ge::graphStatus ConvertContext(gert::TilingContext &context, CompressorContext &compressorContext);
-    ge::graphStatus RunBigKernelTiling(CompressorContext &context, CompressorTilingData* tilingData);
+    ge::graphStatus RunBigKernelTiling(CompressorTilingData* tilingData);
 
 private:
     static void ConvertRequiredParams(gert::TilingContext &context, CompressorContext &compressorContext);
@@ -165,10 +191,57 @@ private:
     ge::graphStatus SetScenarioInfo();
     ge::graphStatus SetInnerSplitInfo();
     ge::graphStatus CalcWorkSpace();
-    
+    ge::graphStatus CheckSinglePara() const;
     ge::graphStatus GenTilingKey() const;
-
-    CompressorBaseShapeInfo baseShapeInfo_;
+    template <typename T>
+    ge::graphStatus CheckFeatureValueSupport(const T *featureValue, const std::vector<T> &expectFeatureValList,
+                                             const std::string &name) const;
+    template <typename T>
+    ge::graphStatus CheckAttrValueSupport(const T *attrValue, const std::vector<T> &expectAttrValList,
+                                          const std::string &name) const;
+    template <typename T>
+    void LogErrorNumberSupport(const std::vector<T> &expectNumberList, const T &actualValue, const std::string &name,
+                               const std::string subName) const;
+    ge::graphStatus CheckDimNumInLayoutSupport(const std::string &layout, const gert::StorageShape *shape,
+                                               const std::string &name) const;
+    ge::graphStatus CheckDtypeSupport(const gert::CompileTimeTensorDesc *desc, const std::string &name) const;
+    void LogErrorDtypeSupport(const std::vector<ge::DataType> &expectDtypeList, const ge::DataType &actualDtype,
+                              const std::string &name) const;
+    ge::graphStatus CheckDimNumSupport(const gert::StorageShape *shape, const std::string &name) const;
+    ge::graphStatus LogErrorShapeConsistency(const std::string &name, const gert::StorageShape *shape,
+                                             const uint32_t &dimNum, const std::string &subName,
+                                             const uint32_t &expectNum) const;
+    ge::graphStatus CheckSingleParaX() const;
+    ge::graphStatus CheckSingleParaWkv() const;
+    ge::graphStatus CheckSingleParaWgate() const;
+    ge::graphStatus CheckSingleParaKvState() const;
+    ge::graphStatus CheckSingleParaScoreState() const;
+    ge::graphStatus CheckSingleParaApe() const;
+    ge::graphStatus CheckSingleParaNormWeight() const;
+    ge::graphStatus CheckSingleParaRopeSin() const;
+    ge::graphStatus CheckSingleParaRopeCos() const;
+    ge::graphStatus CheckSingleParaKvBlockTable() const;
+    ge::graphStatus CheckSingleParaScoreBlockTable() const;
+    ge::graphStatus CheckSingleParaCuSeqlens() const;
+    ge::graphStatus CheckSingleParaSeqused() const;
+    ge::graphStatus CheckSingleParaStartPos() const;
+    ge::graphStatus CheckSingleParaCmpKv() const;
+    ge::graphStatus CheckSingleParaRopeHeadDim() const;
+    ge::graphStatus CheckSingleParaCmpRatio() const;
+    ge::graphStatus CheckSingleParaCoff() const;
+    ge::graphStatus CheckSingleParaNormEps() const;
+    ge::graphStatus CheckSingleParaRotaryMode() const;
+    ge::graphStatus CheckRequiredParaExistence() const;
+    ge::graphStatus CheckRequiredInOutExistence() const;
+    ge::graphStatus CheckRequiredAttrExistence() const;
+    ge::graphStatus CheckFeature() const;
+    ge::graphStatus CheckShapeConsistency() const;
+    ge::graphStatus CheckShapeConsistencyRope() const;
+    ge::graphStatus CheckDtypeConsistencyX(const gert::CompileTimeTensorDesc *desc, const std::string &name) const;
+    ge::graphStatus CheckDtypeConsistency() const;
+    ge::graphStatus CheckMultiParaConsistency() const;
+    ge::graphStatus CheckDimNumConsistency() const;
+    ge::graphStatus CheckEmptyTensor() const;
 
     size_t ubSize_ = 0;
     size_t l1Size_ = 0;
@@ -179,20 +252,18 @@ private:
     uint32_t aivNum_ = 0;
     size_t libapiSize_ = 0;
     size_t workspaceSize_ = 0;
-    uint8_t coff = 0;
+    uint8_t coff = 1;
 
     uint32_t mBaseSize = 0;
     uint32_t dbaseSize = 0;
 
+    CompressorBaseShapeInfo baseShapeInfo_;
     CompressorContext *context_ = nullptr;
     CompressorBaseParams *baseParams_ = nullptr;
     CompressorPageAttentionParams *pageAttentionParams_ = nullptr;
-    CompressorOuterSplitParams *outerSplitParams_ = nullptr;
     CompressorInnerSplitParams *innerSplitParams_ = nullptr;
     CompressorWorkspaceParams *workspaceParams_ = nullptr;
-
 };
-
 } // optiling
 
 #endif

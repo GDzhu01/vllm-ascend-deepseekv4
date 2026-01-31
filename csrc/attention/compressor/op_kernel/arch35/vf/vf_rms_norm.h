@@ -17,14 +17,6 @@
 #define VF_RMS_NORM_H
 #include "kernel_tensor.h"
 
-// constexpr uint64_t FLOAT_REP_SIZE = 64;
-// struct RmsNormParam{
-//     float reciprocal;
-//     float epsilon;
-//     uint32_t row;
-//     uint32_t col;
-// };
-
 //repeatTimes——D轴的分块数
 template <typename T, typename GammaType>
 __simd_vf__ void RmsNormVFImpl(__ubuf__ T * inputBuf, __ubuf__ GammaType * gammaBuf, __ubuf__ T * outputBuf, 

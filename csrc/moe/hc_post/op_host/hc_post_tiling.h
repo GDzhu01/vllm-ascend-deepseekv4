@@ -78,6 +78,7 @@ private:
     int64_t dParam_ = 0;
     int64_t hcParam_ = 0;
     int64_t batchSize_ = 0;
+    int64_t tilingKey_ = 0;
 
     gert::TilingContext *context_ = nullptr;
 };
@@ -111,7 +112,6 @@ private:
     int64_t sParam_ = 0;
     int64_t dParam_ = 0;
     int64_t hcParam_ = 0;
-    int64_t batchSize_ = 0;
 
     gert::TilingContext *context_ = nullptr;
 };

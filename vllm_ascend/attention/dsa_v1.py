@@ -191,6 +191,7 @@ class AscendDSAPrefillMetadata:
     sas_c1_metadata: torch.Tensor = None
     sas_c4_metadata: torch.Tensor = None
     sas_c128_metadata: torch.Tensor = None
+    qli_metadata: torch.Tensor = None
 
 @dataclass
 class AscendDSADecodeMetadata:
@@ -222,6 +223,7 @@ class AscendDSADecodeMetadata:
     sas_c1_metadata: torch.Tensor = None
     sas_c4_metadata: torch.Tensor = None
     sas_c128_metadata: torch.Tensor = None
+    qli_metadata: torch.Tensor = None
 
 
 @dataclass
@@ -295,6 +297,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     decode_sas_c1_metadata: Optional[torch.Tensor] = None
     decode_sas_c4_metadata: Optional[torch.Tensor] = None
     decode_sas_c128_metadata: Optional[torch.Tensor] = None
+    decode_qli_metadata: Optional[torch.Tensor] = None
     
     """
     NOTE: Please read the comment at the top of the file before trying to
@@ -413,6 +416,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             AscendDSAMetadataBuilder.decode_sas_c4_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
         if AscendDSAMetadataBuilder.decode_sas_c128_metadata is None:
             AscendDSAMetadataBuilder.decode_sas_c128_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
+        if AscendDSAMetadataBuilder.decode_qli_metadata is None:
+            AscendDSAMetadataBuilder.decode_qli_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
+        self.cu_seqlens_ori_kv = torch.tensor([]).npu()
+        self.cu_seqlens_cmp_kv = torch.tensor([]).npu()
+        self.seqused_q = torch.tensor([]).npu()
 
 
     @classmethod
@@ -703,9 +711,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
-            max_seqlen_q=seq_lens_q.max(),
-            max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+            max_seqlen_q=seq_lens_q.max().item(),
+            max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
             batch_size=len(self.seq_lens[reqs_start:]),
             ori_mask_mode=4,
             ori_win_left=self.model_config.hf_config.window_size - 1,
@@ -713,7 +724,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=False
+            has_cmp_kv=False,
+            device=str(self.seqused_q.device)
         )
         
         sas_c4_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -721,20 +733,24 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
-            max_seqlen_q=seq_lens_q.max(),
-            max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+            max_seqlen_q=seq_lens_q.max().item(),
+            max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            topk=index_topk,
-            cmp_ratio=4,
-            ori_mask_mode=4,
-            cmp_mask_mode=3,
+            cmp_topk=index_topk, #
+            cmp_ratio=4, #
+            ori_mask_mode=4, # 4:sliding window
+            cmp_mask_mode=3, # 3:causal
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device)
         )
         
         sas_c128_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -742,9 +758,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
-            max_seqlen_q=seq_lens_q.max(),
-            max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+            max_seqlen_q=seq_lens_q.max().item(),
+            max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
             batch_size=len(self.seq_lens[reqs_start:]),
             cmp_ratio=128,
             ori_mask_mode=4,
@@ -754,7 +773,29 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device)
+        )
+        
+        qli_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+            actual_seq_lengths_query=prefill_query_start_loc[1:].clone(),
+            actual_seq_lengths_key=self.seq_lens[reqs_start:].clone(),
+            num_heads_q=self.model_config.hf_config.index_n_heads, # 64
+            num_heads_k=1,
+            head_dim=self.model_config.hf_config.index_head_dim, # 128
+            query_quant_mode=0,
+            key_quant_mode=0,
+            batch_size=len(self.seq_lens[reqs_start:]),
+            max_seqlen_q=seq_lens_q.max().item(),
+            max_seqlen_k=self.seq_lens[reqs_start:].max().item(),
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=self.model_config.hf_config.index_topk, # 512
+            sparse_mode=3,
+            pre_tokens = (1<<63)-1,
+            next_tokens = (1<<63)-1,
+            cmp_ratio = 4,
+            device=str(self.seqused_q.device)
         )
     
         return AscendDSAPrefillMetadata(
@@ -781,7 +822,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             start_pos=AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill],
             sas_c1_metadata=sas_c1_metadata,
             sas_c4_metadata=sas_c4_metadata,
-            sas_c128_metadata=sas_c128_metadata
+            sas_c128_metadata=sas_c128_metadata,
+            qli_metadata=qli_metadata
         )
 
     def build_decode_metadata(
@@ -872,6 +914,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[:self.num_decodes],
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
@@ -883,7 +928,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=False
+            has_cmp_kv=False,
+            device=str(self.seqused_q.device)
         )
         
         AscendDSAMetadataBuilder.decode_sas_c4_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -891,11 +937,14 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[:self.num_decodes],
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
             batch_size=len(self.seq_lens[:self.num_decodes]),
-            topk=index_topk, #
+            cmp_topk=index_topk, #
             cmp_ratio=4, #
             ori_mask_mode=4, # 4:sliding window
             cmp_mask_mode=3, # 3:causal
@@ -904,7 +953,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device)
         )
         
         AscendDSAMetadataBuilder.decode_sas_c128_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -912,6 +962,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=query_start_loc,
+            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[:self.num_decodes],
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
@@ -924,7 +977,29 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device)
+        )
+          
+        AscendDSAMetadataBuilder.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+            actual_seq_lengths_query=query_start_loc[1:].clone(),
+            actual_seq_lengths_key=self.seq_lens[:self.num_decodes].clone(),
+            num_heads_q=self.model_config.hf_config.index_n_heads, # 64
+            num_heads_k=1,
+            head_dim=self.model_config.hf_config.index_head_dim, # 128
+            query_quant_mode=0,
+            key_quant_mode=0,
+            batch_size=len(self.seq_lens[:self.num_decodes]),
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_kv,
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=self.model_config.hf_config.index_topk, # 512
+            sparse_mode=3,
+            pre_tokens = (1<<63)-1,
+            next_tokens = (1<<63)-1,
+            cmp_ratio = 4,
+            device=str(self.seqused_q.device)
         )
         
         decode_metadata = AscendDSADecodeMetadata(
@@ -951,7 +1026,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             start_pos=AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes],
             sas_c1_metadata=AscendDSAMetadataBuilder.decode_sas_c1_metadata,
             sas_c4_metadata=AscendDSAMetadataBuilder.decode_sas_c4_metadata,
-            sas_c128_metadata=AscendDSAMetadataBuilder.decode_sas_c128_metadata)
+            sas_c128_metadata=AscendDSAMetadataBuilder.decode_sas_c128_metadata,
+            qli_metadata=AscendDSAMetadataBuilder.decode_qli_metadata)
         return decode_metadata
 
     def get_block_table_size(
@@ -1596,10 +1672,12 @@ class AscendDSAImpl(DSAAttentionImpl):
             qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
+            indexer_metadata = attn_metadata.prefill.qli_metadata
         else:
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
+            indexer_metadata = attn_metadata.decode.qli_metadata
 
         topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,
@@ -1610,7 +1688,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,
-            metadata=attn_metadata.indexer_metadata,
+            metadata=indexer_metadata,
             query_quant_mode=0,
             key_quant_mode=0,
             layout_query="TND",

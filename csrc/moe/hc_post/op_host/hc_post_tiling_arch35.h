@@ -177,13 +177,18 @@ ge::graphStatus HcPostTilingRegbase::GetInputDtypeInfoRegbase()
         OPS_LOG_E(context_->GetNodeName(), "combDtype is not equal to postDtype."),
         return ge::GRAPH_FAILED);
 
+    if (xDtype == ge::DT_FLOAT) {
+        tilingKey_ = 0;
+    } else {
+        tilingKey_ = 1;
+    }
     return ge::GRAPH_SUCCESS;
 }
 
 ge::graphStatus HcPostTilingRegbase::DoOpTilingRegbase()
 {
     int64_t batchSize = bParam_ * sParam_;
-    context_->SetTilingKey(0);
+    context_->SetTilingKey(tilingKey_);
     int64_t useCoreNum = batchSize < coreNum_ ? batchSize : coreNum_;
     int64_t batchOneCore = CeilDiv(batchSize, static_cast<int64_t>(useCoreNum));
     int64_t batchOneCoreTail = batchOneCore - 1;
