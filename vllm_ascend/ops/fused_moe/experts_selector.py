@@ -109,8 +109,10 @@ def select_experts(hidden_states: torch.Tensor,
             input_ids = None,
         )
     if mix_placement:
-        shared_expert_routing_factor = 1.0 / 1.5 # hardcode for new model
-        # shared_expert_routing_factor = 0.4
+        if scoring_func == "sqrtsoftplus":
+            shared_expert_routing_factor = 1.0 / 1.5 # hardcode for new model
+        else:
+            shared_expert_routing_factor = 0.4
         batch_size = topk_ids.shape[0]
         pad_shared_expert_ids = torch.arange(
             num_logical_experts,
