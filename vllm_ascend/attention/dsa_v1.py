@@ -1475,7 +1475,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if before_norm_event:
                 torch.npu.current_stream().wait_event(before_norm_event)
 
-            qr = q = self.wq_a(hidden_states) # bs
+            qr = q = self.q_norm(self.wq_a(hidden_states)) # bs
         if self.multistream_dsa_preprocess:
             torch.npu.current_stream().wait_stream(
                 attention_calculation_stream())
