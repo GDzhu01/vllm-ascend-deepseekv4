@@ -16,8 +16,8 @@
 
 import os
 
-import vllm_ascend.patch.worker.patch_selector # noqa
-import vllm_ascend.patch.platform.patch_distributed  # noqa
+import vllm_ascend.patch.platform.patch_selector # noqa
+# import vllm_ascend.patch.platform.patch_distributed  # noqa
 import vllm_ascend.patch.platform.patch_ec_connector  # noqa
 import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
 import vllm_ascend.patch.platform.patch_lora_model_manager  # noqa

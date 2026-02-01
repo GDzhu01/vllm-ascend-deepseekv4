@@ -19,7 +19,8 @@ from vllm_ascend.attention.abstract import DSAAttentionImpl
 
 from vllm.attention.backends.registry import AttentionBackendEnum
 from vllm.attention.layers.mm_encoder_attention import maybe_get_vit_flash_attn_backend
-from vllm.attention.selector import get_attn_backend
+from vllm_ascend.patch.platform.patch_selector import get_attn_backend
+
 from vllm.attention.utils.fa_utils import get_flash_attn_version
 from vllm.attention.utils.kv_sharing_utils import validate_kv_sharing_target
 from vllm.attention.utils.kv_transfer_utils import maybe_transfer_kv_layer

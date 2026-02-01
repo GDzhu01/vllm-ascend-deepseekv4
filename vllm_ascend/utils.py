@@ -66,6 +66,7 @@ _MIN_DP_BUFFER_SIZE = 50
 _IS_MOE_MODEL = None
 _IS_DRAFTER_MOE_MODEL = None
 _IS_VL_MODEL = None
+_ENABLE_CP = None
 _ENABLE_SP = None
 _HAS_LAYER_IDX = None
 _SUBSCRIBED_COMPUTE_STREAMS = set()
@@ -752,12 +753,14 @@ def enable_sp(vllm_config=None, enable_shared_expert_dp: bool = False) -> bool:
         if vllm_config is None:
             from vllm.config import get_current_vllm_config
             vllm_config = get_current_vllm_config()
+        # Process for Flash Comm V1
         _ENABLE_SP = (
             vllm_config.compilation_config.pass_config.enable_sp
-            or envs_ascend.VLLM_ASCEND_ENABLE_FLASHCOMM1
+            or envs_ascend.VLLM_ASCEND_ENABLE_FLASHCOMM1 \
             # Flash comm 1 should be enabled by env VLLM_ASCEND_ENABLE_FLASHCOMM1
             # We retain the env VLLM_ASCEND_ENABLE_FLASHCOMM here for backward compatibility.
-            or bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM", '0'))))
+            or bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM", '0')))) \
+            or bool(int(os.getenv("VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL", '0')))
 
         if not _ENABLE_SP and enable_shared_expert_dp:
             _ENABLE_SP = True
@@ -768,8 +771,8 @@ def enable_sp(vllm_config=None, enable_shared_expert_dp: bool = False) -> bool:
         if not _ENABLE_SP:
             return _ENABLE_SP
 
-        assert vllm_config.parallel_config.tensor_parallel_size > 1, \
-            "Flash Comm v1 (Sequence Parallelism) is only supported when tp_size > 1."
+        # assert vllm_config.parallel_config.tensor_parallel_size > 1, \
+        #     "Flash Comm v1 (Sequence Parallelism) is only supported when tp_size > 1."
 
         assert (
             not is_moe_model(vllm_config)
@@ -777,6 +780,18 @@ def enable_sp(vllm_config=None, enable_shared_expert_dp: bool = False) -> bool:
         ), "Flash Comm v1 (Sequence Parallelism) requires enable_expert_parallel=True for MoE models."
 
     return _ENABLE_SP
+
+def enable_cp(vllm_config=None, enable_shared_expert_dp: bool = False) -> bool:
+    global _ENABLE_CP
+    if _ENABLE_CP is None:
+        if vllm_config is None:
+            from vllm.config import get_current_vllm_config
+            vllm_config = get_current_vllm_config()
+        _ENABLE_CP = (
+            bool(int(os.getenv("VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL", '0')))
+        )
+
+    return _ENABLE_CP
 
 
 # TODO remove it after vllm has this func

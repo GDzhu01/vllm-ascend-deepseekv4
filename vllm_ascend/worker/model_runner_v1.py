@@ -33,7 +33,7 @@ import torch.nn as nn
 from vllm.attention.backends.abstract import AttentionBackend, AttentionType
 from vllm.attention.layer import Attention, MLAAttention
 from vllm_ascend.models.layer.attention.layer import DSAAttention
-from vllm.attention.selector import get_attn_backend
+from vllm_ascend.patch.platform.patch_selector import get_attn_backend
 from vllm.config import (CompilationMode, CUDAGraphMode, VllmConfig,
                          get_layers_from_vllm_config)
 from vllm.distributed import (get_tensor_model_parallel_world_size,
@@ -216,7 +216,9 @@ class NPUModelRunner(GPUModelRunner):
         try:
             self.dcp_size = get_dcp_group().world_size
             self.dcp_rank = get_dcp_group().rank_in_group
-            self.pcp_size = get_pcp_group().world_size
+            # Process for Flash Comm V1
+            # self.pcp_size = get_pcp_group().world_size
+            self.pcp_size = 1
             self.pcp_rank = get_pcp_group(
             ).rank_in_group if self.pcp_size > 1 else 0
         except Exception:
@@ -642,9 +644,14 @@ class NPUModelRunner(GPUModelRunner):
         # the following process is corresponding to _pad_for_sequence_parallelism
         # in gpu_model_runner
         if enable_sp(self.vllm_config):
-            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+            # Process for Flash Comm V1
+            # TODO(lxs): we need replace pcp with tp
+            # tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+            # num_input_tokens = math.ceil(
+            #     total_num_scheduled_tokens / tp_size) * tp_size
+            pcp_size = get_pcp_group().world_size
             num_input_tokens = math.ceil(
-                total_num_scheduled_tokens / tp_size) * tp_size
+                total_num_scheduled_tokens / pcp_size) * pcp_size
         else:
             num_input_tokens = total_num_scheduled_tokens
         cudagraph_mode, batch_descriptor = self.cudagraph_dispatcher.dispatch(
@@ -1221,7 +1228,10 @@ class NPUModelRunner(GPUModelRunner):
     # all-gather one hidden-states in sp scene
     @staticmethod
     def _all_gather_hidden_states(hidden_states):
-        hidden_states = tensor_model_parallel_all_gather(hidden_states, 0)
+        # Process for Flash Comm V1
+        # TODO(lxs): we need replace pcp with tp
+        # hidden_states = tensor_model_parallel_all_gather(hidden_states, 0)
+        hidden_states = get_pcp_group().all_gather(hidden_states, 0)
         pad_size = get_forward_context().pad_size
         if pad_size > 0:
             hidden_states = hidden_states[:-pad_size, :]
@@ -2247,8 +2257,12 @@ class NPUModelRunner(GPUModelRunner):
         # In multi-DP scenarios, there may be situations where all DP groups are executing dummy runs.
         # If sequence parallelism is enabled, it is essential to ensure that num_tokens is divisible by tp_size.
         if enable_sp(self.vllm_config):
-            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
-            num_tokens = math.ceil(num_tokens / tp_size) * tp_size
+            # Process for Flash Comm V1
+            # TODO(lxs): we need replace pcp with tp
+            # tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+            # num_tokens = math.ceil(num_tokens / tp_size) * tp_size
+            pcp_size = get_pcp_group().world_size
+            num_tokens = math.ceil(num_tokens / pcp_size) * pcp_size
 
         # Force dummy run on prefill stage when this node is deemed as kv producer.
         if self.is_kv_producer and not self.is_kv_consumer:

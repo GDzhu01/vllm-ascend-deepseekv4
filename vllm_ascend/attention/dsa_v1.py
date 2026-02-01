@@ -19,6 +19,7 @@ from vllm.v1.attention.backends.utils import (
     split_decodes_and_prefills,
 )
 from vllm.distributed import get_tensor_model_parallel_world_size
+from vllm.distributed import get_pcp_group
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
@@ -29,6 +30,7 @@ from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
+from vllm_ascend.distributed.utils import split_tensor_along_first_dim
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -1281,6 +1283,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             return output.fill_(0)
 
         output_padded = output
+        # Process for Flash Comm V1
+        hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+            hidden_states, need_gather_q_kv)
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
@@ -1333,7 +1338,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("tgd,grd->tgr", o, wo_a)
         o = o.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o)
+        o = self.wo_b(o)
+
+        # Process for Flash Comm V1
+        # TODO(lxs): we need replace pcp with tp
+        pcp_size = get_pcp_group().world_size
+        pcp_rank = get_pcp_group().rank_in_group
+        splitted_input = split_tensor_along_first_dim(
+            o, num_partitions=pcp_size)
+        o = splitted_input[pcp_rank].contiguous()
+        output[...] = o
 
         return output_padded
 
