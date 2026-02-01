@@ -24,7 +24,7 @@ from typing import Optional
 import torch
 from torch import nn
 from vllm.attention.backends.abstract import AttentionMetadata
-from vllm.attention.layer import DSAAttention
+from vllm_ascend.models.layer.attention.layer import DSAAttention
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.forward_context import ForwardContext, get_forward_context
 

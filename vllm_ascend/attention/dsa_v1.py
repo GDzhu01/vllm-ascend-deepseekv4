@@ -7,7 +7,8 @@ import torch
 import torch_npu
 import torch.nn.functional as F
 import vllm.envs as envs_vllm
-from vllm.attention.backends.abstract import AttentionBackend, DSAAttentionImpl
+from vllm.attention.backends.abstract import AttentionBackend
+from vllm_ascend.attention.abstract import DSAAttentionImpl
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.forward_context import get_forward_context
 from vllm.utils.math_utils import cdiv, round_down
@@ -703,7 +704,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         AscendDSAMetadataBuilder.start_pos_prefill[:num_prefill] = self.seq_lens[reqs_start:] - seq_lens_q
 
         tp_size = get_tensor_model_parallel_world_size()
-        n_local_heads = self.model_config.hf_config.n_heads // tp_size
+        n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
         
         sas_c1_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -907,7 +908,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         AscendDSAMetadataBuilder.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
         
         tp_size = get_tensor_model_parallel_world_size()
-        n_local_heads = self.model_config.hf_config.n_heads // tp_size
+        n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
         AscendDSAMetadataBuilder.decode_sas_c1_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,

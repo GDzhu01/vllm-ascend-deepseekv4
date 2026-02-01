@@ -268,7 +268,7 @@ class NPUWorker(WorkerBase):
             return 0
         max_num_reqs = self.scheduler_config.max_num_seqs
         head_dim = hf_config.head_dim
-        num_layers = hf_config.n_layers
+        num_layers = hf_config.num_hidden_layers
         compress_ratios: list[int] = hf_config.compress_ratios
         num_c4_layers = compress_ratios[:num_layers].count(4)
         num_c128_layers = compress_ratios[:num_layers].count(128)

@@ -33,7 +33,8 @@ import math
 import torch
 import torch_npu
 from torch import nn
-from transformers import DeepseekV2Config, DeepseekV3Config, DeepseekV4Config
+from transformers import DeepseekV2Config, DeepseekV3Config
+from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
@@ -311,7 +312,7 @@ class DeepseekV4MoE(nn.Module):
             gate=self.gate,
             num_experts=config.n_routed_experts,
             top_k=config.n_activated_experts,
-            hidden_size=config.dim,
+            hidden_size=config.hidden_size,
             intermediate_size=config.moe_inter_dim,
             reduce_results=False,
             renormalize=config.norm_topk_prob,
@@ -444,7 +445,7 @@ class Indexer(nn.Module):
         )
 
         self.weights_proj = ReplicatedLinear(
-            config.dim, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
+            config.hidden_size, self.n_heads, bias=False, quant_config=None, prefix=f"{prefix}.weights_proj", return_bias=False,
         )
         self.compressor = Compressor(vllm_config,config, compress_ratio, self.head_dim, True,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor") #Compressor(4, 128)
 
@@ -468,7 +469,7 @@ class Compressor(nn.Module):
         super().__init__()
         self.vllm_config = vllm_config
         self.config = config
-        self.dim = config.dim
+        self.dim = config.hidden_size
         self.head_dim = head_dim
         self.rope_head_dim = config.rope_head_dim
         self.nope_head_dim = head_dim - config.rope_head_dim
@@ -630,9 +631,9 @@ class DeepseekV4Attention(nn.Module):
         layer_idx = int(prefix.split(sep=".")[-2])
         self.layer_idx = layer_idx
         tp_size = get_tensor_model_parallel_world_size()
-        self.dim = config.dim
-        self.n_heads = config.n_heads
-        self.n_local_heads = config.n_heads // tp_size
+        self.dim = config.hidden_size
+        self.n_heads = config.num_attention_heads
+        self.n_local_heads = config.num_attention_heads // tp_size
         self.q_lora_rank = config.q_lora_rank
         self.o_lora_rank = config.o_lora_rank
         self.head_dim = config.head_dim
@@ -826,7 +827,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_sinkhorn_iters = config.hc_sinkhorn_iters
         self.hc_eps = config.hc_eps
         mix_hc = (2 + hc_mult) * hc_mult
-        hc_dim = hc_mult * config.dim
+        hc_dim = hc_mult * config.hidden_size
         # self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
         # self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
         self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.float32))
@@ -926,7 +927,7 @@ class DeepseekV4Model(nn.Module):
         self.norm_eps = config.norm_eps
         self.hc_eps = config.hc_eps
         self.hc_mult = hc_mult = config.hc_mult
-        hc_dim = hc_mult * config.dim
+        hc_dim = hc_mult * config.hidden_size
 
         self.hc_head_fn = nn.Parameter(torch.empty(hc_mult, hc_dim,dtype = torch.float32))
         self.hc_head_base = nn.Parameter(torch.empty(hc_mult,dtype = torch.float32))

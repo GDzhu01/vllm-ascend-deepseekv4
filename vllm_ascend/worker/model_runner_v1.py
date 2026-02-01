@@ -31,7 +31,8 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from vllm.attention.backends.abstract import AttentionBackend, AttentionType
-from vllm.attention.layer import Attention, MLAAttention, DSAAttention
+from vllm.attention.layer import Attention, MLAAttention
+from vllm_ascend.models.layer.attention.layer import DSAAttention
 from vllm.attention.selector import get_attn_backend
 from vllm.config import (CompilationMode, CUDAGraphMode, VllmConfig,
                          get_layers_from_vllm_config)
