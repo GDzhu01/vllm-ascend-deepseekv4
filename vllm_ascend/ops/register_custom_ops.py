@@ -1,12 +1,13 @@
 import torch
 import torch.nn.functional as F
 import torch_npu
-from vllm.distributed import (get_dp_group, get_ep_group,
+from vllm.distributed import (get_dp_group, get_ep_group, get_pcp_group,
                               get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size,
                               tensor_model_parallel_all_gather,
                               tensor_model_parallel_all_reduce,
-                              tensor_model_parallel_reduce_scatter)
+                              tensor_model_parallel_reduce_scatter,
+                              split_tensor_along_first_dim)
 from vllm.forward_context import get_forward_context
 from vllm.utils.torch_utils import direct_register_custom_op
 
@@ -14,7 +15,6 @@ import vllm_ascend.envs as envs_ascend
 from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.ops.weight_prefetch import maybe_npu_prefetch
 from vllm_ascend.utils import npu_stream_switch, prefetch_stream
-
 
 def _maybe_chunk_residual_impl(x: torch.Tensor,
                                residual: torch.Tensor) -> torch.Tensor:
@@ -53,7 +53,7 @@ def _maybe_all_gather_and_maybe_unpad_impl(
     if sp_enabled and label:
         dp_metadata = forward_context.dp_metadata
         if dp_metadata is None or not is_ep_comm:
-            x = tensor_model_parallel_all_gather(x, 0)
+            x = get_pcp_group().all_gather(x, 0)
             pad_size = forward_context.pad_size
             if pad_size > 0:
                 x = x[:-pad_size]
@@ -92,7 +92,13 @@ def _maybe_pad_and_reduce_impl(x: torch.Tensor,
         pad_size = forward_context.pad_size
         if pad_size > 0:
             x = F.pad(x, (0, 0, 0, pad_size))
-        return tensor_model_parallel_reduce_scatter(x, 0)
+        pcp_size = get_pcp_group().world_size
+        pcp_rank = get_pcp_group().rank_in_group
+        splitted_input = split_tensor_along_first_dim(
+            x, num_partitions=pcp_size)
+        output = splitted_input[pcp_rank].contiguous()
+        # output = tensor_model_parallel_reduce_scatter(x, 0)
+        return output
     else:
         # padding
         dp_size = get_dp_group().world_size

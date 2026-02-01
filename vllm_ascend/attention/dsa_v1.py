@@ -1201,6 +1201,11 @@ class AscendDSAImpl(DSAAttentionImpl):
             return output.fill_(0)
 
         output_padded = output
+        print(f"before_ag{hidden_states.shape=}")
+        # Process for Flash Comm V1
+        hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+            hidden_states, need_gather_q_kv)
+        print(f"after_ag{hidden_states.shape=}")
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
@@ -1209,7 +1214,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         decode_hidden_states = hidden_states[:decode_tokens]
 
         forward_context = get_forward_context()
-        output_padded = output
+
         o_proj_input_shape = (forward_context.num_tokens,
                               self.n_local_heads, self.head_dim)
         o_proj_input = torch.empty(o_proj_input_shape,
@@ -1254,7 +1259,21 @@ class AscendDSAImpl(DSAAttentionImpl):
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         o = torch.einsum("tgd,grd->tgr", o, wo_a)
         o = o.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o)
+        o = self.wo_b(o)
+
+        from vllm.distributed import get_pcp_group, split_tensor_along_first_dim
+        pcp_size = get_pcp_group().world_size
+        pcp_rank = get_pcp_group().rank_in_group
+        splitted_input = split_tensor_along_first_dim(
+            o, num_partitions=pcp_size)
+        if torch.distributed.get_rank() == 0:
+            print(f"{pcp_size=}")
+            print(f"splitted_input:{len(splitted_input)}")
+            print(f"o:{o.shape}")
+        o = splitted_input[pcp_rank].contiguous()
+        if torch.distributed.get_rank() == 0:
+            print(f"o:{o.shape}")
+        output[...] = o
 
         return output_padded
 

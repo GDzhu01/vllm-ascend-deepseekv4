@@ -260,6 +260,16 @@ def _select_experts_with_fusion_ops(
                 input_ids = prepare_finalize.all_gather_input_id_with_dp_group(input_ids)
             else:
                 input_ids = forward_context.moe_comm_method.pad_and_split_input_ids(input_ids)
+            if forward_context.sp_enabled:
+                pad_size = forward_context.pad_size
+                if pad_size > 0:
+                    input_ids = F.pad(input_ids, (0, 0, 0, pad_size))
+                from vllm.distributed import get_pcp_group, split_tensor_along_first_dim
+                pcp_size = get_pcp_group().world_size
+                pcp_rank = get_pcp_group().rank_in_group
+                splitted_input = split_tensor_along_first_dim(
+                    input_ids, num_partitions=pcp_size)
+                input_ids = splitted_input[pcp_rank].contiguous()
         else:
             input_ids = None
             tid2eid_ones = None

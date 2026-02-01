@@ -35,7 +35,7 @@ class BlockTable:
         self.physical_block_size = block_size
 
         try:
-            self.pcp_world_size = get_pcp_group().world_size
+            self.pcp_world_size = 1
             self.pcp_rank = get_pcp_group(
             ).rank_in_group if self.pcp_world_size > 1 else 0
             self.dcp_world_size = get_dcp_group().world_size
@@ -271,7 +271,7 @@ class MultiGroupBlockTable:
         # must be multiplied by dcp_world_size.
         try:
             dcp_world_size = get_dcp_group().world_size
-            pcp_world_size = get_pcp_group().world_size
+            pcp_world_size = 1
         except AssertionError:
             # DCP might not be initialized in testing
             dcp_world_size = 1

@@ -99,8 +99,6 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         assert isinstance(kv_cache_spec, CompressAttentionSpec), (
             "SFACompressRatio4Manager can only be used for C128"
         )
-        assert dcp_world_size == 1, "DCP not support mamba now."
-        assert pcp_world_size == 1, "PCP not support mamba now."
         computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
             [] for _ in range(len(kv_cache_group_ids))
         )

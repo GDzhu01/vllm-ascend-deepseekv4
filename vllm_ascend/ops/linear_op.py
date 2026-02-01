@@ -50,9 +50,10 @@ from torch import nn
 from torch.distributed import ProcessGroup
 from torch.nn.parameter import Parameter
 from vllm.distributed import (split_tensor_along_last_dim,
+                              split_tensor_along_first_dim,
                               tensor_model_parallel_all_reduce,
                               tensor_model_parallel_reduce_scatter)
-from vllm.distributed.parallel_state import get_tp_group
+from vllm.distributed.parallel_state import get_tp_group, get_pcp_group
 from vllm.forward_context import get_forward_context
 
 from vllm_ascend import envs as envs_ascend
@@ -539,10 +540,10 @@ class SequenceRowParallelOp(CustomRowParallelOp):
 
         if self.input_is_parallel:
             input_parallel = input_
-        else:
-            splitted_input = split_tensor_along_last_dim(
-                input_, num_partitions=self.tp_size)
-            input_parallel = splitted_input[self.tp_rank].contiguous()
+        # else:
+        #     splitted_input = split_tensor_along_last_dim(
+        #         input_, num_partitions=self.tp_size)
+        #     input_parallel = splitted_input[self.tp_rank].contiguous()
 
         assert self.quant_method is not None
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
@@ -551,6 +552,12 @@ class SequenceRowParallelOp(CustomRowParallelOp):
             output = self.quant_method.apply(self.layer,
                                              input_parallel,
                                              bias=bias_)
+            pcp_size = get_pcp_group().world_size
+            pcp_rank = get_pcp_group().rank_in_group
+            splitted_input = split_tensor_along_first_dim(
+                output, num_partitions=pcp_size)
+            output = splitted_input[pcp_rank].contiguous()
+            print(10*"SequenceRowParallelOp")
         else:
             output = torch.ops.vllm.matmul_and_reduce(input_parallel,
                                                       self.unique_prefix)

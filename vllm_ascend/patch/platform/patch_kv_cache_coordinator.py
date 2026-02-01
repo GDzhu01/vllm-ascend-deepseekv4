@@ -46,7 +46,7 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
             0].kv_cache_spec
         self.block_size = self.kv_cache_spec.block_size
         self.dcp_world_size = dcp_world_size
-        self.pcp_world_size = pcp_world_size
+        self.pcp_world_size = 1
 
         # Needs special handling for find_longest_cache_hit if eagle is enabled
         self.use_eagle = use_eagle
@@ -66,8 +66,8 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
                 kv_cache_spec=kv_cache_group.kv_cache_spec,
                 block_pool=self.block_pool,
                 kv_cache_group_id=i,
-                dcp_world_size=dcp_world_size,
-                pcp_world_size=pcp_world_size,
+                dcp_world_size=self.dcp_world_size,
+                pcp_world_size=self.pcp_world_size,
             ) for i, kv_cache_group in enumerate(
                 self.kv_cache_config.kv_cache_groups))
         self.num_single_type_manager = len(self.single_type_managers)
