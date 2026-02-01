@@ -106,7 +106,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         )
         self.hc_eps = config.hc_eps
         self.hc_mult = hc_mult = config.hc_mult
-        hc_dim = hc_mult * config.dim
+        hc_dim = hc_mult * config.hidden_size
 
         self.hc_head_fn = nn.Parameter(torch.empty(hc_mult, hc_dim,dtype = torch.float32))
         self.hc_head_base = nn.Parameter(torch.empty(hc_mult,dtype = torch.float32))
