@@ -222,7 +222,8 @@ class DeepseekV4Config(PretrainedConfig):
         self.o_lora_rank=o_lora_rank
         self.window_size=window_size
         self.compress_ratios=compress_ratios
-                
+        self.kv_lora_rank = o_lora_rank
+
         # index
         self.index_n_heads=index_n_heads
         self.index_head_dim=index_head_dim
