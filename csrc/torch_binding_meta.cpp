@@ -678,15 +678,11 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     int64_t num_heads_kv,
     int64_t head_dim,
     const c10::optional<at::Tensor> &cu_seqlens_q,
-    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
-    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
-    const c10::optional<at::Tensor> &seqused_q,
     const c10::optional<at::Tensor> &seqused_kv,
     int64_t batch_size,
     int64_t max_seqlen_q,
     int64_t max_seqlen_kv,
-    int64_t ori_topk,
- 	int64_t cmp_topk,
+    int64_t topk,
     int64_t cmp_ratio,
     int64_t ori_mask_mode,
     int64_t cmp_mask_mode,
@@ -695,29 +691,13 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     c10::string_view layout_q,
     c10::string_view layout_kv,
     bool has_ori_kv,
-    bool has_cmp_kv,
-    const c10::string_view device)
+    bool has_cmp_kv)
 {
-    constexpr int64_t OUTPUT_SIZE = 1024;
     at::Tensor output;
     if (cu_seqlens_q.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
-    } else if (cu_seqlens_ori_kv.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_ori_kv.value().device()));
-    } else if (cu_seqlens_cmp_kv.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_cmp_kv.value().device()));
-    } else if (seqused_q.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_q.value().device()));
-    } else if (seqused_kv.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_kv.value().device()));
-    } else {
-        auto deviceOri = at::Device(std::string(device));
-        std::string device_str = "meta";
-        if (deviceOri.has_index()) {
-            device_str += ":";
-            device_str += std::to_string(deviceOri.index());
-        }
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
+        output = torch::empty({1024}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
+    }else {
+        output = torch::empty({1024}, torch::dtype(torch::kInt32).device("npu"));
     }
     return output;
 }
@@ -746,7 +726,6 @@ at::Tensor npu_quant_lightning_indexer_metadata_meta(
 
     return output;
 }
-
 
 at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
 {

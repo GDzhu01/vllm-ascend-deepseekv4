@@ -13,14 +13,13 @@
  * \brief
  */
 
-#ifndef SPARSE_ATTN_SHAREDKV_COMMON_H
-#define SPARSE_ATTN_SHAREDKV_COMMON_H
+#ifndef KV_QUANT_SPARSE_FLASH_ATTENTION_COMMON_H
+#define KV_QUANT_SPARSE_FLASH_ATTENTION_COMMON_H
 
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
 #include "lib/matrix/matmul/tiling.h"
 
-namespace SASKernel{
 using namespace AscendC;
 // 将isCheckTiling设置为false, 输入输出的max&sum&exp的shape为(m, 1)
 constexpr SoftmaxConfig SAS_SOFTMAX_FLASHV2_CFG_WITHOUT_BRC = {false, 0, 0, SoftmaxMode::SOFTMAX_OUTPUT_WITHOUT_BRC};
@@ -35,6 +34,23 @@ enum class SAS_LAYOUT {
     BSND = 0,
     TND = 1,
     PA_ND = 2
+};
+
+enum class QUANT_MODE {
+    PER_CHANNEL = 0,  // GQA支持
+    PER_TOKEN_HEAD = 1, // GQA支持
+    PER_TILE = 2,   // MLA支持
+};
+
+enum class ATTENTION_MODE {
+    GQA_MHA = 0,  // QKV headDim相等
+    MLA_NATIVE = 1, // Dn=128, Dr=64
+    MLA_ABSORB = 2,   // Dn=512, Dr=64
+};
+
+enum class QUANT_SCALE_REPO_MODE {
+    SEPARATE = 0,  // 分开存储
+    COMBINE = 1, // 合并存储，量化模式是PER_TOKEN_HEAD/PER_TILE时支持COMBINE模式，参数顺序为：Nope+Rope+DequantScale
 };
 
 template <typename Q_T, typename KV_T, typename OUT_T, const bool FLASH_DECODE = false,
@@ -85,7 +101,7 @@ template <typename T> __aicore__ inline size_t BlockAlign(size_t s)
 struct PAShape {
     uint32_t blockSize;
     uint32_t headNum;             //一般为kv的head num，对应n2
-    uint32_t headDim;             // 512 对应d
+    uint32_t headDim;             //mla下rope为64，nope为512, 对应d
     uint32_t maxblockNumPerBatch; //block table 每一行的最大个数
     uint32_t actHeadDim;          //实际拷贝col大小,考虑到N切块   s*d, 对应d
     uint32_t copyRowNum;          //总共要拷贝的行数
@@ -99,7 +115,7 @@ struct Position {
     uint32_t dIdx;
 };
 
-// 场景：query、key、value GM to L1
+// 场景：query、queryRope、key、value GM to L1
 // GM按ND格式存储
 // L1按NZ格式存储
 // GM的行、列、列的stride
@@ -185,12 +201,15 @@ struct RunInfo {
     uint64_t tndBIdxOffsetForKV = 0;
     uint64_t tensorAOffset = 0;
     uint64_t tensorBOffset = 0;
+    uint64_t tensorARopeOffset = 0;
+    uint64_t tensorBRopeOffset = 0;
     uint64_t attenOutOffset = 0;
     uint64_t attenMaskOffset = 0;
     uint64_t topKBaseOffset = 0;
     uint32_t actualSingleProcessSInnerSize = 0;
     uint32_t actualSingleProcessSInnerSizeAlign = 0;
     bool isFirstSInnerLoop = false;
+    bool isChangeBatch = false;
     uint32_t s2BatchOffset = 0;
     uint32_t gSize = 0;
     uint32_t s1Size = 0;
@@ -206,6 +225,8 @@ struct RunInfo {
     static constexpr uint32_t n2Idx = 0;
     uint64_t actS1Size = 1;
     uint64_t actS2SizeOri = 0ULL;
+    uint64_t curActualSeqLenOri = 0ULL;
+
     uint32_t gS1Idx = 0;
     uint64_t actS2Size = 1;
     uint64_t actOriS2Size = 1;
@@ -242,10 +263,12 @@ struct ConstInfo {
     uint32_t preLoadNum = 0U;
     uint32_t nBufferMBaseSize = 0U;
     // CUBE和VEC的核间同步EventID
+    uint32_t syncV1NupdateC2 = 0U;
     uint32_t syncV0C1 = 0U;
     uint32_t syncC1V1 = 0U;
     uint32_t syncV1C2 = 0U;
     uint32_t syncC2V2 = 0U;
+    uint32_t syncC2V1 = 0U;
 
     uint32_t mmResUbSize = 0U;   // Matmul1输出结果GM上的大小
     uint32_t vec1ResUbSize = 0U; // Vector1输出结果GM上的大小
@@ -255,6 +278,8 @@ struct ConstInfo {
     uint64_t qHeadNum = 0ULL;
     uint64_t kvHeadNum = 0;
     uint64_t headDim = 0;
+    uint64_t headDimRope = 0;
+    uint64_t combineHeadDim = 0; // quantScaleRepoMode为Combine模式时=headDim+headDimRope, 否则=headDim
     uint64_t kvSeqSize = 0ULL;        // kv最大S长度
     uint64_t qSeqSize = 1ULL;         // q最大S长度
     int64_t kvCacheBlockSize = 0;    // PA场景的block size
@@ -304,6 +329,13 @@ struct ConstInfo {
     // win
     int32_t oriWinRight = 0;
     int32_t oriWinLeft = 128;
+
+    // attention模式与量化模式
+    ATTENTION_MODE attentionMode = ATTENTION_MODE::MLA_ABSORB;
+    QUANT_MODE keyQuantMode = QUANT_MODE::PER_TILE;
+    QUANT_MODE valueQuantMode = QUANT_MODE::PER_TILE;
+    QUANT_SCALE_REPO_MODE quantScaleRepoMode = QUANT_SCALE_REPO_MODE::COMBINE;
+    uint64_t tileSize = 128ULL;
 };
 
 struct MSplitInfo {
@@ -313,5 +345,5 @@ struct MSplitInfo {
     uint32_t vecStartM = 0U;
     uint32_t vecDealM = 0U;
 };
-}
-#endif // SPARSE_ATTN_SHAREDKV_COMMON_H
+
+#endif // KV_QUANT_SPARSE_FLASH_ATTENTION_COMMON_H
