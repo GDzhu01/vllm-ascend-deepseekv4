@@ -19,10 +19,6 @@ on:
         description: 'Quay username for pushing images'
         required: false
         type: string
-      workflow_dispatch_tag:
-        description: 'The tag to use for workflow dispatch'
-        required: false
-        type: string
       ref:
         description: 'Target branch'
         required: True

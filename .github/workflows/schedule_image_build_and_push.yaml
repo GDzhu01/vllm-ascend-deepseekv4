@@ -17,13 +17,9 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'main'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Docker tag for build results'
-        type: string
-        default: main
-        required: true
 
 jobs:
   image_build:
@@ -49,7 +45,6 @@ jobs:
       suffix: ${{ matrix.build_meta.suffix }}
       quay_username: ${{ vars.QUAY_USERNAME }}
       should_push: True
-      workflow_dispatch_tag: ${{ inputs.tag }}
       ref: deepseek_v4_0.13.0release_0127
     secrets:
       QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
