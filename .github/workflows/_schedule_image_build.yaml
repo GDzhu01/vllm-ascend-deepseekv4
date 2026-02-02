@@ -54,12 +54,6 @@ jobs:
         persist-credentials: false
         ref: ${{ inputs.ref }}
 
-    - name: Free up disk space
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-      with:
-        tool-cache: true
-        docker-images: false
-
     - name: Publish - Login to Quay Container Registry
       if: ${{ inputs.should_push }}
       uses: docker/login-action@v3
