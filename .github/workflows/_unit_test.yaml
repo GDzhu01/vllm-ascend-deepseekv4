@@ -51,7 +51,7 @@ jobs:
 
       - name: Set PTA from file
         run: |
-          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
           TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
 
