@@ -74,6 +74,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         head_dim: int,
         rope_head_dim: int | None,
         nope_head_dim: int,
+        eps: int,
         n_groups: int,
         n_local_groups: int,
         window_size: int,
@@ -93,6 +94,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.head_dim=head_dim 
         self.rope_head_dim=rope_head_dim
         self.nope_head_dim=nope_head_dim
+        self.eps=eps
         self.n_groups=n_groups
         self.n_local_groups=n_local_groups
         self.window_size = window_size
@@ -141,6 +143,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             wo_a=self.wo_a,
             wo_b=self.wo_b,
             attn_sink=self.attn_sink,
+            eps=self.eps,
         )
 
         compilation_config = get_current_vllm_config().compilation_config

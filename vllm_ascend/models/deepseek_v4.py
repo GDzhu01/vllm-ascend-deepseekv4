@@ -750,6 +750,7 @@ class DeepseekV4Attention(nn.Module):
             head_dim=self.head_dim,
             rope_head_dim=self.rope_head_dim,
             nope_head_dim=self.nope_head_dim,
+            eps=self.eps,
             n_groups=self.n_groups,
             n_local_groups=self.n_local_groups,
             window_size=self.window_size,

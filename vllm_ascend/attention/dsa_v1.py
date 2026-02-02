@@ -736,10 +736,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            topk=index_topk, #
-            cmp_ratio=4, #
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            cmp_topk=index_topk,
+            cmp_ratio=4,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -935,8 +935,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 return decode_input_positions
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
             input_positions = decode_input_positions[mask]
-            # # why not - compress_ratio here?
-            # input_positions = (input_positions + 1) - compress_ratio
             target_shape = (min(self.num_decode_tokens,
                                 self.num_decode_tokens // compress_ratio + self.num_decodes),)
             pad_right = target_shape[0] - input_positions.shape[0]
@@ -981,8 +979,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
             batch_size=len(self.seq_lens[:self.num_decodes]),
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -1000,10 +998,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
             batch_size=len(self.seq_lens[:self.num_decodes]),
-            topk=index_topk, #
-            cmp_ratio=4, #
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            cmp_topk=index_topk,
+            cmp_ratio=4,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -1021,9 +1019,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
             batch_size=len(self.seq_lens[:self.num_decodes]),
-            cmp_ratio=128, #
-            ori_mask_mode=4, # 4:sliding window
-            cmp_mask_mode=3, # 3:causal
+            cmp_ratio=128,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -1239,7 +1237,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.wo_a = kwargs['wo_a']
         self.wo_b = kwargs['wo_b']
 
-        self.eps = 1e-6 # zyl
+        self.eps = kwargs['eps']
 
         self.attn_sink = kwargs['attn_sink']
 
@@ -1253,10 +1251,10 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # indexer param
         if self.indexer is not None:
-            self.indexer_heads: int = self.indexer.n_heads  # 32
-            self.inderxer_dim: int = self.indexer.head_dim  # 128
-            self.inderxer_wq_b = self.indexer.wq_b    # (1024, 32*128)
-            self.weights_proj = self.indexer.weights_proj   # (4096, 32)
+            self.indexer_heads: int = self.indexer.n_heads
+            self.inderxer_dim: int = self.indexer.head_dim
+            self.inderxer_wq_b = self.indexer.wq_b
+            self.weights_proj = self.indexer.weights_proj
             self.indexer_softmax_scale = self.inderxer_dim ** -0.5
 
             self.indexer_compress = self.indexer.compressor
@@ -1289,10 +1287,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
 
     # TODO: cast to bfloat16 to speed up
-    def rope_single(self, x,cos,sin,inverse=False):
-        # dtype= x.dtype
+    def rope_single(self, x, cos, sin, inverse=False):
         if inverse:
-            # sin = sin * -1
             sin = -sin
         tnd_layout = 1
         if len(x.shape)==3:
@@ -1300,7 +1296,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             tnd_layout=0
             _,num_tokens,num_heads,rotary_dim = x.shape
-        # x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave")
         x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1, rotary_dim), cos, sin, rotary_mode="interleave")
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
@@ -1332,7 +1327,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         decode_hidden_states = hidden_states[:decode_tokens]
 
         forward_context = get_forward_context()
-        output_padded = output
         o_proj_input_shape = (forward_context.num_tokens,
                               self.n_local_heads, self.head_dim)
         o_proj_input = torch.empty(o_proj_input_shape,
