@@ -667,17 +667,18 @@ class NPUModelRunner(GPUModelRunner):
         self.query_lens = torch.from_numpy(num_scheduled_tokens)
 
         # compute slot_mapping and block_table of sliding window
-        state_ids_np = np.array(
-            [self.requests[req_id].state_id for req_id in req_ids],
-        )
-        swa_slot_mapping, swa_block_table, state_block_table = \
-            self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
-        self.swa_slot_mapping.np[:total_num_scheduled_tokens] = swa_slot_mapping
-        self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
-        self.swa_block_table.np[:num_reqs] = swa_block_table
-        self.swa_block_table.copy_to_gpu(num_reqs)
-        self.state_block_table.np[:num_reqs] = state_block_table
-        self.state_block_table.copy_to_gpu(num_reqs)
+        if self.use_compress:
+            state_ids_np = np.array(
+                [self.requests[req_id].state_id for req_id in req_ids],
+            )
+            swa_slot_mapping, swa_block_table, state_block_table = \
+                self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
+            self.swa_slot_mapping.np[:total_num_scheduled_tokens] = swa_slot_mapping
+            self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
+            self.swa_block_table.np[:num_reqs] = swa_block_table
+            self.swa_block_table.copy_to_gpu(num_reqs)
+            self.state_block_table.np[:num_reqs] = state_block_table
+            self.state_block_table.copy_to_gpu(num_reqs)
 
         # Get info across DP ranks.
         # NOTE: maybe_padded_num_tokens is only used when using TorchAir with DP,
@@ -1045,14 +1046,14 @@ class NPUModelRunner(GPUModelRunner):
                     slot_mapping = blk_table.slot_mapping.gpu[:self.
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
-
-            # get kv_state id
-            state_ids_cpu = torch.tensor(
-                [self.requests[req_id].state_id for req_id in req_ids],
-                dtype=torch.int32,
-                device="cpu",
-            ).pin_memory()
-            state_ids = state_ids_cpu.to(self.device, non_blocking=True)
+            if self.use_compress:
+                # get kv_state id
+                state_ids_cpu = torch.tensor(
+                    [self.requests[req_id].state_id for req_id in req_ids],
+                    dtype=torch.int32,
+                    device="cpu",
+                ).pin_memory()
+                state_ids = state_ids_cpu.to(self.device, non_blocking=True)
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1092,33 +1093,57 @@ class NPUModelRunner(GPUModelRunner):
 
             # Make AscendCommonAttentionMetadata
             # 传入 block_table_map，可以只初始化一次 metadata
-            common_attn_metadata = AscendCommonAttentionMetadata(
-                query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
-                query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs + 1],
-                seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
-                seq_lens=self.seq_lens.gpu[:num_reqs],
-                num_reqs=num_reqs,
-                num_actual_tokens=total_num_scheduled_tokens,
-                num_input_tokens=num_input_tokens,
-                actual_seq_lengths_q=self.actual_seq_lengths_q,
-                # TODO: change this to the right block table for linear attn
-                block_table_tensor=blk_table_tensor,
-                slot_mapping=slot_mapping,
-                state_ids=state_ids,
-                swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
-                swa_block_table=self.swa_block_table.gpu[:num_reqs],
-                state_block_table=self.state_block_table.gpu[:num_reqs],
-                num_computed_tokens_cpu=self.input_batch.
-                num_computed_tokens_cpu_tensor[:num_reqs],
-                positions=self.positions.gpu,
-                positions_cpu=self.positions.cpu,
-                attn_state=self.attn_state,
-                max_query_len=max_num_scheduled_tokens,
-                decode_token_per_req=self.decode_token_per_req,
-                prefill_context_parallel_metadata=self.long_seq_metadata,
-                max_seq_len=0,
-                encoder_seq_lens=encoder_seq_lens,
-                encoder_seq_lens_cpu=encoder_seq_lens_cpu)
+            if self.use_compress:
+                common_attn_metadata = AscendCommonAttentionMetadata(
+                    query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
+                    query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs + 1],
+                    seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
+                    seq_lens=self.seq_lens.gpu[:num_reqs],
+                    num_reqs=num_reqs,
+                    num_actual_tokens=total_num_scheduled_tokens,
+                    num_input_tokens=num_input_tokens,
+                    actual_seq_lengths_q=self.actual_seq_lengths_q,
+                    # TODO: change this to the right block table for linear attn
+                    block_table_tensor=blk_table_tensor,
+                    slot_mapping=slot_mapping,
+                    state_ids=state_ids,
+                    swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
+                    swa_block_table=self.swa_block_table.gpu[:num_reqs],
+                    state_block_table=self.state_block_table.gpu[:num_reqs],
+                    num_computed_tokens_cpu=self.input_batch.
+                    num_computed_tokens_cpu_tensor[:num_reqs],
+                    positions=self.positions.gpu,
+                    positions_cpu=self.positions.cpu,
+                    attn_state=self.attn_state,
+                    max_query_len=max_num_scheduled_tokens,
+                    decode_token_per_req=self.decode_token_per_req,
+                    prefill_context_parallel_metadata=self.long_seq_metadata,
+                    max_seq_len=0,
+                    encoder_seq_lens=encoder_seq_lens,
+                    encoder_seq_lens_cpu=encoder_seq_lens_cpu)
+            else:
+                common_attn_metadata = AscendCommonAttentionMetadata(
+                    query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
+                    query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs + 1],
+                    seq_lens_cpu=self.seq_lens.cpu[:num_reqs],
+                    seq_lens=self.seq_lens.gpu[:num_reqs],
+                    num_reqs=num_reqs,
+                    num_actual_tokens=total_num_scheduled_tokens,
+                    num_input_tokens=num_input_tokens,
+                    actual_seq_lengths_q=self.actual_seq_lengths_q,
+                    # TODO: change this to the right block table for linear attn
+                    block_table_tensor=blk_table_tensor[:num_reqs],
+                    slot_mapping=slot_mapping,
+                    num_computed_tokens_cpu=self.input_batch.
+                    num_computed_tokens_cpu_tensor[:num_reqs],
+                    positions=self.positions.gpu,
+                    attn_state=self.attn_state,
+                    max_query_len=max_num_scheduled_tokens,
+                    decode_token_per_req=self.decode_token_per_req,
+                    prefill_context_parallel_metadata=self.long_seq_metadata,
+                    max_seq_len=0,
+                    encoder_seq_lens=encoder_seq_lens,
+                    encoder_seq_lens_cpu=encoder_seq_lens_cpu)
 
             if self.speculative_config and self.pcp_size * self.dcp_size > 1:
                 # TODO: adapt me to block table list
@@ -1191,28 +1216,29 @@ class NPUModelRunner(GPUModelRunner):
                 for layer_name in attn_group.layer_names:
                     attn_metadata[layer_name] = attn_metadata_i
 
-            # ------------- make swa metadata -----------------
-            kv_cache_spec = AttentionSpec(
-                block_size=self.block_size,
-                num_kv_heads=1,
-                head_size=512,
-                dtype=torch.bfloat16,
-            )
-            swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                kv_cache_spec,
-                list(self.runner_only_attn_layers),
-                self.vllm_config,
-                self.device,
-                AscendDSAMetadata,
-                supports_dcp_with_varlen=False,
-            )
-            for layer_name in self.runner_only_attn_layers:
-                common_prefix_len = 0
-                swa_attn_metadata = builder.build(
-                    common_prefix_len=common_prefix_len,
-                    common_attn_metadata=common_attn_metadata)
-                attn_metadata[layer_name] = swa_attn_metadata
-            # ---------------------------------------------------
+            if self.use_compress:
+                # ------------- make swa metadata -----------------
+                kv_cache_spec = AttentionSpec(
+                    block_size=self.block_size,
+                    num_kv_heads=1,
+                    head_size=512,
+                    dtype=torch.bfloat16,
+                )
+                swa_metadata_builder = self.attn_backend.get_builder_cls()(
+                    kv_cache_spec,
+                    list(self.runner_only_attn_layers),
+                    self.vllm_config,
+                    self.device,
+                    AscendDSAMetadata,
+                    supports_dcp_with_varlen=False,
+                )
+                for layer_name in self.runner_only_attn_layers:
+                    common_prefix_len = 0
+                    swa_attn_metadata = builder.build(
+                        common_prefix_len=common_prefix_len,
+                        common_attn_metadata=common_attn_metadata)
+                    attn_metadata[layer_name] = swa_attn_metadata
+                # ---------------------------------------------------
 
         # update global cos, sin
         update_cos_sin(positions)
@@ -3660,7 +3686,8 @@ class NPUModelRunner(GPUModelRunner):
         super()._update_states(scheduler_output)
         for new_req_data in scheduler_output.scheduled_new_reqs:
             req_id = new_req_data.req_id
-            self.requests[req_id].state_id = new_req_data.state_id
+            if self.use_compress:
+                self.requests[req_id].state_id = new_req_data.state_id
 
 
 @contextmanager
