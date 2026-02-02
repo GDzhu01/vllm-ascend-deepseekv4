@@ -22,7 +22,7 @@ on:
       tag:
         description: 'Docker tag for build results'
         type: string
-        default: deepseek_v4_0.13.0release_0127
+        default: main
         required: true
 
 jobs:
