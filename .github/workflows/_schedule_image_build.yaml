@@ -85,7 +85,7 @@ jobs:
         file: ${{ inputs.dockerfile || 'Dockerfile' }}
         # only trigger when tag, branch/main push
         push: ${{ inputs.should_push }}
-        tags: quay.io/ascend/vllm-ascend-daily
+        tags: quay.io/wjjunlu/vllm-ascend-daily
         outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ inputs.should_push }}
         build-args: |
           PIP_INDEX_URL=https://pypi.org/simple
@@ -165,7 +165,7 @@ jobs:
 
       - name: Merge and push multi-arch image
         env:
-          IMAGE: quay.io/ascend/vllm-ascend-daily
+          IMAGE: quay.io/wjunlu/vllm-ascend-daily
           TAGS: ${{ steps.date_tag.outputs.TAG }}
         run: |
           DIGESTS=$(printf "$IMAGE@sha256:%s " $(ls ${{ runner.temp }}/digests))
