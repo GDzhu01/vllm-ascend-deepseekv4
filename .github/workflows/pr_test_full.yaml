@@ -19,7 +19,6 @@ name: E2E-Full
 on:
   pull_request:
     branches:
-      - 'main'
       - 'releases/v0.13.0'
     types: [ labeled, synchronize ]
 
@@ -38,7 +37,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: linux-aarch64-a2-0
+    runs-on: linux-amd64-cpu-8-hk
     if: ${{ contains(github.event.pull_request.labels.*.name, 'ready') && contains(github.event.pull_request.labels.*.name, 'ready-for-test') }}
     outputs:
       e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
@@ -47,7 +46,9 @@ jobs:
       - name: Setup git proxy
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
       # NOTE: Do not update the version of checkout, there have some issue on self_hosted runner with the higher version
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
@@ -75,11 +76,10 @@ jobs:
     strategy:
       matrix:
         vllm_version: [v0.13.0]
-    needs: [changes]
-    if: ${{ needs.changes.outputs.e2e_tracker == 'true' }}
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'ready') && contains(github.event.pull_request.labels.*.name, 'ready-for-test') }}
     uses: ./.github/workflows/_e2e_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
-      runner: linux-aarch64-a2
+      runner: linux-aarch64-a2-1
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11
       type: full

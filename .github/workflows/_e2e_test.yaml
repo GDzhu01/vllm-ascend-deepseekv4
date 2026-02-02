@@ -19,7 +19,7 @@ on:
 jobs:
   e2e:
     name: singlecard
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     container:
       image: ${{ inputs.image }}
       env:
@@ -40,7 +40,13 @@ jobs:
           apt-get update -y
           apt install git -y
 
-      - name: Checkout vllm-project/vllm-ascend repo
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+      - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
         uses: actions/checkout@v6
 
       - name: Install system dependencies
@@ -61,7 +67,7 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty pip install -e .
 
-      - name: Install vllm-project/vllm-ascend
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
         run: |
@@ -75,7 +81,7 @@ jobs:
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
 
-      - name: Run vllm-project/vllm-ascend test
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test
         env:
           PYTORCH_NPU_ALLOC_CONF: max_split_size_mb:256
           VLLM_WORKER_MULTIPROC_METHOD: spawn
@@ -102,6 +108,7 @@ jobs:
           pytest -sv --durations=0 tests/e2e/singlecard/test_cpu_offloading.py
           # xgrammar has parameter mismatching bug, please follows: https://github.com/vllm-project/vllm-ascend/issues/5524
           # pytest -sv --durations=0 tests/e2e/singlecard/test_guided_decoding.py
+
           # torch 2.8 doesn't work with lora, fix me
           pytest -sv --durations=0 tests/e2e/singlecard/test_ilama_lora.py
           pytest -sv --durations=0 tests/e2e/singlecard/test_models.py
@@ -145,15 +152,19 @@ jobs:
 
       - name: Config mirrors
         run: |
-          # Fix me: use nginx cache rather than the pypi
-          # sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
-          # pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
-          # pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
-          pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
 
-      - name: Checkout vllm-project/vllm-ascend repo
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+      - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
         uses: actions/checkout@v6
 
       - name: Install system dependencies
@@ -174,7 +185,7 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty pip install -e .
 
-      - name: Install vllm-project/vllm-ascend
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
         run: |
@@ -188,14 +199,14 @@ jobs:
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
 
-      - name: Run vllm-project/vllm-ascend test (light)
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (light)
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'light' }}
         run: |
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_qwen3_moe.py::test_qwen3_moe_distributed_mp_tp2_ep
 
-      - name: Run vllm-project/vllm-ascend test (full)
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (full)
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'full' }}
@@ -228,7 +239,7 @@ jobs:
           #pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_shared_expert_dp.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_single_request_aclgraph.py
 
-      - name: Run vllm-project/vllm-ascend test (non triton)
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (non triton)
         if: ${{ inputs.type == 'full' }}
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
@@ -238,8 +249,6 @@ jobs:
 
   e2e-4-cards:
     name: multicard-4
-    needs: [e2e, e2e-2-cards]
-    if: ${{ needs.e2e.result == 'success' && needs.e2e-2-cards.result == 'success' && inputs.type == 'full' }}
     runs-on: linux-aarch64-a3-4
     container:
       image: m.daocloud.io/quay.io/ascend/cann:8.5.0-a3-ubuntu22.04-py3.11
@@ -255,16 +264,22 @@ jobs:
 
       - name: Config mirrors
         run: |
-          sed -i 's|ports.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
-          pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
-          apt install git wget curl -y
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
+          apt install git -y
 
-      - name: Checkout vllm-project/vllm-ascend repo
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/wl/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+      - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
         uses: actions/checkout@v6
         with:
-          path: ./vllm-ascend
+          path: ./vllm-ascend-deepseekv4
 
       - name: Install system dependencies
         run: |
@@ -283,8 +298,8 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty pip install -e .
 
-      - name: Install vllm-project/vllm-ascend
-        working-directory: ./vllm-ascend
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
+        working-directory: ./vllm-ascend-deepseekv4
         run: |
           export PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/devlib
@@ -298,8 +313,8 @@ jobs:
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
 
-      - name: Run vllm-project/vllm-ascend test for V1 Engine
-        working-directory: ./vllm-ascend
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test for V1 Engine
+        working-directory: ./vllm-ascend-deepseekv4
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         run: |
