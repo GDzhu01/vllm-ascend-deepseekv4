@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-
+import os
 from collections.abc import Sequence
 import vllm
 from vllm.v1.core.kv_cache_coordinator import (HybridKVCacheCoordinator,
@@ -15,7 +15,8 @@ from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 
-USE_MULTI_BLOCK_POOL = True
+# TODO: When running dsv4, this environment variable must be set to True. Consider how to remove it.
+USE_MULTI_BLOCK_POOL = os.environ.get("USE_MULTI_BLOCK_POOL")
 
 
 class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
