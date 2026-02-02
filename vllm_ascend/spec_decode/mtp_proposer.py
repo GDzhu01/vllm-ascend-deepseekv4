@@ -413,6 +413,7 @@ class MtpProposer(EagleProposer):
                 positions = target_positions[last_token_indices]
                 hidden_states = hidden_states[last_token_indices]
                 slot_mapping = attn_metadata_i.slot_mapping[last_token_indices]
+                swa_slot_mapping = attn_metadata_i.swa_slot_mapping[last_token_indices]
                 attn_metadata_i.slot_mapping.fill_(-1)
                 if self.use_compress:
                     attn_metadata_i.swa_slot_mapping.fill_(-1)
@@ -518,10 +519,12 @@ class MtpProposer(EagleProposer):
             # Otherwise, the KV cache will be inadvertently updated with the
             # padding tokens.
             slot_mapping += 1
+            swa_slot_mapping += 1
             if self.pcp_size > 1:
                 exceeds_max_model_len = exceeds_max_model_len.repeat_interleave(
                     slot_mapping.size(0) // exceeds_max_model_len.size(0))
             slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
+            swa_slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
 
             # copy inputs to buffer for cudagraph
             self.input_ids[:batch_size] = input_ids
@@ -547,12 +550,7 @@ class MtpProposer(EagleProposer):
                 attn_metadata_i.slot_mapping[:batch_size] = slot_mapping
 
                 if self.use_compress:
-                    swa_slot_mapping, swa_block_table = \
-                        self.runner._compute_swa_meta_mtp(common_attn_metadata.state_ids, positions[:batch_size], self.query_lens[:batch_size])
-
-                    swa_slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
                     attn_metadata_i.swa_slot_mapping[:batch_size] = swa_slot_mapping
-                    attn_metadata_i.swa_block_table = swa_block_table
 
             if self.speculative_config.disable_padded_drafter_batch:
                 self.positions[batch_size:num_input_tokens] = 0
@@ -572,14 +570,15 @@ class MtpProposer(EagleProposer):
                     self.runner.model_config.max_model_len)
             if decode_metadata is not None:
                 decode_metadata.seq_lens = attn_metadata_i.seq_lens
-                decode_metadata.seq_lens_list = decode_metadata.seq_lens.tolist(
-                )
-                decode_seq_lens_list = decode_metadata.seq_lens_list
-                if aclgraph_runtime_mode == CUDAGraphMode.FULL and \
-                        self.speculative_config.disable_padded_drafter_batch:
-                    decode_metadata.seq_lens_list = decode_seq_lens_list + [
-                        0
-                    ] * (graph_pad_size - len(decode_seq_lens_list))
+                if not self.use_compress:
+                    decode_metadata.seq_lens_list = decode_metadata.seq_lens.tolist(
+                    )
+                    decode_seq_lens_list = decode_metadata.seq_lens_list
+                    if aclgraph_runtime_mode == CUDAGraphMode.FULL and \
+                            self.speculative_config.disable_padded_drafter_batch:
+                        decode_metadata.seq_lens_list = decode_seq_lens_list + [
+                            0
+                        ] * (graph_pad_size - len(decode_seq_lens_list))
                 decode_metadata.input_positions = self.positions[:
                                                                  num_input_tokens]
                 decode_metadata.max_seq_lens += 1
