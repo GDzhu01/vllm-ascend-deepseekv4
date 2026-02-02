@@ -233,13 +233,6 @@ class AscendDSAMetadata:
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
     """
-    # NOTE(sang): Definition of context_len, query_len, and seq_len.
-    # |---------- N-1 iteration --------|
-    # |---------------- N iteration ---------------------|
-    # |- tokenA -|......................|-- newTokens ---|
-    # |---------- context_len ----------|
-    # |-------------------- seq_len ---------------------|
-    #                                   |-- query_len ---|
 
     num_actual_tokens: int  # Number of tokens excluding padding.
     slot_mapping: torch.Tensor
@@ -252,9 +245,6 @@ class AscendDSAMetadata:
     swa_block_table: torch.Tensor
     state_block_table: torch.Tensor
 
-
-    # New for MLA (compared to FlashAttention)
-    # For handling prefill decode split
     num_decodes: int
     num_decode_tokens: int
     num_prefills: int
@@ -338,18 +328,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.reorder_batch_threshold = self.decode_threshold
         if self.chunked_prefill_enabled:
             self.chunked_prefill_workspace_size = min(
-                # Max sure there is enough for 8 full length request or at least
-                # 4 pages of cache per request
                 max(8 * self.model_config.max_model_len,
                     4 * scheduler_config.max_num_seqs * self.block_size),
-                # For long-context models try not to over-allocate limiting
-                # kv-cache space, limiting it to 64k tokens,
-                # which would result in the workspace being:
-                #   2*(576)*(64*1024) = 144mb
-                # (assuming 576 MLA head dim, and fp16)
-                # which would result in up-projected context being
-                #   2*(192*128)*(64*1024) = 3gb
-                # (assuming 192 QK head dim, 128 heads, and fp16)
                 128 * 1024)
             assert self.chunked_prefill_workspace_size >= \
                    scheduler_config.max_num_seqs * self.block_size
@@ -382,7 +362,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         self.compressor_ratio = 1
         if AscendDSAMetadataBuilder.indexer_metadata is None:
-            # TODO(cmq): What does the magic number for?
             AscendDSAMetadataBuilder.indexer_metadata = torch.zeros((2048),
                                                                     dtype = torch.int32,
                                                                     device=self.device)
@@ -393,10 +372,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 [usedCoreNum, mBaseSize, s2BaseSize],
                 dtype=torch.int32,
                 device=self.device)
-
-            # AscendDSAMetadataBuilder.metadata[3:27] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #bN2End 每个核处理数据的BN2结束点
-            # AscendDSAMetadataBuilder.metadata[27:51] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #mEnd 每个核处理数据的M结束点
-            # AscendDSAMetadataBuilder.metadata[51:75] = torch.zeros((usedCoreNum), dtype = torch.int32, device=q.device) #s2End 每个核处理数据的S2结束点
 
         if AscendDSAMetadataBuilder.hadamard is None:
             hf_config = self.model_config.hf_config
@@ -908,19 +883,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                                          )
         input_positions_cpu = input_positions_cpu[:self.num_decode_tokens]
 
-        # Notice that num_decodes != num_decode_tokens in SpecDecoding Scenario
-        # actual_seq_lengths_q = query_start_loc_cpu[1:self.num_decodes +
-        #                                            1].tolist()
         max_seq_lens = common_attn_metadata.seq_lens_cpu[:self.num_decodes].max().item()
 
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
-
-        # NOTE: Currently, MTP-fullgraph is incompatibility pcp
-        # NOTE: Maybe this block_table change can be removed when graph_pad_size > 1.
-        # if self.graph_pad_size > self.num_decodes and \
-        #         self.speculative_config.disable_padded_drafter_batch:
-        #     self.block_table = self.block_table[:self.graph_pad_size, ...]
+        
         seq_lens_list = common_attn_metadata.seq_lens_cpu[:self.num_decodes].tolist()
 
         cp_seq_len, batch_seq_mask = None, None
@@ -949,8 +916,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
 
         def _get_compressed_decode_token_start(decode_input_positions, compress_ratio):
-            # TODO(cmq): decode_input_positions is a device tensor, 
-            # this will introduce sync operation. Refactor me to torch.where instead
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
             compressed_decode_num = mask.sum().item()
             return compressed_decode_num
@@ -1243,9 +1208,6 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         ascend_config = get_ascend_config()
         self.multistream_dsa_preprocess = ascend_config.multistream_dsa_preprocess
-        # self.enable_shared_expert_dp = ascend_config.enable_shared_expert_dp
-        # self.enable_prefetch = ascend_config.weight_prefetch_config.enabled
-        # self.enable_mlapo = envs.VLLM_ASCEND_ENABLE_MLAPO
 
         self.vllm_config = get_current_vllm_config()
 
@@ -1383,13 +1345,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: AscendDSAMetadata,
         kv_state: Tuple,
     ):
-        if self.compress_ratio==1:
-            (sliding_window_state) = kv_state
-        elif self.compress_ratio==4:
-            (sliding_window_state, compressor_kv_state, compressor_score_state,
-             c4_indexer_kv_state, c4_indexer_score_state) = kv_state
+        if self.compress_ratio==4:
+            (_, compressor_kv_state, compressor_score_state,
+             _, _) = kv_state
         elif self.compress_ratio==128:
-            (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
+            (_, compressor_kv_state, compressor_score_state) = kv_state
 
         cos = attn_metadata.prefill.cos[layer_name]
         sin = attn_metadata.prefill.sin[layer_name]
@@ -1540,12 +1500,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: AscendDSAMetadata,
         kv_state: Tuple,
     ):
-        if self.compress_ratio==1:
-            (sliding_window_state) = kv_state
-        elif self.compress_ratio==4:
-            (sliding_window_state, compressor_kv_state, compressor_score_state, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
+        if self.compress_ratio==4:
+            (_, compressor_kv_state, compressor_score_state, _, _) = kv_state
         elif self.compress_ratio==128:
-            (sliding_window_state, compressor_kv_state, compressor_score_state) = kv_state
+            (_, compressor_kv_state, compressor_score_state) = kv_state
 
         cos = attn_metadata.decode.cos[layer_name]
         sin = attn_metadata.decode.sin[layer_name]
@@ -1706,7 +1664,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
         q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
-        ## rope
+        
         if not with_prefill:
             q = triton_apply_rope_partial_in_place(q, sin, cos)
         else:

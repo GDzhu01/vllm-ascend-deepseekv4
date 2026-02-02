@@ -155,7 +155,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
         torch.Tensor: Tensor with rotary embeddings applied.
     """
     y = x
-    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2))) # (1,1,1,32)
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
     if inverse:
         freqs_cis = freqs_cis.conj()
     if x.ndim == 3:
@@ -164,7 +164,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = F
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
     x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
     y.copy_(x)
-    return y  # 
+    return y
 
 
 def get_spec_layer_idx_from_weight_name(
@@ -198,8 +198,7 @@ class DeepseekV2MLP(nn.Module):
             bias=False,
             quant_config=quant_config,
             disable_tp=is_sequence_parallel,
-            prefix=f"{prefix}.gate_up_proj",
-            # return_bias=False,
+            prefix=f"{prefix}.gate_up_proj"
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -208,8 +207,7 @@ class DeepseekV2MLP(nn.Module):
             quant_config=quant_config,
             reduce_results=reduce_results,
             disable_tp=is_sequence_parallel,
-            prefix=f"{prefix}.down_proj",
-            # return_bias=False,
+            prefix=f"{prefix}.down_proj"
         )
         if hidden_act != "silu":
             raise ValueError(
@@ -259,8 +257,7 @@ class DeepseekV4MoE(nn.Module):
             config.n_routed_experts,
             bias=False,
             quant_config=None,
-            prefix=f"{prefix}.gate",
-            # return_bias=False,
+            prefix=f"{prefix}.gate"
         )
         
         # Load balancing settings.
@@ -390,9 +387,7 @@ class DeepseekV4MoE(nn.Module):
             )
 
         return final_hidden_states.view(num_tokens, hidden_dim)
-
-    # def forward(self, hidden_states, input_ids):
-    #     return hidden_states
+    
 
 def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
     import math
@@ -412,7 +407,6 @@ def _get_llama_4_scaling(
     return scaling[..., None, None]
 
 
-
 class Indexer(nn.Module):
     def __init__(
         self,
@@ -426,12 +420,11 @@ class Indexer(nn.Module):
         super().__init__()
         self.vllm_config = vllm_config
         self.config = config
-        # self.indexer_cfg = config.attn_module_list_cfg[0]["attn_index"]
-        self.n_heads = config.index_n_heads #32
-        self.head_dim = config.index_head_dim #128
-        self.rope_head_dim = config.rope_head_dim #64
-        self.index_topk = config.index_topk #512
-        self.q_lora_rank = config.q_lora_rank #1024
+        self.n_heads = config.index_n_heads
+        self.head_dim = config.index_head_dim
+        self.rope_head_dim = config.rope_head_dim
+        self.index_topk = config.index_topk
+        self.q_lora_rank = config.q_lora_rank
         self.softmax_scale = self.head_dim ** -0.5
         self.compress_ratio = compress_ratio
         
@@ -493,7 +486,6 @@ class Compressor(nn.Module):
         self.kv_cache = None
 
     def overlap_transform(self, tensor: torch.Tensor, value=0):
-        # tensor: [b,s,r,2d]
         b, s, _, _ = tensor.size()
         ratio, d = self.compress_ratio, self.head_dim
         new_tensor = tensor.new_full((b, s, 2 * ratio, d), value)
@@ -509,89 +501,7 @@ class Compressor(nn.Module):
             sin: torch.Tensor,
             kv_state = None,
         )-> torch.Tensor:
-        x= x.unsqueeze(0)
-        bsz, seqlen, _ = x.size()
-        ratio, overlap, d = self.compress_ratio, self.overlap, self.head_dim
-        dtype = x.dtype
-        x = x.float()
-        kv = self.wkv(x)
-        score = self.wgate(x)
-        if start_pos == 0:
-            should_compress = seqlen >= ratio
-            remainder = seqlen % ratio
-            cutoff = seqlen - remainder
-            cos = cos[:,:,:cutoff:ratio,:]
-            sin = sin[:,:,:cutoff:ratio,:]
-            offset = ratio if overlap else 0
-            if overlap and cutoff >= ratio:
-                if kv.shape[-1]==1024:
-                    kv_state[1][0, :ratio] = kv[0, cutoff-ratio:cutoff]
-                    kv_state[2][0, :ratio] = score[0, cutoff-ratio:cutoff] + self.ape
-                elif kv.shape[-1]==256:
-                    kv_state[3][0, :ratio] = kv[0, cutoff-ratio:cutoff]
-                    kv_state[4][0, :ratio] = score[0, cutoff-ratio:cutoff] + self.ape
-
-            if remainder > 0:
-                if kv.shape[-1]==1024 or kv.shape[-1]==512:
-                    kv, kv_state[1][0, offset : offset+remainder] = kv.split([cutoff, remainder], dim=1)
-                    kv_state[2][0, offset : offset+remainder] = score[0, cutoff:] + self.ape[:remainder]
-                    score = score[:, :cutoff]
-                elif kv.shape[-1]==256 or kv.shape[-1]==128:
-                    kv, kv_state[3][0, offset : offset+remainder] = kv.split([cutoff, remainder], dim=1)
-                    kv_state[4][0, offset : offset+remainder] = score[0, cutoff:] + self.ape[:remainder]
-                    score = score[:, :cutoff]
-            kv = kv.unflatten(1, (-1, ratio))
-            score = score.unflatten(1, (-1, ratio)) + self.ape
-            if overlap:
-                kv = self.overlap_transform(kv, 0)
-                score = self.overlap_transform(score, float("-inf"))
-            kv = (kv * score.softmax(dim=2)).sum(dim=2)
-        else:
-            should_compress = (start_pos + 1) % self.compress_ratio == 0
-            score += self.ape[start_pos % ratio]
-            if overlap:
-                if kv.shape[-1]==1024:
-                    kv_state[1][0, ratio + start_pos % ratio] = kv.squeeze(1)
-                    kv_state[2][0, ratio + start_pos % ratio] = score.squeeze(1)
-                else:
-                    kv_state[3][0, ratio + start_pos % ratio] = kv.squeeze(1)
-                    kv_state[4][0, ratio + start_pos % ratio] = score.squeeze(1)
-                if should_compress:
-                    if kv.shape[-1]==1024:
-                        kv_state_tmp = torch.cat([kv_state[1][0, :ratio, :d], kv_state[1][0, ratio:, d:]], dim=0).unsqueeze(0)
-                        score_state_tmp = torch.cat([kv_state[2][0, :ratio, :d], kv_state[2][0, ratio:, d:]], dim=0).unsqueeze(0)
-                        kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
-                        kv_state[1][0, :ratio] = kv_state[1][0, ratio:]
-                        kv_state[2][0, :ratio] = kv_state[2][0, ratio:]
-                    else:
-                        kv_state_tmp = torch.cat([kv_state[3][0, :ratio, :d], kv_state[3][0, ratio:, d:]], dim=0).unsqueeze(0)
-                        score_state_tmp = torch.cat([kv_state[4][0, :ratio, :d], kv_state[4][0, ratio:, d:]], dim=0).unsqueeze(0)
-                        kv = (kv_state_tmp * score_state_tmp.softmax(dim=1)).sum(dim=1, keepdim=True)
-                        kv_state[3][0, :ratio] = kv_state[3][0, ratio:]
-                        kv_state[4][0, :ratio] = kv_state[4][0, ratio:]
-            else:
-                kv_state[1][0, start_pos % ratio] = kv.squeeze(1)
-                kv_state[2][0, start_pos % ratio] = score.squeeze(1)
-                if should_compress:
-                    kv = (kv_state[1][0] *  kv_state[2][0].softmax(dim=1)).sum(dim=1, keepdim=True)
-        if self.rotate:
-            kv = rotate_activation(kv)
-        if not should_compress:
-            return
-        kv = self.norm(kv.to(dtype))
-        kv = kv.view(1, -1, 1, self.nope_head_dim+self.rope_head_dim)
-
-        if start_pos==0:
-            should_compress = seqlen >= ratio
-            remainder = seqlen % ratio
-            cutoff = seqlen - remainder
-            cos = cos[:cutoff:ratio]
-            sin = sin[:cutoff:ratio]
-
-        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        kv_pe = self.rope_single(kv_pe, cos, sin)
-        kv = torch.cat([kv_nope, kv_pe], dim=-1)
-        return kv # s b n d
+        pass
     
     def rope_single(
         self,
@@ -712,9 +622,6 @@ class DeepseekV4Attention(nn.Module):
             rope_groups=rope_groups
         )
 
-        self.scaling = self.head_dim**-0.5
-
-        
         if self.compress_ratio > 1:
             self.compressor = Compressor(vllm_config,config, self.compress_ratio, self.head_dim,quant_config=quant_config,cache_config=cache_config,prefix=f"{prefix}.compressor",)
             if self.compress_ratio == 4:
@@ -784,21 +691,17 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         if config is None:
             config = vllm_config.model_config.hf_config
-        model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
         quant_config = vllm_config.quant_config
         parallel_config = vllm_config.parallel_config
 
         self.hidden_size = config.hidden_size
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
-        moe_layer_freq = getattr(config, "moe_layer_freq", 1)
         # DecoderLayers are created with `make_layers` which passes the prefix
         # with the layer's index.
         layer_idx = int(prefix.split(sep=".")[-1])
         self.layer_idx = layer_idx
         self.norm_eps = config.rms_norm_eps
-
-
 
         attn_cls = DeepseekV4Attention
         
@@ -829,8 +732,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_eps = config.hc_eps
         mix_hc = (2 + hc_mult) * hc_mult
         hc_dim = hc_mult * config.hidden_size
-        # self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
-        # self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.bfloat16))
         self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.float32))
         self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim,dtype = torch.float32))
         self.hc_attn_base = nn.Parameter(torch.empty(mix_hc,dtype = torch.float32))
@@ -970,7 +871,6 @@ class DeepseekV4Model(nn.Module):
 
         # Compute llama 4 scaling once per forward pass if enabled
         llama_4_scaling_config = None
-        # llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
         llama_4_scaling: torch.Tensor | None
         if llama_4_scaling_config is not None:
             llama_4_scaling = _get_llama_4_scaling(
@@ -1141,7 +1041,6 @@ class AscendDeepseekV4ForCausalLM(
         )
         rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(), "mix_placement", False)
         stacked_params_mapping = [
-            # (param_name, shard_name, shard_id)
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]

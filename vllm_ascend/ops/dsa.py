@@ -39,8 +39,7 @@ import torch
 
 from vllm.config import CacheConfig
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.mla import (MLAModules,
-                                            MultiHeadLatentAttentionWrapper)
+from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
 
 @dataclass
 class DSAModules:
