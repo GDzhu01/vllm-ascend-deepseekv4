@@ -172,10 +172,12 @@ class AscendFusedMoE(FusedMoE):
     gate_stream: Optional[torch.npu.Stream] = None
 
     def __init__(self, *args, **kwargs):
-        use_hash=kwargs["hash"]
-        tid2eid=kwargs['tid2eid']
-        kwargs.pop('hash')
-        kwargs.pop('tid2eid')
+        use_hash = getattr(kwargs, "use_hash", None)
+        tid2eid = getattr(kwargs, 'tid2eid', None)
+        if use_hash is not None:
+            kwargs.pop('hash')
+        if tid2eid is not None:
+            kwargs.pop('tid2eid')
         super().__init__(*args, **kwargs)
 
         num_experts = kwargs["num_experts"]
@@ -188,8 +190,10 @@ class AscendFusedMoE(FusedMoE):
 
         self._expert_map = None
         self.log2phy = None
-
-        self.tid2eid = tid2eid
+        if tid2eid is not None:
+            self.tid2eid = tid2eid
+        else:
+            self.tid2eid = None
 
         if self.quant_config is None:
             self.quant_method = AscendUnquantizedFusedMoEMethod(
@@ -432,8 +436,8 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         **kwargs,
     ):
         AscendFusedMoE.__init__(self, **kwargs)
-        use_hash=kwargs["hash"]
-        tid2eid=kwargs['tid2eid']
+        use_hash = getattr(kwargs, "use_hash", None)
+        tid2eid = getattr(kwargs, 'tid2eid', None)
         self._shared_experts = shared_experts
         self.use_overlapped = use_overlapped
         self.shared_expert_stream = None

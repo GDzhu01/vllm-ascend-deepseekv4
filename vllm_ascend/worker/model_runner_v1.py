@@ -274,16 +274,27 @@ class NPUModelRunner(GPUModelRunner):
                                   "index_topk")
         self.use_compress = hasattr(self.vllm_config.model_config.hf_config,
                             "compress_ratios")
-        self.attn_backend = get_attn_backend(
-            0,
-            self.dtype,
-            None,
-            self.block_size,
-            use_mla=self.model_config.use_mla,
-            use_sparse=self.use_sparse,
-            use_compress=self.use_compress,
-            use_mm_prefix=self.model_config is not None
-            and self.model_config.is_mm_prefix_lm)
+        if self.use_compress:
+            self.attn_backend = get_attn_backend(
+                0,
+                self.dtype,
+                None,
+                self.block_size,
+                use_mla=self.model_config.use_mla,
+                use_sparse=self.use_sparse,
+                use_compress=self.use_compress,
+                use_mm_prefix=self.model_config is not None
+                and self.model_config.is_mm_prefix_lm)
+        else:
+            self.attn_backend = get_attn_backend(
+                0,
+                self.dtype,
+                None,
+                self.block_size,
+                use_mla=self.model_config.use_mla,
+                use_sparse=self.use_sparse,
+                use_mm_prefix=self.model_config is not None
+                and self.model_config.is_mm_prefix_lm)
 
         self._set_up_drafter()
 
