@@ -94,6 +94,7 @@ class EagleProposer(VllmEagleProposer):
         super().__init__(vllm_config, device, runner)
 
         self.use_async_scheduling = self.vllm_config.scheduler_config.async_scheduling
+        self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
         # there is synchronization between mtp steps when enabling aclgraph,
         # disable aclgraph when use async scheduling to avoid the
         # synchronization overhead.
@@ -105,7 +106,7 @@ class EagleProposer(VllmEagleProposer):
             and not self.vllm_config.model_config.enforce_eager
             and not self.vllm_config.speculative_config.enforce_eager)
         if self.method == "mtp":
-            self.use_cuda_graph = self.use_cuda_graph and not self.use_async_scheduling
+            self.use_cuda_graph = self.use_cuda_graph and not self.use_async_scheduling and not self.use_compress
 
         self.cudagraph_batch_sizes = list(
             sorted(
@@ -174,6 +175,12 @@ class EagleProposer(VllmEagleProposer):
         ]
 
         self._runnable = self._run_merged_draft
+
+        self.query_lens = torch.ones(
+            self.vllm_config.scheduler_config.max_num_seqs,
+            dtype=torch.int32,
+            device=self.device,
+        )
 
     def load_model(self, model: nn.Module) -> None:
         target_attn_layer_names = set(
@@ -258,11 +265,12 @@ class EagleProposer(VllmEagleProposer):
                     )
             else:
                 # MTP model
-                share_embeddings = True
-                logger.info(
-                    "Detected MTP model. "
-                    "Sharing target model embedding weights with the draft model."
-                )
+                share_embeddings = False if self.use_compress else True
+                if share_embeddings:
+                    logger.info(
+                        "Detected MTP model. "
+                        "Sharing target model embedding weights with the draft model."
+                    )
 
             if share_embeddings:
                 if hasattr(self.model.model, "embed_tokens"):

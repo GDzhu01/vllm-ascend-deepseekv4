@@ -6,5 +6,5 @@ def register_model():
     "vllm_ascend.models.deepseek_v4:AscendDeepseekV4ForCausalLM")
 
     ModelRegistry.register_model(
-    "DeepSeekMTPModel",
-    "vllm_ascend.models.deepseek_mtp:DeepSeekMTP")
+    "DeepSeekV4MTPModel",
+    "vllm_ascend.models.deepseek_v4_mtp:DeepSeekV4MTP")
