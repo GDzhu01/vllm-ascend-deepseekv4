@@ -1,0 +1,186 @@
+name: Image_oncall
+on:
+  workflow_call:
+    inputs:
+      suffix:
+        description: 'The tag subfix to use'
+        required: true
+        type: string
+      should_push:
+        description: 'Whether to push the image'
+        required: false
+        type: boolean
+        default: False
+      dockerfile:
+        description: 'The Dockerfile to use'
+        required: false
+        type: string
+      quay_username:
+        description: 'Quay username for pushing images'
+        required: false
+        type: string
+      workflow_dispatch_tag:
+        description: 'The tag to use for workflow dispatch'
+        required: false
+        type: string
+      ref:
+        description: 'Target branch'
+        required: True
+        type: string
+    secrets:
+        QUAY_PASSWORD:
+            description: 'Quay password for pushing images'
+            required: false
+
+jobs:
+  build-push-digest:
+    name: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: linux/amd64
+            runner: linux-amd64-cpu-8-hk
+            tag: amd64
+          - arch: linux/arm64
+            runner: linux-arm64-cpu-8-hk
+            tag: arm64
+    steps:
+    - name: Set PTA from file
+      run: |
+        TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+        TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+  
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+        ref: ${{ inputs.ref }}
+
+    - name: Free up disk space
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      with:
+        tool-cache: true
+        docker-images: false
+
+    - name: Publish - Login to Quay Container Registry
+      if: ${{ inputs.should_push }}
+      uses: docker/login-action@v3
+      with:
+        registry: quay.io
+        username: ${{ inputs.quay_username }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        install: true
+        driver: docker-container
+        use: true
+
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      id: build
+      with:
+        platforms: ${{ matrix.arch }}
+        # use the current repo path as the build context, ensure .git is contained
+        context: .
+        file: ${{ inputs.dockerfile || 'Dockerfile' }}
+        # only trigger when tag, branch/main push
+        push: ${{ inputs.should_push }}
+        tags: quay.io/ascend/vllm-ascend-daily
+        outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ inputs.should_push }}
+        build-args: |
+          PIP_INDEX_URL=https://pypi.org/simple
+        provenance: false
+
+    - name: Export digest
+      run: |
+        mkdir -p ${{ runner.temp }}/digests
+        digest="${{ steps.build.outputs.digest }}"
+        touch "${{ runner.temp }}/digests/${digest#sha256:}"
+    - name: Upload digest
+      uses: actions/upload-artifact@v6
+      with:
+        name: digests-${{ inputs.suffix }}-${{ matrix.tag }}
+        path: ${{ runner.temp }}/digests/*
+        if-no-files-found: error
+        retention-days: 1
+
+
+  merge-image:
+    runs-on: linux-amd64-cpu-8-hk
+    needs: build-push-digest
+    if: ${{ inputs.should_push }}
+    steps:
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download arm64 digests
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ inputs.suffix }}-arm64
+          merge-multiple: true
+
+      - name: Download amd64 digests
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ inputs.suffix }}-amd64
+          merge-multiple: true
+
+      - name: Prepare suffix
+        id: suffix
+        run: |
+          if [ -n "${{ inputs.suffix }}" ]; then
+            echo "SUFFIX=-${{ inputs.suffix }}" >> $GITHUB_ENV
+          else
+            echo "SUFFIX=" >> $GITHUB_ENV
+          fi
+
+      - name: Generate date tag
+        id: date_tag
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          if [ -n "${{ inputs.suffix }}" ]; then
+            echo "TAG=${DATE}-${{ inputs.suffix }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=${DATE}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Quay
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ inputs.quay_username }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Merge and push multi-arch image
+        env:
+          IMAGE: quay.io/ascend/vllm-ascend-daily
+          TAGS: ${{ steps.date_tag.outputs.TAG }}
+        run: |
+          DIGESTS=$(printf "$IMAGE@sha256:%s " $(ls ${{ runner.temp }}/digests))
+
+          echo "Digests: $DIGESTS"
+          echo "Current tags:"
+          echo "$TAGS"
+
+          for tag in $TAGS; do
+            echo "Creating tag $tag"
+            docker buildx imagetools create \
+              -t "$tag" \
+              $DIGESTS
+          done
