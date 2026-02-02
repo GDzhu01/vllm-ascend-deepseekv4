@@ -148,9 +148,9 @@ jobs:
         run: |
           DATE=$(date -u +%Y%m%d)
           if [ -n "${{ inputs.suffix }}" ]; then
-            echo "TAG=${DATE}-${{ inputs.suffix }}" >> $GITHUB_OUTPUT
+            echo "TAG=quay.io/wjunlu/vllm-ascend-daily:${DATE}-${{ inputs.suffix }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=${DATE}" >> $GITHUB_OUTPUT
+            echo "TAG=quay.io/wjunlu/vllm-ascend-daily:${DATE}" >> $GITHUB_OUTPUT
           fi
 
       - name: Login to Quay
