@@ -1244,7 +1244,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.attn_sink = kwargs['attn_sink']
 
         ascend_config = get_ascend_config()
-        self.wo_a_transpose = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1).transpose(2,1).contiguous()
         self.multistream_dsa_preprocess = ascend_config.multistream_dsa_preprocess
         # self.enable_shared_expert_dp = ascend_config.enable_shared_expert_dp
         # self.enable_prefetch = ascend_config.weight_prefetch_config.enabled
@@ -1376,8 +1375,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # o
         o = o.view(num_tokens, self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        #o = torch.einsum("tgd,grd->tgr", o, wo_a)
-        o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a_transpose, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        o = torch.einsum("tgd,grd->tgr", o, wo_a)
         o = o.reshape(num_tokens, -1)
         output[...] = self.wo_b(o)
 
