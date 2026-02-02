@@ -18,16 +18,16 @@
 #ifndef SPARSE_ATTN_SHAREDKV_METADATA_AICPU_H
 #define SPARSE_ATTN_SHAREDKV_METADATA_AICPU_H
 
-#include "cpu_context.h"
-#include "cpu_kernel.h"
-#include "cpu_tensor.h"
 #include <array>
 #include <string>
 #include <vector>
+#include "cpu_context.h"
+#include "cpu_kernel.h"
+#include "cpu_tensor.h"
 
 namespace aicpu {
+
 constexpr int64_t FA_TOLERANCE_RATIO = 2;
-constexpr uint32_t FD_TOLERANCE_RATIO = 2U;
 
 enum BlockType : uint32_t {
     WIN_NORMAL_BLOCK = 0,
@@ -78,48 +78,47 @@ inline bool IsWithinTolerance(T limit, T tolerance, T value)
 
 // 分核功能模块输出：FD信息，包含需要归约的数据索引及其分核信息
 struct FlashDecodeResult {
+    uint32_t fdUsedVecNum { 0U };             // 归约过程使用的vector数量
     // 1、归约任务的索引信息
-    std::vector<uint32_t> bN2IdxOfFdHead {};           // 每个归约任务的BN2索引，脚标为归约任务的序号，最大为核数-1
-    std::vector<uint32_t> gS1IdxOfFdHead {};           // 每个归约任务的GS1索引，脚标为归约任务的序号
-    std::vector<uint32_t> s2SplitNumOfFdHead {};       // 每个归约任务的S2核间切分份数，脚标为归约任务的序号
+    std::vector<uint32_t> fdBN2Idx {};          // 每个归约任务的BN2索引，脚标为归约任务的序号，最大为核数-1
+    std::vector<uint32_t> fdMIdx {};            // 每个归约任务的GS1索引，脚标为归约任务的序号
+    std::vector<uint32_t> fdWorkspaceIdx {};    // 每个归约任务在workspace中的存放位置
+    std::vector<uint32_t> fdS2SplitNum {};      // 每个归约任务的S2核间切分份数，脚标为归约任务的序号
+    std::vector<uint32_t> fdMSize {};           // 每个归约任务m轴大小，脚标为归约任务的序号
     // 2、FD负载均衡阶段，归约任务的分核（vec）信息
-    std::vector<uint32_t> gS1SplitNumOfFdHead {};      // 每个归约任务m轴切分份数，脚标为归约任务的序号
-    std::vector<uint32_t> gS1LastPartSizeOfFdHead {};  // 每个归约任务m轴切分的最后一份的大小，脚标为归约任务的序号
-    std::vector<uint32_t> gS1IdxEndOfFdHead {};        // FD负载均衡阶段，每个vector的一级索引，脚标为vector ID，值为归约任务的ID
-    std::vector<uint32_t> gS1IdxEndOfFdHeadSplit {};   // FD负载均衡阶段，每个vector的二级索引，脚标为vector ID，值为归约任务的m轴切分ID
-    // 3、每个core处理的第1个归约任务的数据应存放的workspace位置
-    std::vector<uint32_t> s2SplitStartIdxOfCore {};
+    std::vector<uint32_t> fdIdx {};             // FD负载均衡阶段，每个vector处理的归约任务对应ID
+    std::vector<uint32_t> fdMStart {};          // FD负载均衡阶段，每个vector处理的归约任务的m轴起点
+    std::vector<uint32_t> fdMNum {};            // FD负载均衡阶段，每个vector处理的归约任务的m轴行数
 
-    FlashDecodeResult(uint32_t coreNum, uint32_t vecCubeRatio) :
-        bN2IdxOfFdHead(coreNum),
-        gS1IdxOfFdHead(coreNum),
-        s2SplitNumOfFdHead(coreNum),
-        gS1SplitNumOfFdHead(coreNum),
-        gS1LastPartSizeOfFdHead(coreNum),
-        gS1IdxEndOfFdHead(coreNum * vecCubeRatio),
-        gS1IdxEndOfFdHeadSplit(coreNum * vecCubeRatio),
-        s2SplitStartIdxOfCore(coreNum) {}
+    FlashDecodeResult(uint32_t aicNum, uint32_t aivNum) :
+        fdBN2Idx(aicNum),
+        fdMIdx(aicNum),
+        fdWorkspaceIdx(aicNum),
+        fdS2SplitNum(aicNum),
+        fdMSize(aicNum),
+        fdIdx(aivNum),
+        fdMStart(aivNum),
+        fdMNum(aivNum) {}
 };
 
 // 分核功能模块输出：FA阶段的核间分核信息
 struct SplitResult {
     uint32_t usedCoreNum { 0U };        // 使用的核数量
-    uint32_t vecCubeRatio { 0U };        // vec 与 cube 核数比例
     std::vector<uint32_t> bN2End {};    // 每个核处理数据的BN2结束点
     std::vector<uint32_t> gS1End {};    // 每个核处理数据的GS1结束点
     std::vector<uint32_t> s2End {};     // 每个核处理数据的S2结束点
+    std::vector<uint32_t> firstFdDataWorkspaceIdx {};     // 每个核第一份归约任务的存放位置
     int64_t maxCost { 0 };            // 慢核开销
     uint32_t numOfFdHead { 0U };        // 归约任务数量
     uint32_t maxS2SplitNum { 0U };      // 单个归约任务最大分核数量
-    uint32_t usedVecNumOfFd { 0U };     // 归约过程使用的vector数量
     FlashDecodeResult fdRes { 0U, 0U };     // FD信息
 
-    SplitResult(uint32_t coreNum, uint32_t ratio) :
-        bN2End(coreNum),
-        vecCubeRatio(ratio),
-        gS1End(coreNum),
-        s2End(coreNum),
-        fdRes(coreNum, ratio) {};
+    SplitResult(uint32_t aicNum, uint32_t aivNum) :
+        bN2End(aicNum),
+        gS1End(aicNum),
+        s2End(aicNum),
+        firstFdDataWorkspaceIdx(aicNum),
+        fdRes(aicNum, aivNum) {};
 };
 
 // 分核功能模块内部使用：记录切分信息
@@ -215,6 +214,7 @@ struct AssignContext {
     int64_t unassignedCost { 0 };
     uint32_t usedCoreNum { 0U };
     uint32_t curKvSplitPart { 1U };
+    uint32_t curFdDataNum { 1U };
 
     int64_t bN2Cost { 0 };
     uint32_t bN2Block { 0U };
@@ -233,9 +233,9 @@ public:
 private:
   bool Prepare(CpuKernelContext &ctx);
   bool ParamsCheck();
-  bool ParamsInit(uint32_t cmpRatio_, uint32_t topK_);
-  bool BalanceSchedule();
-  bool GenMetaData();
+  bool ParamsInit();
+  bool BalanceSchedule(SplitResult &splitRes);
+  bool GenMetaData(SplitResult &splitRes);
   ValidSocVersion ProcessSocVersion();
   // util
   uint32_t GetS1SeqSize(uint32_t bIdx);
@@ -243,19 +243,18 @@ private:
   int64_t CalcPreTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
   int64_t CalcNextTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
   Range<int64_t> CalcS2TokenRange(uint32_t s1GIdx, const BatchCache &batchCache);
-  //Range<uint32_t> CalcS2Range(uint32_t s1GIdx,const BatchCache &batchCache);
   int64_t WinCalcCost(uint32_t basicM, uint32_t basicS2);
   int64_t CmpCalcCost(uint32_t basicM, uint32_t basicS2);
-  BlockCost<int64_t> CalcCostTable(uint32_t s1NormalSize, uint32_t s2NormalSize, uint32_t s1GTailSize,
+  void CalcCostTable(uint32_t s1NormalSize, uint32_t s2NormalSize, uint32_t s1GTailSize,
   uint32_t winS2TailSize, uint32_t cmpS2TailSize);
 
   // cache calculation
   void CalcBatchCache(uint32_t bIdx, const SplitContext &splitContext, BatchCache &batchCache);
-  void CalcWinS1GCache(const BlockCost<int64_t> &typeCost, S1GCache &s1GCache, const SplitInfo &splitInfo);
-  void CalcCmpS1GCache(const BlockCost<int64_t> &typeCost, S1GCache &s1GCache, const SplitInfo &splitInfo);
+  void CalcBlockRangeAndTailSize(Range<int64_t> &oriS2TokenRange, const BatchCache &batchCache, S1GCache &s1GCache);
+  void CalcWinS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
+  void CalcCmpS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
+  void GatherWinAndCmpCache(S1GCache &s1GCache);
   void CalcS1GCache(uint32_t s1GIdx, const SplitContext &splitContext, const BatchCache &batchCache, S1GCache &s1GCache);
-  void CopyTmpResult(SplitResult &tmpRes, SplitResult &splitRes);
-  void ClearTmpResult(SplitResult &tmpRes);
 
   // preprocess
   void CalcSplitInfo(SplitContext &splitContext);
@@ -269,14 +268,15 @@ private:
   int64_t CalcCurBlockCost(AssignContext &assignContext);
   void AssignByBlock(const SplitContext &splitContext, AssignContext &assignContext);
   void ForceAssign(const SplitContext &splitContext, AssignContext &assignContext);
+  void AssignBlocksToCore(const SplitContext &splitContext, AssignContext &assignContext, SplitResult &result);
 
   // FD
   bool IsNeedRecordFDInfo(const AssignContext &assignContext, const SplitResult &splitRes);
   void RecordFDInfo(const SplitContext &splitContext, const AssignContext &assignContext, SplitResult &result);
 
   // main
-  void SplitFD(SplitResult &result);
-  void CalcSplitPlan(uint32_t coreNum, int64_t costLimit, const SplitContext &splitContext, SplitResult &result);
+  void SplitFD(SplitResult &splitRes);
+  void CalcSplitPlan(int64_t costLimit, const SplitContext &splitContext, SplitResult &result);
   void SplitCore();
 
 private:
@@ -285,7 +285,10 @@ private:
 
   // input
   Tensor *actSeqLenQ_ = nullptr;
-  Tensor *actSeqLenKV_ = nullptr;
+  Tensor *actSeqLenOriKV_ = nullptr;
+  Tensor *actSeqLenCmpKV_ = nullptr;
+  Tensor *SeqUsedQ_ = nullptr;
+  Tensor *SeqUsedKV_ = nullptr;
 
   // output
   Tensor *metaData_ = nullptr;
@@ -294,14 +297,15 @@ private:
   uint32_t batchSize_ = 0;
   uint32_t querySeqSize_ = 0;
   uint32_t queryHeadNum_ = 0;
-  uint32_t kvSeqSize_ = 0;
+  uint32_t KVSeqSize_ = 0;
   uint32_t kvHeadNum_ = 0;
   uint32_t headDim_ = 0;
-  uint32_t topK_ = 0;
-  uint32_t cmpRatio_ = 1;
+  uint32_t oriTopK_ = 0;
+  uint32_t cmpTopK_ = 0;
+  uint32_t cmpRatio_ = -1;
   uint32_t winMaskMode_ = 4;
   uint32_t cmpMaskMode_ = 3;
-  int64_t winLeft_ = 128;
+  int64_t winLeft_ = 127;
   int64_t winRight_ = 0;
   std::string layoutQuery_ = "BSND";
   std::string layoutKV_ = "PA_ND";
@@ -320,18 +324,21 @@ private:
   uint32_t s2BaseSize_ = 0;
   uint32_t gS1BaseSizeOfFd_ = 0;
   bool isS1G_ = true;
-  SplitResult splitRes_ {36, 2};
   bool isCFA = false;
   bool isSCFA = false;
   bool supportFd = false;
   uint32_t sparseMode_ = 0;
   uint32_t attentionMode_ = 1;
+  BlockCost<int64_t> typeCost_;
 
 private:
   enum class ParamId : uint32_t {
     // input
     actSeqLenQ = 0,
-    actSeqLenKV = 1,
+    actSeqLenOriKV = 1,
+    actSeqLenCmpKV = 2,
+    SeqUsedQ = 3,
+    SeqUsedKV = 4,
     // output
     metaData = 0,
   };

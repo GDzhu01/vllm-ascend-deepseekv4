@@ -25,13 +25,12 @@ namespace Compressor
 {
 using AscendC::CrossCoreSetFlag;
 using AscendC::CrossCoreWaitFlag;
-
-static constexpr uint64_t BLOCK_VEC_BASE_BUFFER_SIZE = 32 * 1024; // 32k
-static constexpr uint32_t DATABLOCK_BYTES = 32;
-static constexpr float FLOAT_ZERO = 0;
 template <typename COMP> class CompressorBlockVector {
 public:
     static constexpr bool X_DTYPE = COMP::xDtype == X_DTYPE::BF16;
+    static constexpr uint64_t BLOCK_VEC_BASE_BUFFER_SIZE = 32 * 1024; // 32k
+    static constexpr uint32_t DATABLOCK_BYTES = 32;
+    static constexpr float FLOAT_ZERO = 0;
     // =================================类型定义区=================================
     // 中间计算数据类型为float，高精度模式
     using T = float;

@@ -66,9 +66,10 @@ enum class ROTARY_MODE : std::uint8_t {
     INTERLEAVE = static_cast<std::uint8_t>(2)
 };
 
-enum class EMPTY_TENSOR_MODE:uint8_t {
-    NON_EMPTY = 0,
-    EMPTY_X = 1
+enum class TEMPLATE_ID:uint8_t {
+    NORMAL = 0,
+    EMPTY_X = 1,
+    PERF = 2
 };
 
 template <X_LAYOUT X_L, X_DTYPE X_T, COFF C, ROTARY_MODE Rotary_Mode, typename... Args>
@@ -97,6 +98,8 @@ struct ConstInfo {
     uint32_t coreGroupNum = 0;
     uint32_t singleCoreDealTcBasicNum = 0;
     uint32_t dIdx = 0;
+    uint32_t bIdxOfLastTc = 0;
+    uint32_t sIdxOfLastTc = 0;
 
     // shape及参数
     uint32_t batchSize = 0;
@@ -130,14 +133,23 @@ struct ConstInfo {
 struct RunInfo {
     bool isValid = false;
 
-    // c1v1分核信息 b是左闭右闭，s是左闭右开
+    // 增加字段
+    uint32_t dealTcNum = 0;
+    // 右边相关信息
     uint32_t bStart = 0;
     uint32_t sStart = 0;
+    uint32_t dealSeqCnt = 0;
+    // 左边相关信息
+    uint32_t preBStart = 0;
+    uint32_t preSStart = 0;
+    uint32_t preDealSeqCnt  = 0;     // 左边需要处理的s大小
+    uint32_t preFirstSeqCnt = 0;    // 左边首块大小
+
+
     uint32_t bEnd = 0;
     uint32_t sEnd = 0;
     uint32_t bStartSeqIdx = 0;
     uint32_t bEndSeqIdx = 0;
-    uint32_t dealTcNum = 0;
 
     // v2分核信息 sc是左闭右开
     uint32_t scStart = 0;
@@ -146,6 +158,23 @@ struct RunInfo {
 
     // vec1Res offset
     uint64_t vec1ResOffset = 0;
+};
+
+struct Vec2RunInfo {
+    // uint32_t bStart = 0;
+    uint32_t sStart = 0;
+    uint32_t bEnd = 0;
+    uint32_t sEnd = 0;
+    // v2分核信息 sc是左闭右开
+    uint32_t scStart = 0;
+    uint32_t scEnd = 0;
+    // uint32_t dealScSize = 0;
+
+    // 增加字段
+    uint32_t bStart = 0;
+    uint32_t compressedId = 0;
+    uint32_t bCompressedId = 0;
+    uint32_t dealScSize = 0;
 };
 
 struct MSplitInfo {
@@ -221,6 +250,13 @@ __aicore__ inline void CopySingleMatrixNDToNZ(LocalTensor<T> l1Tensor, const Glo
     nd2nzPara.srcNdMatrixStride = 0;
     nd2nzPara.dstNzMatrixStride = 0;
     DataCopy(l1Tensor, gmTensor, nd2nzPara);
+}
+template <typename T>
+__aicore__ inline void DumpTensorForDim2(GlobalTensor<T> tensor, uint32_t desc, uint32_t dumpSize, uint32_t row, uint32_t col)
+{
+    uint32_t array2[] = {static_cast<uint32_t>(row), static_cast<uint32_t>(col)};
+    AscendC::ShapeInfo shapeInfo(2, array2);
+    // AscendC::DumpTensor(tensor, desc, dumpSize, shapeInfo);
 }
 
 template <typename T>

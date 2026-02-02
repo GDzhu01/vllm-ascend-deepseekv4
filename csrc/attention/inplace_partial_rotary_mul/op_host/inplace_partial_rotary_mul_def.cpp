@@ -43,14 +43,15 @@ public:
             .Format({ge::FORMAT_ND, ge::FORMAT_ND, ge::FORMAT_ND})
             .UnknownShapeFormat({ge::FORMAT_ND, ge::FORMAT_ND, ge::FORMAT_ND});
         this->Attr("mode").AttrType(OPTIONAL).Int(0);
-        this->Attr("partial_slice").AttrType(OPTIONAL).ListInt({0, 0}); // TODO
-
+        this->Attr("partial_slice").AttrType(OPTIONAL).ListInt({0, 0});
         OpAICoreConfig regbaseCfg;
         regbaseCfg.DynamicCompileStaticFlag(true)
             .DynamicRankSupportFlag(true)
             .DynamicShapeSupportFlag(true)
             .ExtendCfgInfo("opFile.value", "inplace_partial_rotary_mul");
         this->AICore().AddConfig("ascend910_95", regbaseCfg);
+        this->AICore().AddConfig("ascend910b", regbaseCfg);
+        this->AICore().AddConfig("ascend910_93", regbaseCfg);
 
     }
 };

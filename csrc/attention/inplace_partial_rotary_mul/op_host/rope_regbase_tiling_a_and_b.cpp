@@ -61,7 +61,7 @@ ge::graphStatus RopeRegBaseTilingClassAAndB::ComputeUbFactor()
     // UB占用大小：
     // 111d：2 * (2b + 1) * dAlign
     // b1sd：2 * 4 * b * dAlign
-    int64_t dSize = CeilAlign(d_ * GetSizeByDataType(dtype_) / dSplitCoef_, this->blockSize_) * dSplitCoef_;
+    int64_t dSize = CeilAlign(sliceLength_ * GetSizeByDataType(dtype_) / dSplitCoef_, this->blockSize_) * dSplitCoef_;
     int64_t numOfDAvailable = FloorDiv(static_cast<int64_t>(aicoreParams_.ubSize), DOUBLE_BUFFER * dSize);
     OPS_ERR_IF(numOfDAvailable < UB_FACTOR,
                 OPS_LOG_E(context_, "D is too big to load in ub, ubSize is %ld bytes, loading requires %ld bytes.",
@@ -118,7 +118,7 @@ void RopeRegBaseTilingClassAAndB::SetTilingData()
               tilingData_.get_blockFactorS(), tilingData_.get_ubLoopNumS(), tilingData_.get_ubFactorS(),
               tilingData_.get_ubTailFactorS(), tilingData_.get_ubLoopNumB(), tilingData_.get_ubFactorB(),
               tilingData_.get_ubTailFactorB(), tilingData_.get_ubLoopNumN(), tilingData_.get_ubFactorN(),
-              tilingData_.get_ubTailFactorN(), tilingData_.get_rotaryMode(), tilingKey_, tilingData_.get_sliceStart(), tilingData_.get_sliceEnd(), tilingData_.get_sliceLength());
+              tilingData_.get_ubTailFactorN(), tilingData_.get_rotaryMode(), GetTilingKey(), tilingData_.get_sliceStart(), tilingData_.get_sliceEnd(), tilingData_.get_sliceLength());
 }
 
 ge::graphStatus RopeRegBaseTilingClassAAndB::DoOpTiling()

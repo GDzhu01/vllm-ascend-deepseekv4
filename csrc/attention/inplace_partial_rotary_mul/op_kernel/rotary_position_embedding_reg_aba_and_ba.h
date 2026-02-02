@@ -137,11 +137,11 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::InitAll
         this->dSplitCoef_ = QUARTER_MODE_COEF;
     }
     this->copyInQSplitCoef_ = dSplitCoef_;
-    this->dAlign_ = ops::CeilAlign<int64_t>(D_ / dSplitCoef_, BLOCK_TYPE_SIZE / sizeof(T)) * dSplitCoef_;
+    this->dAlign_ = ops::CeilAlign<int64_t>(tilingData_->sliceLength / dSplitCoef_, BLOCK_TYPE_SIZE / sizeof(T)) * dSplitCoef_;
     if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::DEEPSEEK_INTERLEAVE)) {
         this->copyInQSplitCoef_ = 1;
         this->ubCopyInStride =
-            (this->dAlign_ * sizeof(T) - ops::CeilAlign<int64_t>(D_ * sizeof(T), BLOCK_TYPE_SIZE)) / BLOCK_TYPE_SIZE;
+            (this->dAlign_ * sizeof(T) - ops::CeilAlign<int64_t>(tilingData_->sliceLength * sizeof(T), BLOCK_TYPE_SIZE)) / BLOCK_TYPE_SIZE;
     }
     this->pipe_->InitBuffer(this->qInQueue_, DOUBLE_BUFFER, ubFactorB_ * ubFactorS_ * ubFactorN_ * dAlign_ * sizeof(T));
     this->pipe_->InitBuffer(
@@ -254,7 +254,7 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::CopyInC
     loopParams.loop1Size = bLength;
     loopParams.loop2SrcStride = 0;
     loopParams.loop2DstStride = 0;
-    loopParams.loop1SrcStride = tilingData_->S * D_ * sizeof(T);
+    loopParams.loop1SrcStride = tilingData_->S * tilingData_->sliceLength * sizeof(T);
     loopParams.loop1DstStride = ubFactorS_ * dAlign_ * sizeof(T);
     SetLoopModePara(loopParams, DataCopyMVType::OUT_TO_UB);
     DataCopyPadExtParams<T> copyPadExtparams;
@@ -264,11 +264,11 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::CopyInC
     copyPadExtparams.paddingValue = 0;
     DataCopyExtParams copyExtParams;
     copyExtParams.blockCount = sLength * dSplitCoef_;
-    copyExtParams.blockLen = D_ * sizeof(T) / dSplitCoef_;
+    copyExtParams.blockLen = tilingData_->sliceLength * sizeof(T) / dSplitCoef_;
     copyExtParams.srcStride = 0;
     copyExtParams.dstStride = 0;
-    DataCopyPad(cosUb, this->cosGm_[bStart * tilingData_->S * D_ + sStart * D_], copyExtParams, copyPadExtparams);
-    DataCopyPad(sinUb, this->sinGm_[bStart * tilingData_->S * D_ + sStart * D_], copyExtParams, copyPadExtparams);
+    DataCopyPad(cosUb, this->cosGm_[bStart * tilingData_->S * tilingData_->sliceLength + sStart * tilingData_->sliceLength], copyExtParams, copyPadExtparams);
+    DataCopyPad(sinUb, this->sinGm_[bStart * tilingData_->S * tilingData_->sliceLength + sStart * tilingData_->sliceLength], copyExtParams, copyPadExtparams);
     ResetLoopModePara(DataCopyMVType::OUT_TO_UB);
     this->cosInQueue_.template EnQue(cosUb);
     this->sinInQueue_.template EnQue(sinUb);
@@ -291,8 +291,8 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::CopyInQ
     SetLoopModePara(loopParams, DataCopyMVType::OUT_TO_UB);
     DataCopyExtParams copyExtParams;
     copyExtParams.blockCount = sLength * copyInQSplitCoef_;
-    copyExtParams.blockLen = D_ * sizeof(T) / copyInQSplitCoef_;
-    copyExtParams.srcStride = 0;
+    copyExtParams.blockLen = tilingData_->sliceLength * sizeof(T) / copyInQSplitCoef_;
+    copyExtParams.srcStride = (tilingData_->D - tilingData_->sliceLength) * sizeof(T);
     copyExtParams.dstStride = ubCopyInStride;
     DataCopyPadExtParams<T> copyPadExtparams;
     copyPadExtparams.isPad = false;
@@ -300,7 +300,7 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::CopyInQ
     copyPadExtparams.rightPadding = 0;
     copyPadExtparams.paddingValue = 0;
     DataCopyPad(
-        target, source[bStart * nTotalSize * tilingData_->S * D_ + nStart * tilingData_->S * D_ + sStart * D_],
+        target, source[bStart * nTotalSize * tilingData_->S * D_ + nStart * tilingData_->S * D_ + sStart * D_ + tilingData_->sliceStart],
         copyExtParams, copyPadExtparams);
     ResetLoopModePara(DataCopyMVType::OUT_TO_UB);
     this->qInQueue_.template EnQue(target);
@@ -323,11 +323,11 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::CopyOut
     SetLoopModePara(loopParams, DataCopyMVType::UB_TO_OUT);
     DataCopyExtParams copyExtParams;
     copyExtParams.blockCount = sLength * dSplitCoef_;
-    copyExtParams.blockLen = D_ * sizeof(T) / dSplitCoef_;
+    copyExtParams.blockLen = tilingData_->sliceLength * sizeof(T) / dSplitCoef_;
     copyExtParams.srcStride = 0;
-    copyExtParams.dstStride = 0;
+    copyExtParams.dstStride = (tilingData_->D - tilingData_->sliceLength) * sizeof(T);
     DataCopyPad(
-        target[bStart * nTotalSize * tilingData_->S * D_ + nStart * tilingData_->S * D_ + sStart * D_], source,
+        target[bStart * nTotalSize * tilingData_->S * D_ + nStart * tilingData_->S * D_ + sStart * D_ + tilingData_->sliceStart], source,
         copyExtParams);
     ResetLoopModePara(DataCopyMVType::UB_TO_OUT);
     this->qOutQueue_.FreeTensor(source);
@@ -342,19 +342,19 @@ __aicore__ inline void RotaryPositionEmbeddingABAAndBA<T, IsBBoardcast>::Compute
     if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::HALF)) {
         BatchHalfAlignVF<T, IsBBoardcast>(
             (__local_mem__ T*)inUb.GetPhyAddr(), (__local_mem__ T*)cos.GetPhyAddr(), (__local_mem__ T*)sin.GetPhyAddr(),
-            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, D_, dAlign_, ubFactorS_, ubFactorN_);
+            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, tilingData_->sliceLength, dAlign_, ubFactorS_, ubFactorN_);
     } else if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::INTERLEAVE)) {
         BatchInterleaveModeVF<T, IsBBoardcast>(
             (__local_mem__ T*)inUb.GetPhyAddr(), (__local_mem__ T*)cos.GetPhyAddr(), (__local_mem__ T*)sin.GetPhyAddr(),
-            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, D_, dAlign_, ubFactorS_, ubFactorN_);
+            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, tilingData_->sliceLength, dAlign_, ubFactorS_, ubFactorN_);
     } else if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::QUARTER)) {
         BatchQuarterAlignVF<T, IsBBoardcast>(
             (__local_mem__ T*)inUb.GetPhyAddr(), (__local_mem__ T*)cos.GetPhyAddr(), (__local_mem__ T*)sin.GetPhyAddr(),
-            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, D_, dAlign_, ubFactorS_, ubFactorN_);
+            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, tilingData_->sliceLength, dAlign_, ubFactorS_, ubFactorN_);
     } else {
         BatchDeepSeekInterleaveModeVF<T, IsBBoardcast>(
             (__local_mem__ T*)inUb.GetPhyAddr(), (__local_mem__ T*)cos.GetPhyAddr(), (__local_mem__ T*)sin.GetPhyAddr(),
-            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, D_, dAlign_, ubFactorS_, ubFactorN_);
+            (__local_mem__ T*)outUb.GetPhyAddr(), sLength, bLength, nLength, tilingData_->sliceLength, dAlign_, ubFactorS_, ubFactorN_);
     }
     this->qInQueue_.FreeTensor(inUb);
     this->qOutQueue_.template EnQue(outUb);
