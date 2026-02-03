@@ -2199,29 +2199,29 @@ class NPUModelRunner(GPUModelRunner):
                         else:
                             attn_metadata[
                                 layer_name] = attn_metadata_full_attention
-
-                # ------------- make swa metadata -----------------
-                kv_cache_spec = AttentionSpec(
-                    block_size=self.block_size,
-                    num_kv_heads=1,
-                    head_size=512,
-                    dtype=torch.bfloat16,
-                )
-                swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                    kv_cache_spec,
-                    list(self.runner_only_attn_layers),
-                    self.vllm_config,
-                    self.device,
-                    AscendDSAMetadata,
-                    supports_dcp_with_varlen=False,
-                )
-                for layer_name in self.runner_only_attn_layers:
-                    common_prefix_len = 0
-                    swa_attn_metadata = builder.build(
-                        common_prefix_len=common_prefix_len,
-                        common_attn_metadata=common_attn_metadata)
-                    attn_metadata[layer_name] = swa_attn_metadata
-                # ---------------------------------------------------
+                if self.use_compress:
+                    # ------------- make swa metadata -----------------
+                    kv_cache_spec = AttentionSpec(
+                        block_size=self.block_size,
+                        num_kv_heads=1,
+                        head_size=512,
+                        dtype=torch.bfloat16,
+                    )
+                    swa_metadata_builder = self.attn_backend.get_builder_cls()(
+                        kv_cache_spec,
+                        list(self.runner_only_attn_layers),
+                        self.vllm_config,
+                        self.device,
+                        AscendDSAMetadata,
+                        supports_dcp_with_varlen=False,
+                    )
+                    for layer_name in self.runner_only_attn_layers:
+                        common_prefix_len = 0
+                        swa_attn_metadata = builder.build(
+                            common_prefix_len=common_prefix_len,
+                            common_attn_metadata=common_attn_metadata)
+                        attn_metadata[layer_name] = swa_attn_metadata
+                    # ---------------------------------------------------
 
         return attn_metadata
 
@@ -2590,8 +2590,11 @@ class NPUModelRunner(GPUModelRunner):
         kv_states = self.initialize_kv_state()
 
         if has_kv_transfer_group():
-            get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
-
+            if self.use_compress:
+                get_kv_transfer_group().register_kv_caches(kv_caches, kv_states)
+            else:
+                get_kv_transfer_group().register_kv_caches(kv_caches)
+                
     def initialize_kv_state(self):
         hf_config = self.model_config.hf_config
         if hf_config.model_type != 'deepseek_v4':
