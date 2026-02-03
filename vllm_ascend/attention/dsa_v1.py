@@ -23,7 +23,7 @@ from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
-from vllm_ascend.attention.utils import AscendCommonAttentionMetadata,split_decodes_and_prefills
+from vllm_ascend.attention.utils import AscendCommonAttentionMetadata, set_core_limit,split_decodes_and_prefills
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
@@ -1608,55 +1608,69 @@ class AscendDSAImpl(DSAAttentionImpl):
         with_prefill: bool = False,
     ):
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
-        q = self.inderxer_wq_b(qr)
-        q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
-        ## rope
-        if not with_prefill:
-            q = triton_apply_rope_partial_in_place(q, sin, cos)
-        else:
-            q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-            q_pe = self.rope_single(q_pe, cos, sin)
-            q = torch.cat([q_nope, q_pe], dim=-1)
 
-        q = rotate_activation(q, attn_metadata)
         coff = 2 if self.compressor_overlap else 1
 
-        if with_prefill:
-            kv_block_table = attn_metadata.prefill.state_block_table
-            score_block_table = attn_metadata.prefill.state_block_table
-        else:
-            kv_block_table = attn_metadata.decode.state_block_table
-            score_block_table = attn_metadata.decode.state_block_table
+        event1 = torch.npu.current_stream().record_event() \
+            if self.multistream_dsa_preprocess else None
+        with set_core_limit(torch.npu.current_stream(), 18, 36, enabled=self.multistream_dsa_preprocess):
+            weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
 
-        kv,_,_,_,_ = torch.ops._C_ascend.compressor(
-            x,
-            self.indexcom_wkv.weight,
-            self.indexcom_wgate.weight,
-            c4_indexer_kv_state,
-            c4_indexer_score_state,
-            self.indexcom_ape,
-            self.indexcom_norm.weight,
-            compressed_sin.view(-1, compressed_sin.shape[-1]),
-            compressed_cos.view(-1, compressed_cos.shape[-1]),
-            kv_block_table = kv_block_table,
-            score_block_table = score_block_table,
-            cu_seqlens = actual_seq_lengths_query,
-            seqused = None, #actual_seq_lengths_key,
-            start_pos = attn_metadata.prefill.start_pos if with_prefill else attn_metadata.decode.start_pos,
-            rope_head_dim = self.rope_head_dim,
-            cmp_ratio = self.compress_ratio,
-            coff = coff,
-            norm_eps = self.compressor_norm_eps,
-            rotary_mode = 2,
-            enable_grad=False
-        )
+            if with_prefill:
+                kv_block_table = attn_metadata.prefill.state_block_table
+                score_block_table = attn_metadata.prefill.state_block_table
+            else:
+                kv_block_table = attn_metadata.decode.state_block_table
+                score_block_table = attn_metadata.decode.state_block_table
 
-        if kv.numel() == 0:
-            kv = None
-        elif self.indexer.compressor.rotate:
-            kv = rotate_activation(kv, attn_metadata)
+            kv,_,_,_,_ = torch.ops._C_ascend.compressor(
+                x,
+                self.indexcom_wkv.weight,
+                self.indexcom_wgate.weight,
+                c4_indexer_kv_state,
+                c4_indexer_score_state,
+                self.indexcom_ape,
+                self.indexcom_norm.weight,
+                compressed_sin.view(-1, compressed_sin.shape[-1]),
+                compressed_cos.view(-1, compressed_cos.shape[-1]),
+                kv_block_table = kv_block_table,
+                score_block_table = score_block_table,
+                cu_seqlens = actual_seq_lengths_query,
+                seqused = None, #actual_seq_lengths_key,
+                start_pos = attn_metadata.prefill.start_pos if with_prefill else attn_metadata.decode.start_pos,
+                rope_head_dim = self.rope_head_dim,
+                cmp_ratio = self.compress_ratio,
+                coff = coff,
+                norm_eps = self.compressor_norm_eps,
+                rotary_mode = 2,
+                enable_grad=False
+            )
 
-        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
+            if kv.numel() == 0:
+                kv = None
+            elif self.indexer.compressor.rotate:
+                kv = rotate_activation(kv, attn_metadata)
+
+
+        with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
+            with set_core_limit(torch.npu.current_stream(), 6, 12, enabled=self.multistream_dsa_preprocess):
+                if event1:
+                    torch.npu.current_stream().wait_event(event1)
+                q = self.inderxer_wq_b(qr)
+                q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
+                ## rope
+                if not with_prefill:
+                    q = triton_apply_rope_partial_in_place(q, sin, cos)
+                else:
+                    q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+                    q_pe = self.rope_single(q_pe, cos, sin)
+                    q = torch.cat([q_nope, q_pe], dim=-1)
+
+                q = rotate_activation(q, attn_metadata)
+        
+        if self.multistream_dsa_preprocess:
+            torch.npu.current_stream().wait_stream(
+                attention_calculation_stream())
 
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8

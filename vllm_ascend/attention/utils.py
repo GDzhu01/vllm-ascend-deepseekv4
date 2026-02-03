@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, List, Optional
+from contextlib import contextmanager
 
 import torch
 import torch.nn.functional as F
@@ -13,6 +14,7 @@ from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 
 from vllm_ascend.utils import (AscendDeviceType, get_ascend_config,
                                get_ascend_device_type)
+                               
 
 
 def using_paged_attention(runtime_shape: int, vllm_config: VllmConfig) -> bool:
@@ -281,3 +283,12 @@ def transdata(nd_mat, block_size: tuple = (16, 16)):
         nz_mat,
         (nz_mat.shape[0], nz_mat.shape[1] * nz_mat.shape[2], nz_mat.shape[3]))
     return nz_mat
+
+
+@contextmanager
+def set_core_limit(stream, cube_num=-1, vector_num=-1, enabled=False):
+    if enabled:
+        torch.npu.set_stream_limit(stream, cube_num, vector_num)
+    yield
+    if enabled:
+        torch.npu.reset_stream_limit(stream)
