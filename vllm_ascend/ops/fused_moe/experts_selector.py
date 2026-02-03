@@ -278,8 +278,7 @@ def _select_experts_with_fusion_ops(
             norm_type=2,       # 归一化类型（可选）
             out_flag=False          # 是否输出归一化结果（可选）
         )
-        
-        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+
         return topk_weights, topk_ids
 
         scores = F.softplus(router_logits).sqrt()
