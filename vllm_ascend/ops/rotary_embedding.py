@@ -61,17 +61,20 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype,
     global _cos
     global _sin
 
-    if _cos_mla is not None or \
-        _sin_mla is not None or \
-        _cos is not None or \
-        _sin is not None:
-        return
+    # if _cos_mla is not None or \
+    #     _sin_mla is not None or \
+    #     _cos is not None or \
+    #     _sin is not None:
+    #     return
 
     model_config = vllm_config.model_config
     max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
 
     if model_config.use_mla:
-        rope_dim = model_config.hf_text_config.qk_rope_head_dim
+        if hasattr(model_config.hf_text_config, 'qk_rope_head_dim'):
+            rope_dim = model_config.hf_text_config.qk_rope_head_dim
+        else:
+            rope_dim = model_config.hf_text_config.rope_head_dim # zyl_modify
         _cos_mla = torch.ones(max_num_batched_tokens,
                               1,
                               1,
