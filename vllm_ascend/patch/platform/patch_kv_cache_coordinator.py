@@ -16,7 +16,8 @@ from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 
 # TODO: When running dsv4, this environment variable must be set to True. Consider how to remove it.
-USE_MULTI_BLOCK_POOL = os.environ.get("USE_MULTI_BLOCK_POOL")
+from vllm_ascend import envs
+USE_MULTI_BLOCK_POOL = envs.USE_MULTI_BLOCK_POOL
 
 
 class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
