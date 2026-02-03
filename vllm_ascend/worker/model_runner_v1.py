@@ -978,6 +978,7 @@ class NPUModelRunner(GPUModelRunner):
             total_num_scheduled_tokens_compressed_list = [sum(num_scheduled_tokens_compressed) for
                                                           num_scheduled_tokens_compressed in
                                                           num_scheduled_tokens_compressed_list]
+            num_reqs_actual = num_reqs
 
         for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
@@ -1171,7 +1172,8 @@ class NPUModelRunner(GPUModelRunner):
                         )
                 if isinstance(builder, AscendDSAMetadataBuilder):
                     compress_ratio = attn_group.kv_cache_spec.compress_ratio
-                    extra_attn_metadata_args = dict(compress_ratio=compress_ratio)
+                    # TODO(zxr)
+                    extra_attn_metadata_args = dict(compress_ratio=compress_ratio, num_reqs_actual=num_reqs_actual)
                 attn_metadata_i = builder.build(
                     common_prefix_len=common_prefix_len,
                     common_attn_metadata=common_attn_metadata,

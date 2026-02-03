@@ -512,6 +512,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     ) -> AscendDSAMetadata:
         num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc
+        num_reqs_actual = kwargs.get("num_reqs_actual", None)
 
         self.num_decodes, self.num_prefills, self.num_decode_tokens, self.num_prefill_tokens = \
             split_decodes_and_prefills(common_attn_metadata, decode_threshold=self.decode_threshold)
@@ -553,7 +554,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         if self.num_decodes > 0:
             decode_metadata = self.build_decode_metadata(
-                common_prefix_len, common_attn_metadata)
+                common_prefix_len, common_attn_metadata, num_reqs_actual)
 
         return self.metadata_cls(  # type: ignore
             num_input_tokens=common_attn_metadata.num_input_tokens,
@@ -853,6 +854,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self,
         common_prefix_len: int,
         common_attn_metadata: AscendCommonAttentionMetadata,
+        num_reqs_actual: Optional[int],
     ) -> AscendDSADecodeMetadata:
         num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc[:self.num_decodes + 1]
@@ -916,6 +918,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         self.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
+        if num_reqs_actual is not None and num_reqs_actual < self.num_decodes:
+            print(f'{num_reqs=} {num_reqs_actual=} {self.num_decode_tokens=} {self.num_decodes=} {self.start_pos_decode[:self.num_decodes]=} {seq_lens_q=} {query_start_loc=} {self.seq_lens[:self.num_decodes]=}')
+            self.start_pos_decode[num_reqs_actual:].fill_(0)
         
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
