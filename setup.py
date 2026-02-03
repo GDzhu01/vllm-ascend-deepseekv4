@@ -75,7 +75,8 @@ def get_value_from_lines(lines: List[str], key: str) -> str:
 
 def get_chip_type() -> str:
     try:
-        if envs.SOC_VERSION is 'ascend910_95':
+        if envs.SOC_VERSION == 'ascend910_95':
+            logging.info(f"Current building ops with SOC_VERSION: ascend910_95")
             return envs.SOC_VERSION
         npu_info_lines = subprocess.check_output(
             ['npu-smi', 'info', '-l']).decode().strip().split('\n')
@@ -345,6 +346,7 @@ class cmake_build_ext(build_ext):
             "910b": "ascend910b1",
             "910c": "ascend910_9392",
             "310p": "ascend310p1",
+            "ascend910_95": "ascend910_95",
         }
         CANN_SOC_VERSION = soc_version_map.get(envs.SOC_VERSION,
                                                envs.SOC_VERSION)

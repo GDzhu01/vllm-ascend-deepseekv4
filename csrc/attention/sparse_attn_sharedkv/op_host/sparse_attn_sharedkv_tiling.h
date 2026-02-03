@@ -27,7 +27,7 @@
 #include "platform/platform_info.h"
 
 namespace optiling {
-// // ------------------公共定义--------------------------
+// ------------------公共定义--------------------------
 struct SASTilingRequiredParaInfo {
     const gert::CompileTimeTensorDesc *desc;
     const gert::StorageShape *shape;
@@ -76,10 +76,12 @@ struct InnerSplitParams {
 constexpr uint32_t Q_INDEX = 0;
 constexpr uint32_t ORI_KV_INDEX = 1;
 constexpr uint32_t CMP_KV_INDEX = 2;
+constexpr uint32_t ORI_SPARSE_INDICES_INDEX = 3;
 constexpr uint32_t CMP_SPARSE_INDICES_INDEX = 4;
 constexpr uint32_t ORI_BLOCK_TABLE_INDEX = 5;
 constexpr uint32_t CMP_BLOCK_TABLE_INDEX = 6;
 constexpr uint32_t CU_SEQLENS_Q_INDEX = 7;
+constexpr uint32_t SEQUSED_Q_INDEX = 10;
 constexpr uint32_t SEQUSED_KV_INDEX = 11;
 constexpr uint32_t SINKS_INDEX = 12;
 constexpr uint32_t METADATA_INDEX = 13;
@@ -87,7 +89,7 @@ constexpr uint32_t METADATA_INDEX = 13;
 constexpr uint32_t ATTN_OUT_INDEX = 0;
 
 // Attributes Index
-constexpr uint32_t ATTR_SOTFMAX_SCALE_INDEX = 0;
+constexpr uint32_t ATTR_SOFTMAX_SCALE_INDEX = 0;
 constexpr uint32_t ATTR_CMP_RATIO_INDEX = 1;
 constexpr uint32_t ATTR_ORI_MASK_MODE_INDEX = 2;
 constexpr uint32_t ATTR_CMP_MASK_MODE_INDEX = 3;
@@ -120,6 +122,10 @@ constexpr uint32_t BYTE_BLOCK = 32;
 constexpr uint32_t HEAD_DIM_LIMIT = 128;
 constexpr uint32_t SPARSE_LIMIT = 2048;
 constexpr uint32_t SPARSE_MODE_LOWER = 3;
+constexpr uint32_t METADATA_LIMIT = 1024;
+constexpr uint32_t DIM_LIMIT = 512;
+constexpr uint32_t TOPK_LIMIT = 512;
+constexpr uint32_t BLOCK_SIZE_LIMIT = 1024;
 
 // -----------算子TilingData定义---------------
 BEGIN_TILING_DATA_DEF(SparseAttnSharedkvSwaParams)
@@ -171,10 +177,12 @@ struct SASParaInfo {
     SASTilingRequiredParaInfo q = {nullptr, nullptr};
     SASTilingOptionalParaInfo oriKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo oriSparseIndices = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpSparseIndices = {nullptr, nullptr};
     SASTilingOptionalParaInfo oriBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cuSeqLensQ = {nullptr, nullptr};
+    SASTilingOptionalParaInfo seqUsedQ = {nullptr, nullptr};
     SASTilingOptionalParaInfo sequsedKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo sinks = {nullptr, nullptr};
     SASTilingOptionalParaInfo metadata = {nullptr, nullptr};
@@ -189,6 +197,9 @@ struct SASParaInfo {
     const char *layoutQ = nullptr;
     const char *layoutKv = nullptr;
 };
+
+static std::string SASDataTypeToSerialString(ge::DataType type);
+std::string SASLayoutToSerialString(SASLayout layout);
 
 // -----------算子Tiling入参信息类---------------
 class SASTilingInfo {
@@ -205,7 +216,9 @@ public:
     uint32_t s1Size = 0;
     int64_t s2Size = 0;
     uint32_t gSize = 0;
-    uint32_t qkHeadDim = 0;
+    uint32_t qHeadDim = 0;
+    uint32_t oriKvHeadDim = 0;
+    uint32_t cmpKvHeadDim = 0;
     uint32_t qTSize = 0; // 仅TND时生效
 
     uint32_t actualLenDimsQ = 0;
@@ -245,6 +258,8 @@ public:
 
     // Layout
     SASLayout qLayout = SASLayout::TND;
+    SASLayout cmpSparseIndicesLayout = SASLayout::TND;
+    SASLayout oriSparseIndicesLayout = SASLayout::TND;
     SASLayout kvLayout = SASLayout::PA_ND;
     SASLayout outLayout = SASLayout::BSND;
 
@@ -260,6 +275,77 @@ public:
     virtual ge::graphStatus Process();
 
 private:
+    void Init();
+
+  void LogErrorDtypeSupport(const std::vector<ge::DataType> &expectDtypeList,
+        const ge::DataType &actualDtype, const std::string &name) const;
+    ge::graphStatus CheckLayoutSupport(const SASLayout &actualLayout, const std::string &name) const;
+    template <typename T>
+    void LogErrorDimNumSupport(const std::vector<T> &expectNumberList,
+        const T &actualValue, const std::string &name) const;
+    template <typename T> 
+    void LogErrorNumberSupport(const std::vector<T> &expectNumberList,
+        const T &actualValue, const std::string &name, const std::string subName) const;
+    ge::graphStatus CheckDimNumSupport(const gert::StorageShape *shape,
+        const std::vector<size_t> &expectDimNumList, const std::string &name) const;
+    void LogErrorLayoutSupport(const std::vector<SASLayout> &expectLayoutList,
+        const SASLayout &actualLayout, const std::string &name) const;
+    ge::graphStatus CheckDimNumInLayoutSupport(const SASLayout &layout,
+        const gert::StorageShape *shape, const std::string &name) const;
+    ge::graphStatus CheckDtypeSupport(const gert::CompileTimeTensorDesc *desc,
+        const std::string &name) const;
+    ge::graphStatus CheckSinglePara() const;
+    ge::graphStatus CheckSingleParaQuery() const;
+    ge::graphStatus CheckSingleParaOriKv() const;
+    ge::graphStatus CheckSingleParaCmpKv() const;
+    ge::graphStatus CheckSingleParaNumHeads() const;
+    ge::graphStatus CheckSingleParaKvHeadNums() const;
+    ge::graphStatus CheckSingleParaOriSparseIndices() const;
+    ge::graphStatus CheckSingleParaCmpSparseIndices() const;
+    ge::graphStatus CheckSingleParaSinks() const;
+    ge::graphStatus CheckSingleParaMetadata() const;
+    ge::graphStatus CheckSingleParaCmpRatio() const;
+    ge::graphStatus CheckSingleParaOriMaskMode() const;
+    ge::graphStatus CheckSingleParaCmpMaskMode() const;
+    ge::graphStatus CheckSingleParaOriWinLeft() const;
+    ge::graphStatus CheckSingleParaOriWinRight() const;
+    ge::graphStatus CheckSingleParaOriBlockTable() const;
+    ge::graphStatus CheckSingleParaCmpBlockTable() const;
+
+    ge::graphStatus CheckParaExistence() const;
+    ge::graphStatus CheckExists(const void *pointer, const std::string &name) const;
+    ge::graphStatus CheckNotExists(const void *pointer, const std::string &name) const;
+    ge::graphStatus CheckExistsByMap(const std::map<std::string, const void *> &paramMap) const;
+    ge::graphStatus CheckNotExistsByMap(const std::map<std::string, const void *> &paramMap) const;
+    ge::graphStatus CheckExistenceByMap(std::map<std::string, const void *> &existMap,
+        std::map<std::string, const void *> &notExistMap) const;
+
+    ge::graphStatus CheckFeature() const;
+    ge::graphStatus CheckFeatureShape() const;
+    ge::graphStatus CheckFeatureLayout() const;
+    ge::graphStatus CheckFeatureDtype() const;
+    ge::graphStatus CheckFeaturePa() const;
+
+    ge::graphStatus CheckMultiParaConsistency();
+    void SetSASShapeCompare();
+    ge::graphStatus CheckDTypeConsistency(const ge::DataType &actualDtype, 
+        const ge::DataType &expectDtype, const std::string &name) const;
+    ge::graphStatus CheckOriAndCmpKv() const;
+    ge::graphStatus CheckAttenOut() const;
+    ge::graphStatus CheckActualSeqLensQ() const;
+    ge::graphStatus CheckActualSeqLens() const;
+    ge::graphStatus CheckBlockTable() const;
+
+    
+    gert::Shape queryShapeCmp_{};
+    gert::Shape oriKvShapeCmp_{};
+    gert::Shape cmpKvShapeCmp_{};
+    gert::Shape oriKvSparseIndicesCmp_{};
+    gert::Shape cmpKvSparseIndicesCmp_{};
+    gert::Shape attenOutShapeCmp_{};
+
+
+private:
     const char *opName_;
     fe::PlatFormInfos *platformInfo_;
     SASParaInfo opParamInfo_;
@@ -271,20 +357,28 @@ private:
     uint32_t gSize_ = 0;
     uint32_t s1Size_ = 0;
     int64_t s2Size_ = 0;
-    uint32_t qkHeadDim_ = 0;
-    uint32_t vHeadDim_ = 0;
+    uint32_t qHeadDim_ = 0;
+    uint32_t oriKvHeadDim_ = 0;
+    uint32_t cmpKvHeadDim_ = 0;
+
     uint32_t qTSize_ = 0; // 仅TND时生效
     uint32_t kvTSize_ = 0; // 仅TND时生效
+    int64_t cmpRatio_ = 0;
     KvStorageMode kvStorageMode_ = KvStorageMode::BATCH_CONTINUOUS;
     uint32_t sparseBlockCount_ = 0;
-
-    SASLayout qLayout_ = SASLayout::BSND;
-    SASLayout outLayout_ = SASLayout::BSND;
+    int64_t oriWinLeft_ = 0;
+    int64_t oriWinRight_ = 0;
+    SASLayout qLayout_ = SASLayout::TND;
+    SASLayout cmpSparseIndicesLayout_ = SASLayout::TND;
+    SASLayout oriSparseIndicesLayout_ = SASLayout::TND;
+    SASLayout outLayout_ = SASLayout::TND;
     SASLayout kvLayout_ = SASLayout::PA_ND;
 
     uint32_t oriMaxBlockNumPerBatch_ = 0;
     uint32_t cmpMaxBlockNumPerBatch_ = 0;
     int64_t blockSize_ = 0;
+    int32_t oriBlockSize_ = 0;
+    int32_t cmpBlockSize_ = 0;
 
     uint32_t aicNum_ = 0;
     uint32_t aivNum_ = 0;
@@ -300,8 +394,6 @@ private:
     ge::DataType cmpKvType_ = ge::DT_FLOAT16;
     ge::DataType outputType_ = ge::DT_FLOAT16;
 };
-
-std::string SASLayoutToSerialString(SASLayout layout);
 
 template <typename T> inline T Align(T num, T rnd)
 {
@@ -344,7 +436,7 @@ public:
     ge::graphStatus GetS2Size();
     ge::graphStatus GetMaxBlockNumPerBatch();
     ge::graphStatus GetBlockSize();
-    ge::graphStatus GetQkHeadDim();
+    ge::graphStatus GetQHeadDim();
     ge::graphStatus GetValueHeadDim();
     ge::graphStatus GetSparseBlockCount();
     ge::graphStatus GetActualseqInfo();
@@ -372,10 +464,13 @@ public:
     int64_t s2Size_ = 0;
     uint32_t headDim_ = 0;
     uint32_t qTSize_ = 0;
-    uint32_t qkHeadDim_ = 0;
-    uint32_t vHeadDim_ = 0;
+    uint32_t qHeadDim_ = 0;
+    uint32_t oriKvHeadDim_ = 0;
+    uint32_t cmpKvHeadDim_ = 0;
     int64_t sparseBlockSize_ = 0;
     int64_t sparseBlockCount_ = 0;
+    int64_t oriWinLeft_ = 0;
+    int64_t oriWinRight_ = 0;
     uint32_t maxActualseq_ = 0;
     bool isSameSeqAllKVTensor_ = true;
     uint32_t actualLenDimsKV_ = 0;
@@ -384,7 +479,9 @@ public:
     uint32_t aicNum_ = 0;
     uint32_t aivNum_ = 0;
     // Layout
-    SASLayout qLayout_ = SASLayout::BSND;
+    SASLayout qLayout_ = SASLayout::TND;
+    SASLayout cmpSparseIndicesLayout_ = SASLayout::TND;
+    SASLayout oriSparseIndicesLayout_ = SASLayout::TND;
     SASLayout outLayout_ = SASLayout::BSND;
     SASLayout kvLayout_ = SASLayout::PA_ND;
     // PageAttention
@@ -412,6 +509,7 @@ public:
     gert::Shape qShape_{};
     gert::Shape oriKvShape_{};
     gert::Shape cmpKvShape_{};
+    gert::Shape oriSparseIndicesShape_{};
     gert::Shape cmpSparseIndicesShape_{};
 };
 

@@ -84,7 +84,7 @@ public:
     __aicore__ inline void Init(__gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
                                 __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
                                 __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t *sequsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
+                                __gm__ uint8_t *seqUsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
                                 __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace,
                                 const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe);
 
@@ -354,7 +354,7 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::Init(
                                 __gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
                                 __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
                                 __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t *sequsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
+                                __gm__ uint8_t *seqUsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
                                 __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace,
                                 const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe)
 {
@@ -369,7 +369,11 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::Init(
     // init tiling data
     tilingData = tiling;
     InitTilingData();
-    InitActualSeqLen(cuSeqlensQ, seqUsedKV);
+    if (LAYOUT_T == SAS_LAYOUT::TND) {
+        InitActualSeqLen(cuSeqlensQ, seqUsedKV);
+    } else {
+        InitActualSeqLen(seqUsedQ, seqUsedKV);
+    }
 
     metadataGm.SetGlobalBuffer((__gm__ uint32_t *)metadata);
     InitCalcParamsEach();
