@@ -1639,11 +1639,15 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_npu(
     int64_t num_heads_kv,
     int64_t head_dim,
     const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q,
     const c10::optional<at::Tensor> &seqused_kv,
     int64_t batch_size,
     int64_t max_seqlen_q,
     int64_t max_seqlen_kv,
-    int64_t topk,
+    int64_t ori_topk,
+ 	int64_t cmp_topk,
     int64_t cmp_ratio,
     int64_t ori_mask_mode,
     int64_t cmp_mask_mode,
@@ -1652,26 +1656,39 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_npu(
     c10::string_view layout_q,
     c10::string_view layout_kv,
     bool has_ori_kv,
-    bool has_cmp_kv)
+    bool has_cmp_kv,
+    const c10::string_view device)
 {
-    at::Tensor output;
+    constexpr int64_t OUTPUT_SIZE = 1024;
+    at::Device output_device = at::Device(std::string(device));
     if (cu_seqlens_q.has_value()) {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
-    }else {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device("npu"));
+        output_device = cu_seqlens_q.value().device();
+    } else if (cu_seqlens_ori_kv.has_value()) {
+        output_device = cu_seqlens_ori_kv.value().device();
+    } else if (cu_seqlens_cmp_kv.has_value()) {
+        output_device = cu_seqlens_cmp_kv.value().device();
+    } else if (seqused_q.has_value()) {
+        output_device = seqused_q.value().device();
+    } else if (seqused_kv.has_value()) {
+        output_device = seqused_kv.value().device();
     }
+    at::Tensor output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(output_device));
 
-    // convert str
+    auto cu_seqlens_q_val = get_valid_tensor(cu_seqlens_q, output_device);
+    auto cu_seqlens_ori_kv_val = get_valid_tensor(cu_seqlens_ori_kv, output_device);
+    auto cu_seqlens_cmp_kv_val = get_valid_tensor(cu_seqlens_cmp_kv, output_device);
+    auto seqused_q_val = get_valid_tensor(seqused_q, output_device);
+    auto seqused_kv_val = get_valid_tensor(seqused_kv, output_device);
+
     std::string layout_q_str = std::string(layout_q);
     std::string layout_kv_str = std::string(layout_kv);
     char *layout_q_ptr = const_cast<char *>(layout_q_str.c_str());
     char *layout_kv_ptr = const_cast<char *>(layout_kv_str.c_str());
 
-    EXEC_NPU_CMD(aclnnSparseAttnSharedkvMetadata, cu_seqlens_q, seqused_kv,
-                    num_heads_q, num_heads_kv, head_dim, batch_size, max_seqlen_q, max_seqlen_kv, topk,
+    EXEC_NPU_CMD(aclnnSparseAttnSharedkvMetadata, cu_seqlens_q_val, cu_seqlens_ori_kv_val, cu_seqlens_cmp_kv_val, seqused_q_val, 
+                    seqused_kv_val, num_heads_q, num_heads_kv, head_dim, batch_size, max_seqlen_q, max_seqlen_kv, ori_topk, cmp_topk,
                     cmp_ratio, ori_mask_mode, cmp_mask_mode, ori_win_left, ori_win_right, layout_q_ptr,
                     layout_kv_ptr, has_ori_kv, has_cmp_kv, output);
-
     return output;
 }
 
@@ -2265,11 +2282,15 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "int num_heads_kv, "
             "int head_dim, "
             "Tensor? cu_seqlens_q=None, "
+            "Tensor? cu_seqlens_ori_kv=None, "
+            "Tensor? cu_seqlens_cmp_kv=None, "
+            "Tensor? seqused_q=None, "
             "Tensor? seqused_kv=None, "
             "int batch_size=0, "
             "int max_seqlen_q=0, "
             "int max_seqlen_kv=0, "
-            "int topk=0, "
+            "int ori_topk=0, "
+            "int cmp_topk=0, "
             "int cmp_ratio=4, "
             "int ori_mask_mode=4, "
             "int cmp_mask_mode=3, "
@@ -2278,7 +2299,8 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "str layout_q=\"BSND\", "
             "str layout_kv=\"PA_ND\", "
             "bool has_ori_kv=True, "
-            "bool has_cmp_kv=True"
+            "bool has_cmp_kv=True, "
+            "str device=\"npu\""
         ") -> (Tensor metadata)"
         );
     ops.impl("npu_sparse_attn_sharedkv_metadata", torch::kPrivateUse1, &vllm_ascend::npu_sparse_attn_sharedkv_metadata_npu);
