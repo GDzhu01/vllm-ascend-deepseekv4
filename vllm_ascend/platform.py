@@ -367,7 +367,8 @@ class NPUPlatform(Platform):
             model_config.hf_text_config.model_type == "deepseek_v32" and \
             speculative_config.enforce_eager:
             speculative_config.enforce_eager = False
-        if hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
+            
+        if model_config and hasattr(model_config.hf_config, "compress_ratios"):
             from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
             kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
                 vllm_config)
