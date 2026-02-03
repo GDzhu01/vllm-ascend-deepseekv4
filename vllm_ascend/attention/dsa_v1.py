@@ -919,7 +919,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         self.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
         if num_reqs_actual is not None and num_reqs_actual < self.num_decodes:
-            print(f'{num_reqs=} {num_reqs_actual=} {self.num_decode_tokens=} {self.num_decodes=} {self.start_pos_decode[:self.num_decodes]=} {seq_lens_q=} {query_start_loc=} {self.seq_lens[:self.num_decodes]=}')
             self.start_pos_decode[num_reqs_actual:].fill_(0)
         
         tp_size = get_tensor_model_parallel_world_size()
