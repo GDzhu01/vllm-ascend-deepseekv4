@@ -1498,35 +1498,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         compressed_kv_block_table = attn_metadata.decode.block_table
         compressed_kv_slot_mapping = attn_metadata.decode.slot_mapping
 
-        # win kv & tok_dis
-        kv = self.wkv(hidden_states)
-        before_norm_event = torch.npu.current_stream().record_event() \
+        wait_hidden_state_cal_event = torch.npu.current_stream().record_event() \
             if self.multistream_dsa_preprocess else None
-        kv = self.kv_norm(kv)
-        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            kv.unsqueeze(1), cos, sin,
-            rotary_mode="interleave",
-            partial_slice=[self.nope_head_dim, self.head_dim],
-        )
-
-        # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
-            kv_state[0].view(-1, kv.shape[-1]),
-            attn_metadata.decode.swa_slot_mapping.unsqueeze(-1),
-            kv
-        )
 
         # q
-        with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
-            if before_norm_event:
-                torch.npu.current_stream().wait_event(before_norm_event)
-
-            qr = q = self.q_norm(self.wq_a(hidden_states))
-        if self.multistream_dsa_preprocess:
-            torch.npu.current_stream().wait_stream(
-                attention_calculation_stream())
+        qr = q = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q = triton_q_rms(q, self.eps)
 
@@ -1535,6 +1511,34 @@ class AscendDSAImpl(DSAAttentionImpl):
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+
+        with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
+            if wait_hidden_state_cal_event:
+                torch.npu.current_stream().wait_event(wait_hidden_state_cal_event)
+
+            # win kv & tok_dis
+            kv = self.wkv(hidden_states)
+            kv = self.kv_norm(kv)
+            kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
+
+            torch.ops._C_ascend.inplace_partial_rotary_mul(
+                kv.unsqueeze(1), cos, sin,
+                rotary_mode="interleave",
+                partial_slice=[self.nope_head_dim, self.head_dim],
+            )
+
+            # swa exec kv
+            torch_npu.npu_scatter_nd_update_(
+                kv_state[0].view(-1, kv.shape[-1]),
+                attn_metadata.decode.swa_slot_mapping.unsqueeze(-1),
+                kv
+            )
+
+            wait_attention_cal_event = torch.npu.current_stream().record_event() \
+                if self.multistream_dsa_preprocess else None
+
+        if wait_attention_cal_event:
+                torch.npu.current_stream().wait_event(wait_attention_cal_event)
 
         if self.compress_ratio > 1:
             compress_cos = attn_metadata.decode.compress_cos[layer_name]
