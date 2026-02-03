@@ -1180,7 +1180,8 @@ class NPUModelRunner(GPUModelRunner):
                 for layer_name in attn_group.layer_names:
                     attn_metadata[layer_name] = attn_metadata_i
 
-            # ------------- make swa metadata -----------------
+        # ------------- make swa metadata -----------------
+        if self.use_compress:
             kv_cache_spec = AttentionSpec(
                 block_size=self.block_size,
                 num_kv_heads=1,
@@ -1195,13 +1196,12 @@ class NPUModelRunner(GPUModelRunner):
                 AscendDSAMetadata,
                 supports_dcp_with_varlen=False,
             )
+            common_prefix_len = 0
+            swa_attn_metadata = swa_metadata_builder.build(
+                common_prefix_len=common_prefix_len,
+                common_attn_metadata=common_attn_metadata)
             for layer_name in self.runner_only_attn_layers:
-                common_prefix_len = 0
-                swa_attn_metadata = builder.build(
-                    common_prefix_len=common_prefix_len,
-                    common_attn_metadata=common_attn_metadata)
                 attn_metadata[layer_name] = swa_attn_metadata
-            # ---------------------------------------------------
 
         # update global cos, sin
         update_cos_sin(positions)
@@ -2094,6 +2094,10 @@ class NPUModelRunner(GPUModelRunner):
                     ] for _ in range(num_tokens)]
                     long_seq_metadata.num_computed_tokens_of_pcp_dcp = num_computed_tokens_of_pcp_dcp
 
+                if self.use_compress:
+                    self.positions.np.fill(127)
+                    self.positions.copy_to_gpu()
+
                 common_attn_metadata = AscendCommonAttentionMetadata(
                     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
                     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
@@ -2164,6 +2168,7 @@ class NPUModelRunner(GPUModelRunner):
                                 layer_name] = attn_metadata_full_attention
 
                 # ------------- make swa metadata -----------------
+            if self.use_compress:
                 kv_cache_spec = AttentionSpec(
                     block_size=self.block_size,
                     num_kv_heads=1,
@@ -2178,13 +2183,10 @@ class NPUModelRunner(GPUModelRunner):
                     AscendDSAMetadata,
                     supports_dcp_with_varlen=False,
                 )
+                swa_attn_metadata = swa_metadata_builder.build_for_graph_capture(
+                    common_attn_metadata, attn_state)
                 for layer_name in self.runner_only_attn_layers:
-                    common_prefix_len = 0
-                    swa_attn_metadata = builder.build(
-                        common_prefix_len=common_prefix_len,
-                        common_attn_metadata=common_attn_metadata)
                     attn_metadata[layer_name] = swa_attn_metadata
-                # ---------------------------------------------------
 
         return attn_metadata
 
@@ -2445,6 +2447,9 @@ class NPUModelRunner(GPUModelRunner):
             if not is_profile and self.dynamic_eplb:
                 self.eplb_updator.take_update_info_from_eplb_process()
                 self.eplb_updator.forward_end()
+            if self.use_compress and force_attention:
+                self.positions.np.fill(0)
+                self.positions.copy_to_gpu()
             return hidden_states, hidden_states
 
     @torch.inference_mode()

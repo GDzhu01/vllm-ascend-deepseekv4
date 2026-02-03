@@ -125,8 +125,6 @@ class ComplexExpRotaryEmbedding(nn.Module):
         beta_slow = extra_kwargs.get("beta_slow", 1)
         config_key = (f"rotary_dim{rotary_dim}_max_position_embeddings{max_position_embeddings}_"
                       f"base{base}_scaling_factor{scaling_factor}_beta_fast{beta_fast}_beta_slow{beta_slow}")
-
-        print(f'config_key: {config_key}')
         _ROPE_STATE.layer_info[layername] = (config_key, rope_groups)
 
         if config_key not in _ROPE_STATE.registry_summary:
