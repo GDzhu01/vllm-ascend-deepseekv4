@@ -21,11 +21,13 @@ import atexit
 import functools
 import math
 import os
+import re
 from contextlib import contextmanager, nullcontext
 from enum import Enum
 from functools import lru_cache
 from threading import Lock
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+import numpy as np
 
 import torch
 import torch_npu  # noqa: F401
@@ -62,6 +64,7 @@ _ASCEND_CUSTOMOP_IS_REIGISTERED = False
 _DEFAULT_BUFFER_SIZE = 200
 _MIN_DP_BUFFER_SIZE = 50
 _IS_MOE_MODEL = None
+_IS_DRAFTER_MOE_MODEL = None
 _IS_VL_MODEL = None
 _ENABLE_SP = None
 _HAS_LAYER_IDX = None
@@ -69,6 +72,7 @@ _SUBSCRIBED_COMPUTE_STREAMS = set()
 _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
+_ATNN_CALCULATION_STREAM = None
 
 
 def _print_callback_on_stream(*args):
@@ -349,6 +353,12 @@ def cp_chunkedprefill_comm_stream() -> torch.npu.Stream:
         _CP_CHUNKEDPREFILL_COMM_STREAM = torch_npu.npu.Stream()
     return _CP_CHUNKEDPREFILL_COMM_STREAM
 
+def attention_calculation_stream() -> torch.npu.Stream:
+    global _ATNN_CALCULATION_STREAM
+    if _ATNN_CALCULATION_STREAM is None:
+        _ATNN_CALCULATION_STREAM = torch_npu.npu.Stream()
+    return _ATNN_CALCULATION_STREAM
+
 
 def adapt_patch(is_global_patch: bool = False):
     if is_global_patch:
@@ -425,61 +435,6 @@ def update_cudagraph_capture_sizes(vllm_config: VllmConfig,
         )
     vllm_config.compilation_config.cudagraph_capture_sizes = cudagraph_capture_sizes
     vllm_config.compilation_config.post_init_cudagraph_sizes()
-
-
-def _is_default_capture_sizes(vllm_config: VllmConfig) -> bool:
-    """
-    Check whether it is vLLM default capture sizes.
-    """
-
-    max_cudagraph_capture_size = \
-        vllm_config.compilation_config.max_cudagraph_capture_size
-    cudagraph_capture_sizes = [
-        i for i in [1, 2, 4] if i <= max_cudagraph_capture_size
-    ]
-    if max_cudagraph_capture_size >= 8:
-        # Step size 8 for small batch sizes, up to 256(not included)
-        cudagraph_capture_sizes += list(
-            range(8, min(max_cudagraph_capture_size + 1, 256), 8))
-    if max_cudagraph_capture_size >= 256:
-        # Step size 16 for larger batch sizes
-        cudagraph_capture_sizes += list(
-            range(256, max_cudagraph_capture_size + 1, 16))
-    # in newer version, vLLM use ascending order of cudagraph_capture_sizes.
-    target_cudagraph_capture_sizes = sorted(cudagraph_capture_sizes)
-    if target_cudagraph_capture_sizes == \
-            vllm_config.compilation_config.cudagraph_capture_sizes:
-        return True
-
-    return False
-
-
-def update_default_aclgraph_sizes(vllm_config: VllmConfig) -> None:
-    """
-    Update ACL graph default capture sizes, so that new sizes
-    are more friendly to ascend ops && hardware.
-    """
-
-    if vllm_config.model_config is None or \
-        vllm_config.model_config.enforce_eager or \
-        not _is_default_capture_sizes(vllm_config):
-        return
-
-    # modify the default capture_sizes for Qwen3-MoE models on dp settings.
-    # this is mainly because performance of _npu_paged_attention might degrades
-    # on special shapes.
-    # TODO(Angazenn): we will remove this once _npu_paged_attention is fully
-    # replaced by npu_fused_infer_attention_score which does not contain such bugs.
-    if vllm_config.model_config and vllm_config.model_config.hf_text_config.model_type == "qwen3_moe" \
-        and vllm_config.parallel_config.tensor_parallel_size == 1 \
-        and vllm_config.parallel_config.data_parallel_size > 1 :
-
-        max_capture_size = vllm_config.compilation_config.max_cudagraph_capture_size
-        new_cudagraph_capture_sizes = [1, 2, 5, 10, 15, 20] + [
-            i for i in range(24, max_capture_size + 1, 8)
-        ]
-        update_cudagraph_capture_sizes(vllm_config,
-                                       new_cudagraph_capture_sizes)
 
 
 def update_aclgraph_sizes(vllm_config: VllmConfig) -> None:
@@ -842,8 +797,19 @@ def is_moe_model(vllm_config: VllmConfig):
     return _IS_MOE_MODEL
 
 
+def is_drafter_moe_model(vllm_config: VllmConfig):
+    """Checks if the drafter model is a MoE model by config"""
+    global _IS_DRAFTER_MOE_MODEL
+    if _IS_DRAFTER_MOE_MODEL is None:
+        model_configs = vllm_config.speculative_config.draft_model_config.hf_text_config \
+            .to_dict()
+        _IS_DRAFTER_MOE_MODEL = _is_contain_expert(model_configs)
+    return _IS_DRAFTER_MOE_MODEL
+
+
 def speculative_enable_dispatch_gmm_combine_decode(
         vllm_config: VllmConfig) -> bool:
+    """When draft contains MOE Arch and non-w8a8, disable dispatch_gmm_combine_decode."""
     if vllm_config.speculative_config is None:
         return True
     speculative_method = getattr(vllm_config.speculative_config, "method",
@@ -851,7 +817,15 @@ def speculative_enable_dispatch_gmm_combine_decode(
     if speculative_method in [None, "ngram", "suffix"]:
         return True
     if speculative_method in ["eagle", "eagle3"]:
-        return False
+        if is_drafter_moe_model(vllm_config):
+            draft_model_config = vllm_config.speculative_config.draft_model_config
+            hf_text_config = draft_model_config.hf_text_config
+            quant_type = getattr(hf_text_config, "moe_quantize", None)
+            if quant_type is None:
+                quant_type = getattr(hf_text_config, "quantize", None)
+            return quant_type == "w8a8_dynamic"
+        else:
+            return True
     if speculative_method == "mtp":
         mtp_quant_type = getattr(vllm_config.model_config.hf_text_config,
                                  "mtp_quantize", None)
@@ -1189,3 +1163,64 @@ def enable_dsa_cp_with_layer_shard() -> bool:
     vllm_config = get_current_vllm_config()
     is_prefill_instance = vllm_config.kv_transfer_config is not None and vllm_config.kv_transfer_config.is_kv_producer
     return is_prefill_instance
+
+
+def parse_layer_idx(prefix: str) -> Optional[int]:
+    pattern = r'layers\.(\d+)'
+    match = re.search(pattern, prefix)
+    if match:
+        layer_idx = int(match.group(1))
+    else:
+        layer_idx = None
+
+    return layer_idx
+
+
+def get_compressed_pos_and_indices( 
+        num_computed_tokens: np.ndarray,
+        num_scheduled_tokens: np.ndarray,
+        arrange_np: np.ndarray,
+        use_compress: bool
+ ) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+    """
+    Batch generate compressed position ids for multi-requests on DSv4.
+    Calculate compressed position ids independently for each single request.
+ 
+    Args:
+        num_computed_tokens: Historical processed token counts of multiple requests, shape=[num_reqs,]
+        num_scheduled_tokens: New scheduled token counts of multiple requests in current step, shape=[num_reqs,]
+ 
+    Returns:
+        tuple(np.ndarray, np.ndarray):
+            1. Flattened compressed position id array for all requests
+            2. Length of compressed position ids for each individual request
+    """
+    if not use_compress:
+        return None, None, None
+    # Assert input validity
+    assert num_computed_tokens.shape == num_scheduled_tokens.shape, "num_computed_tokens and num_scheduled_tokens must have the same shape"
+    assert np.all(num_computed_tokens >= 0) and np.all(
+        num_scheduled_tokens >= 0), "Token count cannot be negative value"
+ 
+    positions_compressed_list = []
+    req_indices_compressed_list = []
+    num_scheduled_tokens_compressed_list = []
+    compress_ratios = [4, 128]
+    for compress_ratio in compress_ratios:
+        # Calculate compressed length of historical & total tokens
+        compressed_historical_len = num_computed_tokens // compress_ratio
+        compressed_total_len = (num_computed_tokens + num_scheduled_tokens) // compress_ratio
+        # The number of new compressed position ids for each request
+        num_new_compressed_pos = compressed_total_len - compressed_historical_len
+ 
+        # Core vectorized calculation (no for-loop)
+        pos_starts = compressed_historical_len
+        prefix_offsets = np.concatenate([[0], np.cumsum(num_new_compressed_pos[:-1])])
+        compressed_pos_ids = np.arange(np.sum(num_new_compressed_pos)) + np.repeat(pos_starts - prefix_offsets,
+                                                                                   num_new_compressed_pos)
+ 
+        req_indices_compressed = np.repeat(arrange_np, num_new_compressed_pos)
+        req_indices_compressed_list.append(req_indices_compressed)
+        positions_compressed_list.append(compressed_pos_ids)
+        num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+    return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list

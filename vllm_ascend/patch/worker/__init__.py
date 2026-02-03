@@ -15,12 +15,15 @@
 # limitations under the License.
 #
 
+import os
+
 from vllm.triton_utils import HAS_TRITON
 
 if HAS_TRITON:
     import vllm_ascend.patch.worker.patch_triton
 
 # isort: off
+import vllm_ascend.patch.worker.patch_selector # noqa
 import vllm_ascend.patch.platform.patch_sched_yield  # noqa
 import vllm_ascend.patch.worker.patch_bert  # noqa
 import vllm_ascend.patch.worker.patch_distributed  # noqa
@@ -32,3 +35,8 @@ import vllm_ascend.patch.worker.patch_qwen3_next  # noqa
 import vllm_ascend.patch.worker.patch_qwen3_next_mtp  # noqa
 import vllm_ascend.patch.worker.patch_rejection_sampler  # noqa
 import vllm_ascend.patch.worker.patch_qwen3_next  # noqa
+import vllm_ascend.patch.worker.patch_deepseekv3  # noqa
+import vllm_ascend.patch.worker.patch_qwen3vl  # noqa
+
+if os.getenv("SHM_BARRIER", "true").lower() in ("true", "1"):
+    import vllm_ascend.patch.platform.patch_message_queue  # noqa

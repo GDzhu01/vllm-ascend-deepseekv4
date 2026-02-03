@@ -14,7 +14,7 @@ import vllm_ascend.envs as envs_ascend
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.utils import (AscendDeviceType, enable_sp, flashcomm2_enable,
                                get_ascend_device_type, has_layer_idx,
-                               is_moe_model,
+                               is_drafter_moe_model, is_moe_model,
                                speculative_enable_dispatch_gmm_combine_decode)
 
 
@@ -37,7 +37,9 @@ def set_ascend_forward_context(
         aclgraph_runtime_mode: CUDAGraphMode = CUDAGraphMode.NONE,
         batch_descriptor: Optional[BatchDescriptor] = None,
         model_instance: torch.nn.Module = None,
-        is_draft_model=False):
+        is_draft_model=False,
+        is_multimodal_model=False,
+        input_ids=None):
     """A context manager that stores the current forward context,
     can be attention metadata, etc.
     We add some additional param into forward_context.
@@ -52,6 +54,8 @@ def set_ascend_forward_context(
             batch_descriptor=batch_descriptor,
     ):
         forward_context = get_forward_context()
+
+        forward_context.input_ids = input_ids
 
         from vllm_ascend.ops.fused_moe.moe_comm_method import \
             get_moe_comm_method
@@ -68,17 +72,27 @@ def set_ascend_forward_context(
         # due to multiple warmups before actual capturing
         forward_context.capturing = False
 
+        # TODO: remove it when torch_npu.npu_mm_reduce_scatter_base supports tp_size >= 16.
+        mmrs_fusion = tp_world_size <= 8
+
         # set for sequence parallelism, 1000 is the batch size concurrency threshold for enabling the flashcomm_v1 or sequence_parallelism feature.
         # Currently, it is an empirical value. In normal scenarios, if the concurrency exceeds this threshold,
         # the performance benefits can be maximized. Conversely, if the concurrency is below the threshold,
         # the performance may degrade due to the switching of communication methods.
-        mmrs_fusion = True
-        if is_moe_model(vllm_config):
+        # main model and drafter model may have different architecture
+        is_context_moe_model = is_drafter_moe_model(vllm_config) \
+            if is_draft_model else is_moe_model(vllm_config)
+        if is_context_moe_model:
             sp_enabled = enable_sp(vllm_config) and num_tokens is not None
             mmrs_fusion = False
+        elif is_draft_model:
+            # TODO: for dense drafter, `sp` is redundant and is not compatible with `dp` and `graph`.
+            # Disable it to avoid more problems.
+            sp_enabled = False
         else:
             sp_enabled = enable_sp(vllm_config) and \
                 num_tokens is not None and num_tokens > 1000
+
         forward_context.mmrs_fusion = mmrs_fusion
         forward_context.num_tokens = num_tokens
         forward_context.sp_enabled = sp_enabled
@@ -94,6 +108,7 @@ def set_ascend_forward_context(
 
         # set this for rope forward_oot using
         forward_context.is_first_layer = True
+        forward_context.is_multimodal_model = is_multimodal_model
 
         # set layer_idx to enable optimization features that depend on this information.
         # This is only applicable to models that contain these necessary attributes.

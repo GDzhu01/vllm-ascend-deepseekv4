@@ -40,8 +40,6 @@ def enable_cp():
 class AscendPrefillContextParallelMetadata:
     pcp_allgather_restore_idx: torch.Tensor = None
 
-    cp_kv_recover_idx_for_chunk: torch.Tensor = None
-
     num_actual_tokens_pcp_padded: int = 0
 
     num_computed_tokens_of_pcp_dcp: Optional[list[list[list[int]]]] = None
@@ -90,10 +88,13 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     actual_seq_lengths_q: list[int] = field(default_factory=list)
 
     positions: torch.Tensor = None
+    positions_cpu: torch.Tensor = None
 
     attn_state: Any = None
 
     graph_pad_size: int = -1
+
+    state_block_table: torch.Tensor = None
 
     # num_input_tokens refers to total number of tokens including
     # padding tokens. It is used to handle some padding operations.
@@ -101,6 +102,10 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
 
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
+
+    state_ids: torch.Tensor | None = None
+    swa_slot_mapping: torch.Tensor = None
+    swa_block_table: torch.Tensor = None
 
     # TODO: Remove it when vLLM no longer uses this function.
     def unpadded(self, num_actual_tokens: int,
@@ -124,13 +129,18 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
             slot_mapping=self.slot_mapping,
             causal=self.causal,
             actual_seq_lengths_q=self.actual_seq_lengths_q[:num_actual_tokens],
-            positions=self.positions[:num_actual_tokens],
+            positions=self.positions,
+            positions_cpu=self.positions_cpu,
             attn_state=self.attn_state,
             graph_pad_size=-1,  # It should be -1 when not run in fullgraph mode.
-            num_input_tokens=num_actual_tokens,
+            num_input_tokens=self.num_input_tokens,
             prefill_context_parallel_metadata=self.
             prefill_context_parallel_metadata,
-            max_seq_len=self.max_seq_len)
+            max_seq_len=self.max_seq_len,
+            state_ids=self.state_ids,
+            swa_slot_mapping=self.swa_slot_mapping,
+            swa_block_table=self.swa_block_table,
+            state_block_table=self.state_block_table)
 
 
 def filter_chunked_req_indices(

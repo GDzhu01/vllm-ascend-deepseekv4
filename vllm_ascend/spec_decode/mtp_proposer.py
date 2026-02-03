@@ -15,6 +15,7 @@ from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
+from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
 from vllm_ascend.spec_decode.eagle_proposer import EagleProposer
 from vllm_ascend.utils import ProfileExecuteDuration, lmhead_tp_enable
@@ -41,6 +42,7 @@ class MtpProposer(EagleProposer):
             num_tokens,
             num_tokens_across_dp,
             with_prefill,
+            _,
         ) = self.runner._sync_metadata_across_dp(num_tokens, with_prefill)
         if not self.use_cuda_graph:
             # there is synchronization between mtp steps when enabling aclgraph,
@@ -89,7 +91,7 @@ class MtpProposer(EagleProposer):
                 attn_metadata_mtp = builder.build_for_graph_capture(
                     common_attn_metadata, attn_state)
                 attn_metadata = {}
-                for layer_name in self.attn_layer_name:
+                for layer_name in self.attn_layer_names:
                     attn_metadata[layer_name] = attn_metadata_mtp
             else:
                 attn_metadata = None
@@ -249,14 +251,10 @@ class MtpProposer(EagleProposer):
         assert self.runner is not None
 
         # Note(qcs): We may need to refactor these check logics.
-        if self.runner.use_aclgraph and num_scheduled_tokens <= self.runner.cudagraph_batch_sizes[
+        if self.use_cuda_graph and num_scheduled_tokens <= self.runner.cudagraph_batch_sizes[
                 -1]:
             num_input_tokens = self.vllm_config.pad_for_cudagraph(
                 num_scheduled_tokens)
-        elif self.use_aclgraph and num_tokens <= self.runner.cudagraph_batch_sizes[
-                -1]:
-            # Acl graph mode, add padding to the batch size
-            num_input_tokens = self.vllm_config.pad_for_cudagraph(num_tokens)
         else:
             # Eager mode, no padding needed
             num_input_tokens = num_tokens
@@ -265,9 +263,9 @@ class MtpProposer(EagleProposer):
         self.positions[:num_tokens] = target_positions
         self.hidden_states[:num_tokens] = target_hidden_states
         # eager/acl piecewise mode need to update num_tokens_across_dp
-        (num_input_tokens, num_tokens_across_dp,
-         with_prefill) = self.runner._sync_metadata_across_dp(
-             num_input_tokens, self.runner.with_prefill)
+        (num_input_tokens, num_tokens_across_dp, with_prefill,
+         _) = self.runner._sync_metadata_across_dp(num_input_tokens,
+                                                   self.runner.with_prefill)
 
         # Enable shared_expert_dp and MTP FULL graph may cause accuracy issues.
         if scheduler_output and not self.enable_shared_expert_dp:
@@ -300,11 +298,12 @@ class MtpProposer(EagleProposer):
         # update the graph_pad_size in common_attn_metadata, to tell the
         # builder padding some elements.
         common_attn_metadata.graph_pad_size = graph_pad_size
+        common_attn_metadata.num_input_tokens = num_input_tokens
         builder = self.runner.attn_groups[0][0].get_metadata_builder()
         attn_metadata_mtp = builder.build(0, common_attn_metadata,
                                           self.runner.get_model())
         attn_metadata = {}
-        for layer_name in self.attn_layer_name:
+        for layer_name in self.attn_layer_names:
             attn_metadata[layer_name] = attn_metadata_mtp
 
         for step in range(self.num_speculative_tokens):
@@ -333,12 +332,22 @@ class MtpProposer(EagleProposer):
                         hidden_states = torch.ops.vllm.maybe_pad_and_reduce(
                             hidden_states)
 
-                    for layer_name in self.attn_layer_name:
+                    for layer_name in self.attn_layer_names:
                         decode_metadata = getattr(attn_metadata[layer_name],
                                                   "decode", None)
                         if self.use_async_scheduling and decode_metadata is not None:
-                            actual_size = len(
-                                decode_metadata.actual_seq_lengths_q)
+                            if self.pcp_size * self.dcp_size > 1:
+                                actual_size = sum(
+                                    attn_metadata[layer_name].
+                                    query_lens[:attn_metadata[layer_name].
+                                               num_decodes])
+                            else:
+                                if self.use_compress:
+                                    actual_size = len(
+                                        decode_metadata.query_start_loc_cpu) - 1
+                                else:
+                                    actual_size = len(
+                                        decode_metadata.actual_seq_lengths_q)
 
                             decode_metadata.seq_lens_list = \
                                 decode_metadata.seq_lens_list[:actual_size]
@@ -398,13 +407,16 @@ class MtpProposer(EagleProposer):
             if step == self.num_speculative_tokens - 1 or with_prefill:
                 break
 
-            attn_metadata_i = attn_metadata[self.attn_layer_name[0]]
+            attn_metadata_i = attn_metadata[self.attn_layer_names[0]]
 
             if step == 0:
                 positions = target_positions[last_token_indices]
                 hidden_states = hidden_states[last_token_indices]
                 slot_mapping = attn_metadata_i.slot_mapping[last_token_indices]
+                swa_slot_mapping = attn_metadata_i.swa_slot_mapping[last_token_indices]
                 attn_metadata_i.slot_mapping.fill_(-1)
+                if self.use_compress:
+                    attn_metadata_i.swa_slot_mapping.fill_(-1)
                 attn_metadata_i.query_start_loc = self.arange[:batch_size + 1]
                 last_token_indices = self.arange[:batch_size]
                 if getattr(attn_metadata_i, "num_decode_tokens", 0):
@@ -463,16 +475,25 @@ class MtpProposer(EagleProposer):
             # When disable_padded_drafter_batch=False, it should not to be updating these params, maybe.
             if decode_metadata is not None and (self.speculative_config.disable_padded_drafter_batch or \
                     aclgraph_runtime_mode != CUDAGraphMode.FULL):
-                decode_metadata.actual_seq_lengths_q = self.arange_cpu[
-                    1:batch_size + 1].tolist()
-                if aclgraph_runtime_mode == CUDAGraphMode.FULL:
-                    decode_metadata.actual_seq_lengths_q = \
-                        builder.pad_actual_seq_len_q_mtp_disable_pad(
-                            graph_pad_size - batch_size,
-                            batch_size,
-                            decode_metadata.actual_seq_lengths_q)
-                decode_metadata.cos, decode_metadata.sin = get_cos_and_sin_mla(
-                    positions[:batch_size])
+                if self.use_compress:
+                    decode_metadata.query_start_loc = self.arange[:batch_size + 1]
+                    decode_metadata.query_start_loc_cpu = self.arange_cpu[:batch_size + 1]
+
+                    decode_metadata.max_seqlen_q += 1
+                    decode_metadata.max_seqlen_kv = batch_size
+                    decode_metadata.cos, decode_metadata.sin = get_cos_and_sin_dsa(
+                        positions[:batch_size])
+                else:
+                    decode_metadata.actual_seq_lengths_q = self.arange_cpu[
+                        1:batch_size + 1].tolist()
+                    if aclgraph_runtime_mode == CUDAGraphMode.FULL:
+                        decode_metadata.actual_seq_lengths_q = \
+                            builder.pad_actual_seq_len_q_mtp_disable_pad(
+                                graph_pad_size - batch_size,
+                                batch_size,
+                                decode_metadata.actual_seq_lengths_q)
+                    decode_metadata.cos, decode_metadata.sin = get_cos_and_sin_mla(
+                        positions[:batch_size])
             # NOTE(woosuk): We should handle the case where the draft model
             # generates tokens beyond the max model length. Since it is complex
             # to remove such requests from the batch, we keep them in the batch
@@ -498,17 +519,19 @@ class MtpProposer(EagleProposer):
             # Otherwise, the KV cache will be inadvertently updated with the
             # padding tokens.
             slot_mapping += 1
+            swa_slot_mapping += 1
             if self.pcp_size > 1:
                 exceeds_max_model_len = exceeds_max_model_len.repeat_interleave(
                     slot_mapping.size(0) // exceeds_max_model_len.size(0))
             slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
+            swa_slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
 
             # copy inputs to buffer for cudagraph
             self.input_ids[:batch_size] = input_ids
             self.positions[:batch_size] = clamped_positions
             self.hidden_states[:hidden_states.shape[0]] = hidden_states
             if self.pcp_size * self.dcp_size > 1:
-                # update local seq_len and batch_seq_mask
+                # update local seq_len
                 num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
                     ori_seq_len + step + 1,
                     self.pcp_size,
@@ -517,14 +540,7 @@ class MtpProposer(EagleProposer):
                 )
                 cp_seq_len = \
                     num_computed_tokens_of_pcp_dcp[:, self.pcp_rank, self.dcp_rank]
-                batch_seq_mask = (cp_seq_len == 0)
-                builder.batch_seq_mask_buf[:batch_seq_mask.shape[0]].copy_(
-                    batch_seq_mask, non_blocking=True)
-                batch_seq_mask = builder.batch_seq_mask_buf[:batch_seq_mask.
-                                                            shape[0]]
-                cp_seq_len = torch.where(cp_seq_len == 0, 1, cp_seq_len)
                 attn_metadata_i.decode.cp_seq_len = cp_seq_len
-                attn_metadata_i.decode.batch_seq_mask = batch_seq_mask
                 # update slot_mapping
                 slot_indices += self.pcp_size
                 slot_mapping = mtp_slot_mapping[slot_indices]
@@ -532,6 +548,10 @@ class MtpProposer(EagleProposer):
                                              self.pcp_size] = slot_mapping
             else:
                 attn_metadata_i.slot_mapping[:batch_size] = slot_mapping
+
+                if self.use_compress:
+                    attn_metadata_i.swa_slot_mapping[:batch_size] = swa_slot_mapping
+
             if self.speculative_config.disable_padded_drafter_batch:
                 self.positions[batch_size:num_input_tokens] = 0
                 self.input_ids[batch_size:num_input_tokens] = 0
@@ -550,14 +570,15 @@ class MtpProposer(EagleProposer):
                     self.runner.model_config.max_model_len)
             if decode_metadata is not None:
                 decode_metadata.seq_lens = attn_metadata_i.seq_lens
-                decode_metadata.seq_lens_list = decode_metadata.seq_lens.tolist(
-                )
-                decode_seq_lens_list = decode_metadata.seq_lens_list
-                if aclgraph_runtime_mode == CUDAGraphMode.FULL and \
-                        self.speculative_config.disable_padded_drafter_batch:
-                    decode_metadata.seq_lens_list = decode_seq_lens_list + [
-                        0
-                    ] * (graph_pad_size - len(decode_seq_lens_list))
+                if not self.use_compress:
+                    decode_metadata.seq_lens_list = decode_metadata.seq_lens.tolist(
+                    )
+                    decode_seq_lens_list = decode_metadata.seq_lens_list
+                    if aclgraph_runtime_mode == CUDAGraphMode.FULL and \
+                            self.speculative_config.disable_padded_drafter_batch:
+                        decode_metadata.seq_lens_list = decode_seq_lens_list + [
+                            0
+                        ] * (graph_pad_size - len(decode_seq_lens_list))
                 decode_metadata.input_positions = self.positions[:
                                                                  num_input_tokens]
                 decode_metadata.max_seq_lens += 1

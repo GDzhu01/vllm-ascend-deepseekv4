@@ -48,6 +48,8 @@ if TYPE_CHECKING:
 MAX_O_PROJ_PREFETCH_SIZE = 16 * 1024 * 1024
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
+# token count limits within the mlapo operator
+MLAPO_MAX_SUPPORTED_TOKENS = 1024
 
 
 class AscendMLABackend(AttentionBackend):
@@ -128,7 +130,6 @@ class AscendMLADecodeMetadata:
     sin: torch.Tensor = None
     cos: torch.Tensor = None
     cp_seq_len: torch.Tensor = None
-    batch_seq_mask: torch.Tensor = None
 
 
 @dataclass
@@ -588,7 +589,7 @@ class AscendMLAMetadataBuilder(MLACommonMetadataBuilder[AscendMLAMetadata]):
             self.block_table = self.block_table[:self.graph_pad_size, ...]
         seq_lens_list = self.seq_lens.tolist()
 
-        cp_seq_len, batch_seq_mask = None, None
+        cp_seq_len = None
 
         if self.graph_pad_size > num_reqs:
             if self.speculative_config.disable_padded_drafter_batch:
@@ -649,8 +650,7 @@ class AscendMLAMetadataBuilder(MLACommonMetadataBuilder[AscendMLAMetadata]):
             actual_seq_lengths_q=actual_seq_lengths_q,
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
-            cp_seq_len=cp_seq_len,
-            batch_seq_mask=batch_seq_mask)
+            cp_seq_len=cp_seq_len)
         return decode_metadata
 
     def build_for_graph_capture(
@@ -914,10 +914,9 @@ class AscendMLAImpl(MLAAttentionImpl):
         # On KV consumers (decode-only) MLAPO uses the transformed weights built above;
         # the original fused_qkv_a_proj/q_proj weights and quant params are no longer
         # referenced, so drop them to save memory.
-        ascend_config = get_ascend_config()
         if self.vllm_config.kv_transfer_config is not None and \
                 self.vllm_config.kv_transfer_config.is_kv_consumer and \
-                ascend_config.recompute_scheduler_enable:
+                self.vllm_config.scheduler_config.max_num_batched_tokens <= MLAPO_MAX_SUPPORTED_TOKENS:
             self.fused_qkv_a_proj.weight = None
             self.fused_qkv_a_proj.deq_scale = None
             self.fused_qkv_a_proj.quant_bias = None
@@ -1495,7 +1494,9 @@ class AscendMLAImpl(MLAAttentionImpl):
                                    device=hidden_states.device)
 
         # MLA Preprocess
-        if self.enable_mlapo and not has_prefill:
+        if self.enable_mlapo and \
+            not has_prefill and \
+            attn_metadata.num_decode_tokens <= MLAPO_MAX_SUPPORTED_TOKENS:
             hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
                 hidden_states.contiguous(), need_gather_q_kv)
             decode_preprocess_res, prefill_preprocess_res = self._mla_preprocess_only_decode(

@@ -80,7 +80,9 @@ class AscendW8A8DynamicLinearMethod:
         bias: Optional[torch.Tensor] = None,
         tp_rank: Optional[int] = 0,
     ) -> torch.Tensor:
+        # print(f'x: {x.shape}')
         quantized_x, pertoken_scale = torch_npu.npu_dynamic_quant(x)
+        # print(f'quantized_x: {quantized_x.shape}, pertoken_scale: {pertoken_scale.shape}')
         output = torch_npu.npu_quant_matmul(
             quantized_x,
             layer.weight,
@@ -104,7 +106,7 @@ class AscendW8A8DynamicFusedMoEMethod:
     """FusedMoe method for Ascend W8A8_DYNAMIC.
     """
 
-    def __init__(self):
+    def __init__(self, tid2eid=None):
         self.ep_group = get_ep_group()
 
         vllm_config = get_current_vllm_config()
@@ -117,6 +119,7 @@ class AscendW8A8DynamicFusedMoEMethod:
         self.dynamic_eplb = ascend_config.dynamic_eplb or ascend_config.expert_map_record_path
         self.in_dtype = vllm_config.model_config.dtype
         self.supports_eplb = True
+        self.tid2eid = tid2eid
 
         try:
             device_group = get_mc2_group().device_group
@@ -190,16 +193,15 @@ class AscendW8A8DynamicFusedMoEMethod:
         enable_force_load_balance: bool = False,
         log2phy: torch.Tensor = None,
         global_redundant_expert_num: int = 0,
-        shared_experts: Optional[Any] = None,
-        quantized_x_for_share: Optional[Any] = None,
-        dynamic_scale_for_share: Optional[Any] = None,
         pertoken_scale: Optional[Any] = None,
         **kwargs,
     ) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
+        n_shared_experts = layer.n_shared_experts
+        valid_global_expert_num = global_num_experts - global_redundant_expert_num - n_shared_experts
         if zero_expert_num == 0 or zero_expert_type is None:
-            assert router_logits.shape[1] == global_num_experts - global_redundant_expert_num, \
+            assert router_logits.shape[1] == valid_global_expert_num, \
                 "Number of global experts mismatch (excluding redundancy)"
 
         if self.multistream_overlap_gate:
@@ -218,9 +220,12 @@ class AscendW8A8DynamicFusedMoEMethod:
                 num_expert_group=num_expert_group,
                 custom_routing_function=custom_routing_function,
                 scoring_func=scoring_func,
-                routed_scaling_factor=routed_scaling_factor,
                 e_score_correction_bias=e_score_correction_bias,
-                global_num_experts=global_num_experts)
+                mix_placement=layer.mix_placement,
+                num_logical_experts=router_logits.shape[1],
+                num_shared_experts=n_shared_experts,
+                global_num_experts=global_num_experts,
+                tid2eid=self.tid2eid)
         assert topk_ids is not None
         assert topk_weights is not None
         if zero_expert_num > 0 and zero_expert_type is not None:
@@ -280,9 +285,6 @@ class AscendW8A8DynamicFusedMoEMethod:
             use_int8_w8a8=True,
             expert_map=expert_map,
             log2phy=log2phy,
-            shared_experts=shared_experts,
-            quantized_x_for_share=quantized_x_for_share,
-            dynamic_scale_for_share=dynamic_scale_for_share,
             dynamic_eplb=self.dynamic_eplb,
             mc2_mask=kwargs.get("mc2_mask", None))
         if zero_expert_num > 0 and zero_expert_type is not None:
