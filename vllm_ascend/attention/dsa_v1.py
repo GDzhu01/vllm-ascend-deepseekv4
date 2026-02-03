@@ -28,7 +28,7 @@ from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
-from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
+from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream, olora_tp_enable
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -1310,8 +1310,13 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        o_proj_input = torch_npu.npu_transpose_batchmatmul(o_proj_input, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
-        o_proj_input = o_proj_input.reshape(num_tokens, -1)
+        if olora_tp_enable():
+            o_proj_input = self.wo_a(o_proj_input)
+        else:
+            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
+            o_proj_input = torch_npu.npu_transpose_batchmatmul(o_proj_input, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+            o_proj_input = o_proj_input.reshape(num_tokens, -1)
         output[...] = self.wo_b(o_proj_input)
 
         return output_padded
