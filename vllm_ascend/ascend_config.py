@@ -92,6 +92,8 @@ class AscendConfig:
             "recompute_scheduler_enable", False)
         self.enable_cpu_binding = additional_config.get(
             "enable_cpu_binding", False)
+        self.multistream_dsa_preprocess = additional_config.get(
+            "multistream_dsa_preprocess", False)
 
         self.pd_tp_ratio = 1
         self.pd_head_ratio = 1

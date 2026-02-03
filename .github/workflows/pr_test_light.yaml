@@ -22,6 +22,7 @@ on:
     branches:
       - 'releases/v0.13.0'
 
+
 # Bash shells do not use ~/.profile or ~/.bashrc so these shells need to be explicitly
 # declared as "shell: bash -el {0}" on steps that need to be properly activated.
 # It's used to activate ascend-toolkit environment variables.
@@ -41,7 +42,9 @@ jobs:
     with:
       vllm: v0.13.0
       runner: linux-amd64-cpu-8-hk
+      runner: linux-amd64-cpu-8-hk
   changes:
+    runs-on: linux-amd64-cpu-8-hk
     runs-on: linux-amd64-cpu-8-hk
     outputs:
       e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
@@ -61,6 +64,7 @@ jobs:
           filters: |
             e2e_tracker:
               - '.github/workflows/pr_test_light.yaml'
+              - '.github/workflows/_e2e_test.yaml'
               - '.github/workflows/_e2e_test.yaml'
               - 'vllm_ascend/**'
               - 'csrc/**'
@@ -85,6 +89,7 @@ jobs:
     with:
       vllm: ${{ matrix.vllm_version }}
       runner: linux-amd64-cpu-8-hk
+      runner: linux-amd64-cpu-8-hk
       image: quay.nju.edu.cn/ascend/cann:8.2.rc2-910b-ubuntu22.04-py3.11
       type: pr
 
@@ -96,6 +101,8 @@ jobs:
     uses: ./.github/workflows/_e2e_test.yaml
     with:
       vllm: ${{ matrix.vllm_version }}
+      runner: linux-aarch64-a2-1
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11
       runner: linux-aarch64-a2-1
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11
       type: light

@@ -163,10 +163,11 @@ class MultiBlockPool(BlockPool):
 
     def get_num_free_blocks(self) -> int:
         # Return free blocks num in all block pools.
-        num_free_blocks = 0
+        num_free_blocks = []
         for local_pool in self.block_pools:
-            num_free_blocks += local_pool.get_num_free_blocks()
-        return num_free_blocks
+            num_free_blocks.append(local_pool.get_num_free_blocks())
+        # We need to use the C128 block pool to check the number of blocks for allocation, as C128 is the bottleneck for the block count.
+        return num_free_blocks[1]
 
     def get_usage(self) -> float:
         """Get the KV cache usage.

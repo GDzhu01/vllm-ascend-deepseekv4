@@ -20,6 +20,7 @@ jobs:
   e2e:
     name: singlecard
     runs-on: linux-aarch64-a2-1
+    runs-on: linux-aarch64-a2-1
     container:
       image: ${{ inputs.image }}
       env:
@@ -68,6 +69,7 @@ jobs:
           VLLM_TARGET_DEVICE=empty pip install -e .
 
       - name: Install GDzhu01/vllm-ascend-deepseekv4
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
         run: |
@@ -75,8 +77,14 @@ jobs:
           pip install -v -e .
 
       - name: Install clang-15 (for triton-ascend)
+      - name: Install clang-15 (for triton-ascend)
         shell: bash -l {0}
         run: |
+          apt-get update && apt-get -y install clang-15
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
+
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test
           apt-get update && apt-get -y install clang-15
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
@@ -110,6 +118,7 @@ jobs:
           # xgrammar has parameter mismatching bug, please follows: https://github.com/vllm-project/vllm-ascend/issues/5524
           # pytest -sv --durations=0 tests/e2e/singlecard/test_guided_decoding.py
 
+
           # torch 2.8 doesn't work with lora, fix me
           pytest -sv --durations=0 tests/e2e/singlecard/test_ilama_lora.py
           pytest -sv --durations=0 tests/e2e/singlecard/test_models.py
@@ -140,6 +149,7 @@ jobs:
     runs-on: linux-aarch64-a3-2
     container:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11
       env:
         VLLM_LOGGING_LEVEL: ERROR
         VLLM_USE_MODELSCOPE: True
@@ -153,6 +163,9 @@ jobs:
 
       - name: Config mirrors
         run: |
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
           pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
@@ -187,6 +200,7 @@ jobs:
           VLLM_TARGET_DEVICE=empty pip install -e .
 
       - name: Install GDzhu01/vllm-ascend-deepseekv4
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
         run: |
@@ -194,8 +208,14 @@ jobs:
           pip install -v -e .
 
       - name: Install clang-15 (for triton-ascend)
+      - name: Install clang-15 (for triton-ascend)
         shell: bash -l {0}
         run: |
+          apt-get update && apt-get -y install clang-15
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
+
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (light)
           apt-get update && apt-get -y install clang-15
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
@@ -208,6 +228,7 @@ jobs:
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_qwen3_moe.py::test_qwen3_moe_distributed_mp_tp2_ep
 
       - name: Run GDzhu01/vllm-ascend-deepseekv4 test (full)
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (full)
         env:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'full' }}
@@ -217,6 +238,7 @@ jobs:
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_expert_parallel.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_external_launcher.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_full_graph_mode.py
+          pytest -sv --durations=0 tests/e2e/multicard/2-cards/spec_decode/test_spec_decode.py
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/spec_decode/test_spec_decode.py
           # torch 2.8 doesn't work with lora, fix me
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_ilama_lora_tp2.py
@@ -249,10 +271,19 @@ jobs:
           python3 -m pip uninstall -y triton-ascend
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_aclgraph_capture_replay.py
 
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test (non triton)
+        if: ${{ inputs.type == 'full' }}
+        env:
+          VLLM_WORKER_MULTIPROC_METHOD: spawn
+        run: |
+          python3 -m pip uninstall -y triton-ascend
+          pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_aclgraph_capture_replay.py
+
   e2e-4-cards:
     name: multicard-4
     runs-on: linux-aarch64-a3-4
     container:
+      image: m.daocloud.io/quay.io/ascend/cann:8.5.0-a3-ubuntu22.04-py3.11
       image: m.daocloud.io/quay.io/ascend/cann:8.5.0-a3-ubuntu22.04-py3.11
       env:
         VLLM_LOGGING_LEVEL: ERROR
@@ -269,6 +300,9 @@ jobs:
           sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
           pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
+          sed -Ei 's@(ports|archive).ubuntu.com@cache-service.nginx-pypi-cache.svc.cluster.local:8081@g' /etc/apt/sources.list
+          pip config set global.index-url http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+          pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
 
@@ -279,8 +313,10 @@ jobs:
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
 
       - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
+      - name: Checkout GDzhu01/vllm-ascend-deepseekv4 repo
         uses: actions/checkout@v6
         with:
+          path: ./vllm-ascend-deepseekv4
           path: ./vllm-ascend-deepseekv4
 
       - name: Install system dependencies
@@ -302,6 +338,8 @@ jobs:
 
       - name: Install GDzhu01/vllm-ascend-deepseekv4
         working-directory: ./vllm-ascend-deepseekv4
+      - name: Install GDzhu01/vllm-ascend-deepseekv4
+        working-directory: ./vllm-ascend-deepseekv4
         run: |
           export PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/devlib
@@ -309,8 +347,15 @@ jobs:
           pip install -v -e .
 
       - name: Install clang-15 (for triton-ascend)
+      - name: Install clang-15 (for triton-ascend)
         shell: bash -l {0}
         run: |
+          apt-get update && apt-get -y install clang-15
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
+
+      - name: Run GDzhu01/vllm-ascend-deepseekv4 test for V1 Engine
+        working-directory: ./vllm-ascend-deepseekv4
           apt-get update && apt-get -y install clang-15
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20
@@ -332,6 +377,14 @@ jobs:
           # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_basic.py
           # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_chunked_prefill.py
           # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_mtp.py
+          # fix me with CANN 8.5
+          # # long_sequence
+          # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_accuracy.py
+          # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_basic.py
+          # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_chunked_prefill.py
+          # pytest -sv --durations=0 tests/e2e/multicard/4-cards/long_sequence/test_mtp.py
 
+          # # spec_decode
+          # pytest -sv --durations=0 tests/e2e/multicard/4-cards/spec_decode/test_mtp_qwen3_next.py
           # # spec_decode
           # pytest -sv --durations=0 tests/e2e/multicard/4-cards/spec_decode/test_mtp_qwen3_next.py

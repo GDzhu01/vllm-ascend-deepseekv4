@@ -367,6 +367,19 @@ class NPUPlatform(Platform):
             model_config.hf_text_config.model_type == "deepseek_v32" and \
             speculative_config.enforce_eager:
             speculative_config.enforce_eager = False
+        if hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
+            from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
+            kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
+                vllm_config)
+            vllm_config.scheduler_config = kv_state_scheduler_config
+
+            # dsv4 not support chunked_prefill and prefix_caching now
+            # but in order to save memory, we allow d-node enable chunked prefill when using p/d disaggrgation
+            if vllm_config.kv_transfer_config is not None and vllm_config.kv_transfer_config.is_kv_consumer:
+                vllm_config.scheduler_config.enable_chunked_prefill = True
+            else:
+                vllm_config.scheduler_config.enable_chunked_prefill = False
+            vllm_config.cache_config.enable_prefix_caching = False
 
     @classmethod
     def import_kernels(cls) -> None:
@@ -383,7 +396,9 @@ class NPUPlatform(Platform):
             return
         CUR_DIR = os.path.dirname(os.path.realpath(__file__))
         CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                       "vllm-ascend")
+                                       "custom_transformer")
+        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+                                "custom_transformer","op_api","lib")
         if os.path.exists(CUSTOM_OPP_PATH):
             current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
                                                    "")
@@ -392,19 +407,25 @@ class NPUPlatform(Platform):
                     "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
             else:
                 os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
+                                        "")
+            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
+            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
         _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):
         backend_map = {
-            (True, False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
-            (False, False):
+            (True, False,False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
+            (False, False,False):
             "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
-            (True, True): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True, True,False): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True,True,True): "vllm_ascend.attention.dsa_v1.AscendDSABackend",
         }
 
         return backend_map[(attn_selector_config.use_mla,
-                            attn_selector_config.use_sparse)]
+                            attn_selector_config.use_sparse,
+                            attn_selector_config.use_compress)]
 
     @classmethod
     def get_punica_wrapper(cls) -> str:
@@ -461,8 +482,21 @@ class NPUPlatform(Platform):
                 )
                 vllm_config.model_config.disable_cascade_attn = False
 
-        # ==================== 2. Cache Config ====================
-        if vllm_config.cache_config:
+        # ==================== 2. Parallel Config ====================
+        if vllm_config.parallel_config:
+            # Only allow the default all2all backend; others like deepep are not supported
+            default_backend = "allgather_reducescatter"
+            current_backend = getattr(vllm_config.parallel_config,
+                                      "all2all_backend", default_backend)
+            if current_backend != default_backend:
+                logger.warning(
+                    "Parameter '--all2all-backend' is set to '%s', which may be "
+                    "incompatible with Ascend. Using internal plugin mechanisms.",
+                    current_backend,
+                )
+                vllm_config.parallel_config.all2all_backend = default_backend
+
+            # ==================== 3. Cache Config ====================
             # Check and reset cpu_kvcache_space_bytes
             if getattr(vllm_config.cache_config, "cpu_kvcache_space_bytes",
                        False):
@@ -471,7 +505,7 @@ class NPUPlatform(Platform):
                 )
                 vllm_config.cache_config.cpu_kvcache_space_bytes = None
 
-        # ==================== 3. MultiModal Config ====================
+        # ==================== 4. MultiModal Config ====================
         if vllm_config.model_config and vllm_config.model_config.multimodal_config:
             # Ascend uses a different mechanism for Multi-Modal attention
             if getattr(vllm_config.model_config.multimodal_config,
@@ -482,7 +516,7 @@ class NPUPlatform(Platform):
                 )
                 vllm_config.model_config.multimodal_config.mm_encoder_attn_backend = None
 
-        # ==================== 4. Observability Config ====================
+        # ==================== 5. Observability Config ====================
         if vllm_config.observability_config:
             # NVTX tracing is NVIDIA specific
             if getattr(vllm_config.observability_config,
@@ -493,7 +527,7 @@ class NPUPlatform(Platform):
                 )
                 vllm_config.observability_config.enable_layerwise_nvtx_tracing = False
 
-        # ==================== 5. Scheduler Config ====================
+        # ==================== 6. Scheduler Config ====================
         if vllm_config.scheduler_config:
             # Partial prefills are specific to ROCm optimization
             if getattr(vllm_config.scheduler_config,
@@ -503,7 +537,7 @@ class NPUPlatform(Platform):
                 )
                 vllm_config.scheduler_config.max_num_partial_prefills = 1
 
-        # ==================== 6. Speculative Config ====================
+        # ==================== 7. Speculative Config ====================
         if vllm_config.speculative_config:
             # Ascend automatically inherits main model quantization
             if getattr(vllm_config.speculative_config, "quantization",
@@ -513,7 +547,7 @@ class NPUPlatform(Platform):
                     "the main model's quantization method. Resetting to None.")
                 vllm_config.speculative_config.quantization = None
 
-        # ==================== 7. KV Transfer Config ====================
+        # ==================== 8. KV Transfer Config ====================
         if vllm_config.kv_transfer_config:
             # Buffer size is primarily tied to NCCL (GPU) backends
             current_buffer_size = getattr(vllm_config.kv_transfer_config,
@@ -534,7 +568,7 @@ class NPUPlatform(Platform):
                     "Resetting to False for Ascend stability.")
                 vllm_config.kv_transfer_config.enable_permute_local_kv = False
 
-        # ==================== 8. Attention Config ====================
+        # ==================== 9. Attention Config ====================
         if vllm_config.attention_config:
             att_config = vllm_config.attention_config
 
