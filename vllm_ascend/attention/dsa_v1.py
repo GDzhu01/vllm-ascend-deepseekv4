@@ -1330,8 +1330,9 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o = o.view(num_tokens, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("tgd,grd->tgr", o, wo_a)
+        # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+        # o = torch.einsum("tgd,grd->tgr", o, wo_a)
+        o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
         o = o.reshape(num_tokens, -1)
         output[...] = self.wo_b(o)
 
