@@ -33,7 +33,6 @@ from vllm.model_executor.layers.linear import (  # noqa
     ReplicatedLinear, RowParallelLinear, UnquantizedLinearMethod)
 from vllm.model_executor.layers.quantization.base_config import \
     QuantizationConfig
-from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_ascend.ops.linear_op import get_parallel_op, get_replicated_op
@@ -385,7 +384,7 @@ class AscendColumnParallelLinear(ColumnParallelLinear):
         self.prefix = prefix
         if "wo_a" in prefix:
             hf_config = get_current_vllm_config().model_config.hf_text_config
-            self.n_local_groups = getattr(hf_config, "o_groups", 0) // get_tensor_model_parallel_world_size()
+            self.n_local_groups = getattr(hf_config, "o_groups", 0) // self.tp_size
             self.o_lora_rank = getattr(hf_config, "o_lora_rank", 0)
 
     def forward(
