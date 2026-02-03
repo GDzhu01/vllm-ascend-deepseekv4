@@ -29,6 +29,8 @@ from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
+from vllm_ascend.quantization.w8a8_dynamic import AscendW8A8DynamicLinearMethod
+from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -1502,8 +1504,27 @@ class AscendDSAImpl(DSAAttentionImpl):
             if self.multistream_dsa_preprocess else None
 
         # q
-        qr = q = self.q_norm(self.wq_a(hidden_states))
-        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
+        if (not isinstance(self.wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
+                isinstance(self.wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod):
+                q_a = self.wq_a(hidden_states)
+                qr, qr_pertoken_scale = torch.ops._C_ascend.npu_rms_norm_dynamic_quant(
+                    q_a, 
+                    self.q_norm.weight,
+                    epsilon=self.eps
+                )
+                q = torch_npu.npu_quant_matmul(
+                    qr,
+                    self.wq_b.weight,
+                    self.wq_b.weight_scale,
+                    pertoken_scale=qr_pertoken_scale,
+                    bias=self.wq_b.bias,
+                    output_dtype=hidden_states.dtype,
+                ).unflatten(-1, (self.n_local_heads, self.head_dim))
+        else:
+            qr = q = self.q_norm(self.wq_a(hidden_states))
+            q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
+            qr_pertoken_scale = None
+            
         q = triton_q_rms(q, self.eps)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
@@ -1556,7 +1577,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     compressed_sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key,
-                                                    with_prefill=False)
+                                                    with_prefill=False,
+                                                    qr_pertoken_scale=qr_pertoken_scale)
 
             coff = 2 if self.compressor_overlap else 1
 
@@ -1662,9 +1684,22 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query: torch.Tensor,
         actual_seq_lengths_key: torch.Tensor,
         with_prefill: bool = False,
+        qr_pertoken_scale: torch.Tensor = None,
     ):
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
-        q = self.inderxer_wq_b(qr)
+        if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
+            isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
+            qr_pertoken_scale is not None:
+            q = torch_npu.npu_quant_matmul(
+                    qr,
+                    self.inderxer_wq_b.weight,
+                    self.inderxer_wq_b.weight_scale,
+                    pertoken_scale=qr_pertoken_scale,
+                    bias=self.inderxer_wq_b.bias,
+                    output_dtype=x.dtype,
+                )
+        else:
+            q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
