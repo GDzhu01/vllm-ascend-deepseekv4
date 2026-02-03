@@ -47,6 +47,9 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
         "hc_pre_sinkhorn"
         "hc_pre_inv_rms"
         "hc_post"
+        
+        "rms_norm_dynamic_quant"
+        "inplace_partial_rotary_mul"
 
     )
 
@@ -131,6 +134,8 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "hc_pre_inv_rms"
         "hc_post"
 
+        "rms_norm_dynamic_quant"
+        "inplace_partial_rotary_mul"
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
@@ -158,8 +163,8 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_95 ]]; then
         "compressor"
         "quant_lightning_indexer"
         "quant_lightning_indexer_metadata"
-        "sparse_attn_sharedkv"
-        "sparse_attn_sharedkv_metadata"
+        "kv_quant_sparse_attn_sharedkv"
+        "kv_quant_sparse_attn_sharedkv_metadata"
 
         "hc_pre_sinkhorn"
         "hc_pre_inv_rms"

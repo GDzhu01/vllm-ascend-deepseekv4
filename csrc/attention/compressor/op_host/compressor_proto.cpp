@@ -39,9 +39,18 @@ namespace ops {
     constexpr uint32_t COFF_ATTR_INDEX = 2;
     constexpr uint32_t NORM_EPS_ATTR_INDEX = 3;
     constexpr uint32_t ROTARY_MODE_ATTR_INDEX = 4;
+    constexpr uint32_t ENABLE_GRAD_ATTR_INDEX = 5;
 
     // OUTPUT
     constexpr uint32_t CMP_KV_OUTPUT_INDEX = 0;
+    constexpr uint32_t WKV_PROJ_OUTPUT_INDEX = 1;
+    constexpr uint32_t SOFTMAX_RES_OUTPUT_INDEX = 2;
+    constexpr uint32_t NORM_X_OUTPUT_INDEX = 3;
+    constexpr uint32_t NORM_RSTD_OUTPUT_INDEX = 4;
+
+    // ATTR DEFAULT VALUE
+    constexpr uint32_t CMP_RATIO_VALUE = 4;
+    constexpr uint32_t COFF_VALUE = 1;
 
 struct CompressorProtoShapeParam {
     bool isBsMerge { false };
@@ -116,17 +125,93 @@ ge::graphStatus SetCompressorShapeDim(const CompressorProtoShapeParam &shapePara
 {
     auto cmpKvShape = context->GetOutputShape(CMP_KV_OUTPUT_INDEX);                 // query: (B, S, N, Hckv) | (T, N, Hckv)
     OPS_LOG_E_IF_NULL(context, cmpKvShape, return ge::GRAPH_FAILED)
-
+    auto wkvProjShape = context->GetOutputShape(WKV_PROJ_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, wkvProjShape, return ge::GRAPH_FAILED)
+    auto softmaxResShape = context->GetOutputShape(SOFTMAX_RES_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, softmaxResShape, return ge::GRAPH_FAILED)
+    auto normXShape = context->GetOutputShape(NORM_X_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, normXShape, return ge::GRAPH_FAILED)
+    auto normRstdShape = context->GetOutputShape(NORM_RSTD_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, normRstdShape, return ge::GRAPH_FAILED)
+    auto attr = context->GetAttrs();
+    const uint32_t *cmpRatioPtr = attr->GetAttrPointer<uint32_t>(CMP_RATIO_ATTR_INDEX);
+    uint32_t cmpRatio = (cmpRatioPtr != nullptr) ? *cmpRatioPtr : CMP_RATIO_VALUE;
+    const uint32_t *coffPtr = attr->GetAttrPointer<uint32_t>(COFF_ATTR_INDEX);
+    uint32_t coff = (coffPtr != nullptr) ? *coffPtr : COFF_VALUE;
+    const bool *enableGradPtr = attr->GetAttrPointer<bool>(ENABLE_GRAD_ATTR_INDEX);
+    bool enableGrad = (enableGradPtr != nullptr) ? *enableGradPtr : false;
     // Set output shape
     if (!shapeParam.isBsMerge) {
         cmpKvShape->SetDimNum(DIM_NUM_3);                   // (B, Sr, H)
         cmpKvShape->SetDim(DIM_INDEX_0, shapeParam.B);
         cmpKvShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
         cmpKvShape->SetDim(DIM_INDEX_2, shapeParam.H);
+        if (enableGrad) {
+            wkvProjShape->SetDimNum(DIM_NUM_3);
+            wkvProjShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            wkvProjShape->SetDim(DIM_INDEX_1, shapeParam.S);
+            wkvProjShape->SetDim(DIM_INDEX_2, coff * shapeParam.D);
+            softmaxResShape->SetDimNum(DIM_NUM_4);
+            softmaxResShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            softmaxResShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+            softmaxResShape->SetDim(DIM_INDEX_2, coff * cmpRatio);
+            softmaxResShape->SetDim(DIM_INDEX_3, shapeParam.D);
+            normXShape->SetDimNum(DIM_NUM_3);
+            normXShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            normXShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+            normXShape->SetDim(DIM_INDEX_2, coff * shapeParam.D);
+            normRstdShape->SetDimNum(DIM_NUM_2);
+            normRstdShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            normRstdShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+        } else {
+            wkvProjShape->SetDimNum(DIM_NUM_3);
+            wkvProjShape->SetDim(DIM_INDEX_0, 0);
+            wkvProjShape->SetDim(DIM_INDEX_1, 0);
+            wkvProjShape->SetDim(DIM_INDEX_2, 0);
+            softmaxResShape->SetDimNum(DIM_NUM_4);
+            softmaxResShape->SetDim(DIM_INDEX_0, 0);
+            softmaxResShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDim(DIM_INDEX_2, 0);
+            softmaxResShape->SetDim(DIM_INDEX_3, 0);
+            normXShape->SetDimNum(DIM_NUM_3);
+            normXShape->SetDim(DIM_INDEX_0, 0);
+            normXShape->SetDim(DIM_INDEX_1, 0);
+            normXShape->SetDim(DIM_INDEX_2, 0);
+            normRstdShape->SetDimNum(DIM_NUM_2);
+            normRstdShape->SetDim(DIM_INDEX_0, 0);
+            normRstdShape->SetDim(DIM_INDEX_1, 0);
+        }
     } else {
         cmpKvShape->SetDimNum(DIM_NUM_2);                   // (T, N, Hckv)
         cmpKvShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
         cmpKvShape->SetDim(DIM_INDEX_1, shapeParam.H);
+        if (enableGrad) {
+            wkvProjShape->SetDimNum(DIM_NUM_2);
+            wkvProjShape->SetDim(DIM_INDEX_0, shapeParam.T);
+            wkvProjShape->SetDim(DIM_INDEX_1, coff * shapeParam.D);
+            softmaxResShape->SetDimNum(DIM_NUM_3);
+            softmaxResShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+            softmaxResShape->SetDim(DIM_INDEX_1, coff * cmpRatio);
+            softmaxResShape->SetDim(DIM_INDEX_2, shapeParam.D);
+            normXShape->SetDimNum(DIM_NUM_2);
+            normXShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+            normXShape->SetDim(DIM_INDEX_1, coff * shapeParam.D);
+            normRstdShape->SetDimNum(DIM_NUM_1);
+            normRstdShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+        } else {
+            wkvProjShape->SetDimNum(DIM_NUM_2);
+            wkvProjShape->SetDim(DIM_INDEX_0, 0);
+            wkvProjShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDimNum(DIM_NUM_3);
+            softmaxResShape->SetDim(DIM_INDEX_0, 0);
+            softmaxResShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDim(DIM_INDEX_2, 0);
+            normXShape->SetDimNum(DIM_NUM_2);
+            normXShape->SetDim(DIM_INDEX_0, 0);
+            normXShape->SetDim(DIM_INDEX_1, 0);
+            normRstdShape->SetDimNum(DIM_NUM_1);
+            normRstdShape->SetDim(DIM_INDEX_0, 0);
+        }
     }
 
     return GRAPH_SUCCESS;

@@ -334,7 +334,6 @@ __aicore__ inline void CompressorKernel<COMP>::GetSeqLength(uint32_t bIdx) {
             }
         }
     }
-
 }
 
 template <typename COMP>

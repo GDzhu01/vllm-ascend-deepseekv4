@@ -1401,7 +1401,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv = torch.ops._C_ascend.compressor(
+            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1420,7 +1420,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio = self.compress_ratio,
                 coff = coff,
                 norm_eps = self.compressor_norm_eps,
-                rotary_mode = 2
+                rotary_mode = 2,
+                enable_grad=False
             )
 
             if compressed_kv.numel() == 0:
@@ -1561,7 +1562,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv = torch.ops._C_ascend.compressor(
+            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1580,7 +1581,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio = self.compress_ratio,
                 coff = coff,
                 norm_eps = self.compressor_norm_eps,
-                rotary_mode = 2
+                rotary_mode = 2,
+                enable_grad=False
             )
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
@@ -1682,7 +1684,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
 
-        kv = torch.ops._C_ascend.compressor(
+        kv,_,_,_,_ = torch.ops._C_ascend.compressor(
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
@@ -1701,7 +1703,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio = self.compress_ratio,
             coff = coff,
             norm_eps = self.compressor_norm_eps,
-            rotary_mode = 2
+            rotary_mode = 2,
+            enable_grad=False
         )
 
         if kv.numel() == 0:

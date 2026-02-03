@@ -36,7 +36,7 @@ ge::graphStatus RopeRegBaseTilingClassAB::DoOpTiling()
         OPS_LOG_I("RopeRegBaseTilingClassAB DoOpTiling error, typeSize == 0");
         return ge::GRAPH_FAILED;
     }
-    dAlign_ = CeilAlign(d_ / dSplitCoef_, blockSize_ / typeSize) * dSplitCoef_;
+    dAlign_ = CeilAlign(sliceLength_ / dSplitCoef_, blockSize_ / typeSize) * dSplitCoef_;
 
     blockFactorBS_ = CeilDiv(bs, int64_t(aicoreParams_.blockDim));
     blockNumBS_ = CeilDiv(bs, blockFactorBS_);

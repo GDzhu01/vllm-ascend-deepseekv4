@@ -59,10 +59,44 @@ TILING_DATA_FIELD_DEF(int64_t, ubFactorBS);
 TILING_DATA_FIELD_DEF(int64_t, sliceStart);
 TILING_DATA_FIELD_DEF(int64_t, sliceEnd);
 TILING_DATA_FIELD_DEF(int64_t, sliceLength);
+// A3
+TILING_DATA_FIELD_DEF(int64_t, usedCoreNum);
+TILING_DATA_FIELD_DEF(int64_t, numHead);
+TILING_DATA_FIELD_DEF(int64_t, headDim);
+TILING_DATA_FIELD_DEF(int64_t, allHeadDim);
+TILING_DATA_FIELD_DEF(int64_t, coreTUbLoopTime);
+TILING_DATA_FIELD_DEF(int64_t, coreBUbLoopTime);
+TILING_DATA_FIELD_DEF(int64_t, coreTUbLoopTail);
+TILING_DATA_FIELD_DEF(int64_t, coreBUbLoopTail);
+TILING_DATA_FIELD_DEF(int64_t, ubFactor);
+TILING_DATA_FIELD_DEF(int64_t, start);
+TILING_DATA_FIELD_DEF(int64_t, blockFactor);
+//A3 主线
+TILING_DATA_FIELD_DEF(int64_t, batchSize);
+TILING_DATA_FIELD_DEF(int64_t, seqLen);
+TILING_DATA_FIELD_DEF(int64_t, numHeads);
+TILING_DATA_FIELD_DEF(int64_t, frontCoreNum);
+TILING_DATA_FIELD_DEF(int64_t, tailCoreNum);
+TILING_DATA_FIELD_DEF(int64_t, coreCalcNum);
+TILING_DATA_FIELD_DEF(int64_t, coreCalcTail);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcNum);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcLoop);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcTail);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcTailNum);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcTailLoop);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcTailTail);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcBNum);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcBLoop);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcBTail);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcNNum);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcNLoop);
+TILING_DATA_FIELD_DEF(int64_t, ubCalcNTail);
+
 END_TILING_DATA_DEF;
 
 REGISTER_TILING_DATA_CLASS(InplacePartialRotaryMul, RopeRegbaseTilingData)
 
+ge::graphStatus Tiling4InplacePartialRotaryMul(gert::TilingContext* context);
 struct RotaryPositionEmbeddingCompileInfo {
     int64_t blockDim;
     uint64_t ubSize;
@@ -455,3 +489,4 @@ private:
 
 } // namespace optiling
 #endif // OPS_BUILD_IN_OP_TILING_RUNTIME_ROTARY_POSITION_EMBEDDING_H
+

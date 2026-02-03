@@ -522,59 +522,86 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash_meta(
 
 
 
-at::Tensor construct_compressor_output_tensor(const at::Tensor &x, const at::Tensor &norm_weight,
-                                              const at::Tensor &rope_sin, int64_t cmp_ratio)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> 
+construct_compressor_output_tensor(const at::Tensor &x, const at::Tensor &norm_weight, const at::Tensor &rope_sin, 
+                                   int64_t cmp_ratio, int64_t coff, bool enable_grad)
 {
+    constexpr int32_t DIM_1 = 1;
+    constexpr int32_t DIM_2 = 2;
+    constexpr int32_t DIM_3 = 3;
+    constexpr int32_t VALUE_0 = 0;
     auto x_dim = x.dim();
     at::SmallVector<int64_t, 8> cmp_kv_size;
+    at::SmallVector<int64_t, 8> wkv_proj_size;
+    at::SmallVector<int64_t, 8> softmax_res_size;
+    at::SmallVector<int64_t, 8> norm_x_size;
+    at::SmallVector<int64_t, 8> norm_rstd_size;
     at::Tensor cmp_kv;
+    at::Tensor wkv_proj;
+    at::Tensor softmax_res;
+    at::Tensor norm_x;
+    at::Tensor norm_rstd;
     auto cmp_s = 0;
-    if (x_dim == 3) {
+    if (x_dim == DIM_3) {
         cmp_s = (x.size(1) + cmp_ratio - 1) / cmp_ratio;
         cmp_kv_size = {x.size(0), cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), x.size(1), coff * norm_weight.size(0)};
+            softmax_res_size = {x.size(0), cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {x.size(0), cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {x.size(0), cmp_s};
+        }
     } else {
         cmp_s = rope_sin.size(0);
         cmp_kv_size = {cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), coff * norm_weight.size(0)};
+            softmax_res_size = {cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {cmp_s};
+        }
     }
 
     cmp_kv = at::empty(cmp_kv_size, x.options().dtype(x.dtype()));
-    return cmp_kv;
+    if (enable_grad) {
+        wkv_proj = at::empty(wkv_proj_size, x.options().dtype(x.dtype()));
+        softmax_res = at::empty(softmax_res_size, x.options().dtype(x.dtype()));
+        norm_x = at::empty(norm_x_size, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty(norm_rstd_size, x.options().dtype(x.dtype()));
+    } else {
+        wkv_proj = at::empty({0}, x.options().dtype(x.dtype()));
+        softmax_res = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_x = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty({0}, x.options().dtype(x.dtype()));
+    }
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>(
+        cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
 }
 
 
 // 为META设备实现前向接口
-std::tuple<at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 compressor_meta(
-    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
-    at::Tensor &kv_state, at::Tensor &score_state,
-    const at::Tensor &ape, const at::Tensor &norm_weight,
-    const at::Tensor &rope_sin, const at::Tensor &rope_cos,
-    const c10::optional<at::Tensor> &kv_block_table, const c10::optional<at::Tensor> &score_block_table,
-    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
-    const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio,
-    int64_t coff, double norm_eps, int64_t rotary_mode)
+    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate, 
+    at::Tensor &kv_state, at::Tensor &score_state, 
+    const at::Tensor &ape, const at::Tensor &norm_weight, 
+    const at::Tensor &rope_sin, const at::Tensor &rope_cos, 
+    const c10::optional<at::Tensor> &kv_block_table, const c10::optional<at::Tensor> &score_block_table, 
+    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused, 
+    const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio, 
+    int64_t coff, double norm_eps, int64_t rotary_mode, bool enable_grad)
 {
-    constexpr int64_t VALUE_0 = 0;
-    constexpr int64_t DIM_1 = 1;
-    constexpr int64_t DIM_2 = 2;
-    constexpr int64_t DIM_3 = 3;
     // construct the output tensor
     auto x_dim = x.dim();
-    TORCH_CHECK(x_dim == DIM_2 || x_dim == DIM_3, "x dim num[", x_dim, "] should be 2 or 3");
-
     auto norm_weight_dim = norm_weight.dim();
-    TORCH_CHECK(norm_weight_dim == DIM_1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
-
     auto rope_sin_dim = rope_sin.dim();
-    TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
 
-    TORCH_CHECK(cmp_ratio != VALUE_0, "cmp_ratio should not be 0");
+    std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> output = construct_compressor_output_tensor(
+        x, norm_weight, rope_sin, cmp_ratio, coff, enable_grad);
 
-    at::Tensor cmp_kv = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio);
-
-    return std::tuple<at::Tensor>(cmp_kv);
+    return output;
 }
-
 
 std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tensor(const at::Tensor& query, const at::Tensor& key,
                                                            int64_t sparse_count, std::string query_layout_str,
@@ -882,6 +909,38 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_meta(
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
 
+
+void inplace_partial_rotary_mul_meta(
+    at::Tensor &x,
+    const at::Tensor &r1,
+    const at::Tensor &r2,
+    c10::string_view rotary_mode,
+    at::IntArrayRef partial_slice)
+{
+    auto origin_dim_num = x.dim();
+    return;
+}
+
+std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_meta(
+    const at::Tensor& x,
+    const at::Tensor& gamma,
+    const c10::optional<at::Tensor>& smooth_scale,
+    const c10::optional<at::Tensor>& beta,
+    double epsilon)
+{
+    constexpr int32_t SIZE = 8;
+    // construct the output tensors
+    at::Tensor y_out = at::empty_like(x);
+    auto options = x.options();
+    c10::SmallVector<int64_t, SIZE> scale_out_shape;
+    for (size_t i = 0; i < x.sizes().size() - 1; i++) {
+        scale_out_shape.push_back(x.sizes()[i]);
+    }
+    at::Tensor scale_out = at::empty(scale_out_shape, options.dtype(at::kFloat));
+
+    return std::make_tuple(y_out, scale_out);
+}
+
 } // namespace meta
 } // namespace vllm_ascend
 
@@ -944,5 +1003,9 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("npu_hc_pre_inv_rms", &vllm_ascend::meta::npu_hc_pre_inv_rms_meta);
     // npu_hc_pre_inv_rms
     ops.impl("npu_hc_pre_sinkhorn", &vllm_ascend::meta::npu_hc_pre_sinkhorn_meta);
+    // inplace_partial_rotary_mul
+    ops.impl("inplace_partial_rotary_mul", &vllm_ascend::meta::inplace_partial_rotary_mul_meta);
+    // npu_rms_norm_dynamic_quant
+    ops.impl("npu_rms_norm_dynamic_quant", &vllm_ascend::meta::npu_rms_norm_dynamic_quant_meta);
 }
 }

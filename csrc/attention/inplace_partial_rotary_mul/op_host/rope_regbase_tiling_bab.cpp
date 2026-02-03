@@ -94,7 +94,7 @@ ge::graphStatus RopeRegBaseTilingClassBAB::SplitCore()
 ge::graphStatus RopeRegBaseTilingClassBAB::SplitUb()
 {
     uint32_t typeSize = ge::GetSizeByDataType(dtype_);
-    int64_t dAlign = CeilAlign(d_ * typeSize / dSplitCoef_, blockSize_) * dSplitCoef_;
+    int64_t dAlign = CeilAlign(sliceLength_ * typeSize / dSplitCoef_, blockSize_) * dSplitCoef_;
     // interleave模式需要补pad, D对齐
     int64_t canLoadDNum = FloorDiv(ubSize_, dAlign);
     if (canLoadDNum < MIN_UB_LOAD_D_NUM + MIN_UB_LOAD_D_NUM) {
@@ -154,10 +154,10 @@ ge::graphStatus RopeRegBaseTilingClassBAB::PostTiling()
     tilingData_.set_ubFactorN(ubFactorN_);
     tilingData_.set_ubTailFactorN(ubTailFactorN_);
     tilingData_.set_rotaryMode(static_cast<int64_t>(rotaryMode_));
-    tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     tilingData_.set_sliceStart(static_cast<int64_t>(sliceStart_));
     tilingData_.set_sliceEnd(static_cast<int64_t>(sliceEnd_));
     tilingData_.set_sliceLength(static_cast<int64_t>(sliceLength_));
+    tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
     context_->SetBlockDim(usedCoreNum_);
     context_->SetTilingKey(tilingKey_);

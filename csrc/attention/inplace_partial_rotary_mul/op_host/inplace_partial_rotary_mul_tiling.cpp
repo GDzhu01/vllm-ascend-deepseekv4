@@ -41,7 +41,6 @@ ge::graphStatus RotaryPosEmbeddingMembaseTilingClass::GetPlatformInfo()
     return ge::GRAPH_SUCCESS;
 }
 
-
 ge::graphStatus RotaryPosEmbeddingMembaseTilingClass::GetShapeAttrsInfo()
 {
     auto attrs = context_->GetAttrs();
@@ -85,10 +84,12 @@ ge::graphStatus Tiling4RotaryPositionEmbedding(gert::TilingContext *context)
                 OPS_LOG_I(context, "Ignore general op tiling priority");
             }
         }
+        OPS_LOG_I(context, "Using tiling for ASCEND910_71");
+        RotaryPosEmbeddingMembaseTilingClass rotaryPosEmbeddingMembaseTilingClass(context);
+        return rotaryPosEmbeddingMembaseTilingClass.DoOpTiling();
+    } else {
+        return Tiling4InplacePartialRotaryMul(context);
     }
-    OPS_LOG_I(context, "Using tiling for ASCEND910_71");
-    RotaryPosEmbeddingMembaseTilingClass rotaryPosEmbeddingMembaseTilingClass(context);
-    return rotaryPosEmbeddingMembaseTilingClass.DoOpTiling(); // TODO
 }
 
 ge::graphStatus TilingPrepareForRotaryPositionEmbedding(gert::TilingParseContext *context)
@@ -101,3 +102,4 @@ IMPL_OP_OPTILING(InplacePartialRotaryMul)
     .Tiling(Tiling4RotaryPositionEmbedding)
     .TilingParse<RotaryPositionEmbeddingCompileInfo>(TilingPrepareForRotaryPositionEmbedding);
 } // namespace optiling
+
