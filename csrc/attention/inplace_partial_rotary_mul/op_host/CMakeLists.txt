@@ -9,7 +9,7 @@
 
 # add_ops_compile_options(
 #         OP_NAME InplacePartialRotaryMul
-#         OPTIONS --cce-auto-sync=off
+#         OPTIONS --cce-auto-sync=on
 #                 -Wno-deprecated-declarations
 #                 -Werror
 #                 -mllvm -cce-aicore-hoist-movemask=false
@@ -24,6 +24,7 @@
 
 # target_sources(optiling PRIVATE
 #         op_host/inplace_partial_rotary_mul_tiling.cpp
+# 	op_host/inplace_partial_rotary_mul_a3_tiling.cpp
 #         op_host/rope_regbase_tiling_base.cpp
 #         op_host/rope_regbase_tiling_a_and_b.cpp
 #         op_host/rope_regbase_tiling_ab.cpp
@@ -34,6 +35,7 @@
 # if (NOT BUILD_OPEN_PROJECT)
 #     target_sources(opmaster_ct PRIVATE
 #         op_host/inplace_partial_rotary_mul_tiling.cpp
+# 	op_host/inplace_partial_rotary_mul_a3_tiling.cpp
 #         op_host/rope_regbase_tiling_base.cpp
 #         op_host/rope_regbase_tiling_a_and_b.cpp
 #         op_host/rope_regbase_tiling_ab.cpp
@@ -55,17 +57,18 @@ add_op_to_compiled_list()
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnn PRIVATE
         inplace_partial_rotary_mul_def.cpp
-     )
+    )
 endif()
 
 add_ops_compile_options(
         OP_NAME InplacePartialRotaryMul
-        OPTIONS --cce-auto-sync=off
+        OPTIONS --cce-auto-sync=on
                 -Wno-deprecated-declarations
                 -Werror
                 -mllvm -cce-aicore-hoist-movemask=false
                 --op_relocatable_kernel_binary=true
 )
+
 
 if (NOT BUILD_OPS_RTY_KERNEL)
     add_modules_sources(OPTYPE inplace_partial_rotary_mul ACLNNTYPE aclnn)

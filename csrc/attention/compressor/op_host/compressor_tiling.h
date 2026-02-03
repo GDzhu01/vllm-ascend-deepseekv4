@@ -29,12 +29,14 @@
 #include "register/op_def_registry.h"
 #include "../op_kernel/compressor_template_tiling_key.h"
 #include "../op_kernel/compressor_tiling_data.h"
+#include "platform/platform_info.h"
 
 #ifdef ASCENDC_OP_TEST
 #define CMP_EXTERN_C extern "C"
 #else
 #define CMP_EXTERN_C
 #endif
+// #define DAY0_SCOPE
 
 namespace optiling {
 
@@ -82,6 +84,8 @@ namespace optiling {
     constexpr uint32_t MAX_BLOCK_SIZE = 1024;
     constexpr uint32_t MIN_BLOCK_SIZE = 16;
     constexpr uint32_t ALIGN_FACTOR_BLOCK_SIZE = 16;
+
+    constexpr uint32_t BATCH_MODE_SCHEDULE = 1;
     
 struct CompressorCompileInfo {
     int64_t core_num;
@@ -100,12 +104,13 @@ struct OptionalParaInfo {
 
 enum class LayoutType {
     LAYOUT_BSH,
-    LAYOUT_TH    
+    LAYOUT_TH
 };
 
-enum class EMPTY_TENSOR_MODE:uint8_t {
-    NON_EMPTY = 0,
-    EMPTY_X = 1
+enum class TemplateId:uint8_t {
+    NORMAL = 0,
+    EMPTY_X = 1,
+    PERF = 2
 };
 
 CMP_EXTERN_C ge::graphStatus TilingCompressor(gert::TilingContext *context);
@@ -125,8 +130,13 @@ struct CompressorBaseShapeInfo {
 
 const std::vector<int> ROPE_HEAD_DIM {64};
 const std::vector<int> COFF {1, 2};
+#ifdef DAY0_SCOPE
+const std::vector<int> CMP_RATIO {4, 128};
+const std::vector<int> ROTARY_MODE {2};
+#else
 const std::vector<int> CMP_RATIO {2, 4, 8, 16, 32, 64, 128};
 const std::vector<int> ROTARY_MODE {1, 2};
+#endif
 const std::vector<uint32_t> HEAD_DIM {128, 512};
 
 enum class ROTARY_MODE:uint8_t {
@@ -160,7 +170,7 @@ struct CompressorContext {
     const int *cmpRatio;
     const float *normEps;
     const int *rotaryMode;
-    EMPTY_TENSOR_MODE emptyTensorMode;
+    TemplateId templateId;
 
     ge::DataType dtype = ge::DT_BF16; 
     LayoutType layout = LayoutType::LAYOUT_BSH; 
@@ -169,8 +179,6 @@ struct CompressorContext {
     uint64_t tilingKey;
     uint32_t blockDim;
 };
-
-static std::string DataTypeToSerialString(ge::DataType type);
 
 class CompressorTiling {
 public:
@@ -189,6 +197,7 @@ private:
     ge::graphStatus SetPageAttentionInfo();
     ge::graphStatus SetWorkSpaceInfo();
     ge::graphStatus SetScenarioInfo();
+    ge::graphStatus SetTemplateId();
     ge::graphStatus SetInnerSplitInfo();
     ge::graphStatus CalcWorkSpace();
     ge::graphStatus CheckSinglePara() const;
@@ -242,6 +251,7 @@ private:
     ge::graphStatus CheckMultiParaConsistency() const;
     ge::graphStatus CheckDimNumConsistency() const;
     ge::graphStatus CheckEmptyTensor() const;
+    ge::graphStatus CheckScenarioConsistency() const;
 
     size_t ubSize_ = 0;
     size_t l1Size_ = 0;
@@ -250,7 +260,9 @@ private:
     uint32_t coreNum_ = 0;
     uint32_t aicNum_ = 0;
     uint32_t aivNum_ = 0;
+    platform_ascendc::SocVersion socVersion_ = platform_ascendc::SocVersion::ASCEND910B;
     size_t libapiSize_ = 0;
+    // platform_ascendc::SocVersion socVersion_;
     size_t workspaceSize_ = 0;
     uint8_t coff = 1;
 

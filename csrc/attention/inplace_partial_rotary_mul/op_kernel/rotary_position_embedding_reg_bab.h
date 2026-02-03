@@ -76,8 +76,8 @@ __aicore__ inline void RotaryPositionEmbeddingBAB<T>::Init(GM_ADDR x, GM_ADDR co
     } else if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::QUARTER)) {
         this->dSplitCoef_ = QUARTER_MODE_COEF;
     }
-    this->dSplitSize_ = tilingData_->D / dSplitCoef_ * sizeof(T);
-    this->dAlign_ = ops::CeilAlign<int64_t>(tilingData_->D / dSplitCoef_, BLOCK_TYPE_SIZE / sizeof(T)) * dSplitCoef_;
+    this->dSplitSize_ = tilingData_->sliceLength / dSplitCoef_ * sizeof(T);
+    this->dAlign_ = ops::CeilAlign<int64_t>(tilingData_->sliceLength / dSplitCoef_, BLOCK_TYPE_SIZE / sizeof(T)) * dSplitCoef_;
     ubFactorN_ = tilingData_->ubFactorN;
     ubFactorS_ = tilingData_->ubFactorS;
     this->xGm_.SetGlobalBuffer((__gm__ T*)x);
@@ -126,7 +126,7 @@ __aicore__ inline void RotaryPositionEmbeddingBAB<T>::ProcessNLoop(
 {
     LocalTensor<T> sinTensor = sinInQue_.AllocTensor<T>();
     LocalTensor<T> cosTensor = cosInQue_.AllocTensor<T>();
-    int64_t offset = sIdx * tilingData_->D;
+    int64_t offset = sIdx * tilingData_->sliceLength;
     DataCopyExtParams copyParams{static_cast<uint16_t>(currSNum * dSplitCoef_), dSplitSize_, 0, 0, 0};
     DataCopyPadExtParams<T> padParams{false, 0, 0, 0};
     DataCopyPad(sinTensor, sinGm_[offset], copyParams, padParams);
@@ -147,16 +147,16 @@ __aicore__ inline void RotaryPositionEmbeddingBAB<T>::ProcessN(
 {
     LocalTensor<T> xTensor;
     LocalTensor<T> yTensor;
-    int64_t baseOffset = (bIdx * tilingData_->S + sIdx) * tilingData_->N * tilingData_->D;
+    int64_t baseOffset = (bIdx * tilingData_->S + sIdx) * tilingData_->N * tilingData_->D + tilingData_->sliceStart;
     for (uint32_t idxN = 0; idxN < tilingData_->ubLoopNumN; idxN++) {
         int64_t currDNum = (idxN == tilingData_->ubLoopNumN - 1) ? tilingData_->ubTailFactorN : ubFactorN_;
         int64_t offset = baseOffset + idxN * ubFactorN_ * tilingData_->D;
         xTensor = xInQue_.AllocTensor<T>();
-        DataCopyExtParams copyInParams{static_cast<uint16_t>(currSNum * currDNum * dSplitCoef_), dSplitSize_, 0, 0, 0};
-        DataCopyExtParams copyOutParams{static_cast<uint16_t>(currSNum * currDNum * dSplitCoef_), dSplitSize_, 0, 0, 0};
+        DataCopyExtParams copyInParams{static_cast<uint16_t>(currSNum * currDNum * dSplitCoef_), dSplitSize_, static_cast<uint32_t>((tilingData_->D - tilingData_->sliceLength) * sizeof(T)), 0, 0};
+        DataCopyExtParams copyOutParams{static_cast<uint16_t>(currSNum * currDNum * dSplitCoef_), dSplitSize_, 0, static_cast<uint32_t>((tilingData_->D - tilingData_->sliceLength) * sizeof(T)), 0};
         // deepSeekInterleave 场景，copyIn时按照D对齐，copyOut 时，按照 d/2 对齐
         if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::DEEPSEEK_INTERLEAVE)) {
-            copyInParams = {static_cast<uint16_t>(currSNum * currDNum), tilingData_->D * sizeof(T), 0, 0, 0};
+            copyInParams = {static_cast<uint16_t>(currSNum * currDNum), tilingData_->sliceLength * sizeof(T), static_cast<uint32_t>((tilingData_->D - tilingData_->sliceLength) * sizeof(T)), 0, 0};
         }
         DataCopyPadExtParams<T> padParams{false, 0, 0, 0};
         DataCopyPad(xTensor, xGm_[offset], copyInParams, padParams);
@@ -178,13 +178,13 @@ __aicore__ inline void RotaryPositionEmbeddingBAB<T>::Compute(
     const LocalTensor<T>& outTensor, const uint32_t currSNum, const uint32_t currDNum)
 {
     if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::HALF)) {
-        HalfAlignVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->D, dAlign_, currSNum, currDNum);
+        HalfAlignVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->sliceLength, dAlign_, currSNum, currDNum);
     } else if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::INTERLEAVE)) {
-        InterleaveModeVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->D, currSNum, currDNum);
+        InterleaveModeVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->sliceLength, currSNum, currDNum);
     } else if (tilingData_->rotaryMode == static_cast<int64_t>(RotaryPosEmbeddingMode::QUARTER)) {
-        QuarterAlignVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->D, dAlign_, currSNum, currDNum);
+        QuarterAlignVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->sliceLength, dAlign_, currSNum, currDNum);
     } else {
-        DeepSeekInterleaveModeVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->D, currSNum, currDNum);
+        DeepSeekInterleaveModeVF<T>(sinTensor, cosTensor, inTensor, outTensor, tilingData_->sliceLength, currSNum, currDNum);
     }
 }
 
