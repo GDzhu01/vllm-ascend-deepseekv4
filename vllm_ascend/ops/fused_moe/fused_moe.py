@@ -70,10 +70,11 @@ class FusedMoEEvents:
 
 class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
 
-    def __init__(self, moe: FusedMoEConfig = None):
+    def __init__(self, moe: FusedMoEConfig = None,tid2eid=None):
 
         super().__init__(moe=moe)
         self.dynamic_eplb = get_ascend_config().dynamic_eplb
+        self.tid2eid=tid2eid
 
     def process_weights_after_loading(self, layer):
         super(UnquantizedFusedMoEMethod,
@@ -108,9 +109,11 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
               expert_map: Optional[torch.Tensor] = None,
               apply_router_weight_on_input: bool = False,
               enable_force_load_balance: bool = False,
+            #   tid2eid = None,
               **kwargs) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -123,7 +126,10 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             scoring_func=scoring_func,
             routed_scaling_factor=routed_scaling_factor,
             e_score_correction_bias=e_score_correction_bias,
-            global_num_experts=global_num_experts)
+            global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids
+            )
 
         if zero_expert_num > 0 and zero_expert_type is not None:
             topk_ids, topk_weights, zero_expert_result = zero_experts_compute(
@@ -166,11 +172,16 @@ class AscendFusedMoE(FusedMoE):
     gate_stream: Optional[torch.npu.Stream] = None
 
     def __init__(self, *args, **kwargs):
+        use_hash=kwargs["hash"]
+        tid2eid=kwargs['tid2eid']
+        kwargs.pop('hash')
+        kwargs.pop('tid2eid')
         super().__init__(*args, **kwargs)
 
         num_experts = kwargs["num_experts"]
         intermediate_size = kwargs["intermediate_size"]
         num_shared_experts = kwargs.get("n_shared_experts", 0)
+
 
         AscendFusedMoE.moe_counter += 1
         self.moe_instance_id = AscendFusedMoE.moe_counter
@@ -178,12 +189,14 @@ class AscendFusedMoE(FusedMoE):
         self._expert_map = None
         self.log2phy = None
 
+        self.tid2eid = tid2eid
+
         if self.quant_config is None:
             self.quant_method = AscendUnquantizedFusedMoEMethod(
-                self.moe_config)
+                self.moe_config,tid2eid=self.tid2eid)
         else:
             self.quant_method = self.quant_config.get_quant_method(
-                self, self.layer_name)
+                self, self.layer_name, tid2eid=self.tid2eid)
 
         assert self.quant_method is not None
 
@@ -317,7 +330,7 @@ class AscendFusedMoE(FusedMoE):
                         and not shared_expert_dp_enabled():
                     shared_out = tensor_model_parallel_all_reduce(shared_out)
                 set_flash_common3_context(shared_out=shared_out)
-
+                input_ids = get_forward_context().input_ids
                 topk_weights, topk_ids = select_experts(
                     hidden_states=hidden_states,
                     router_logits=router_logits,
@@ -330,7 +343,10 @@ class AscendFusedMoE(FusedMoE):
                     scoring_func=self.scoring_func,
                     routed_scaling_factor=self.routed_scaling_factor,
                     e_score_correction_bias=self.e_score_correction_bias,
-                    global_num_experts=self.global_num_experts)
+                    global_num_experts=self.global_num_experts,
+                    input_ids=input_ids,  # Note: get ids from forward context
+                    tid2eid=self.tid2eid, # 
+                    )
 
                 if isinstance(forward_context.moe_comm_method,
                               AllGatherCommImpl):
@@ -416,7 +432,8 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         **kwargs,
     ):
         AscendFusedMoE.__init__(self, **kwargs)
-
+        use_hash=kwargs["hash"]
+        tid2eid=kwargs['tid2eid']
         self._shared_experts = shared_experts
         self.use_overlapped = use_overlapped
         self.shared_expert_stream = None
@@ -429,6 +446,10 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
             )
 
         self._gate = gate
+        if use_hash:
+            self.tid2eid = tid2eid
+        else:
+            self.tid2eid = None
 
         # Wrap the quant_method's process_weights_after_loading to validate that
         # splitting shared expert computation (gate_up projection + activation,
@@ -519,7 +540,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        router_logits: torch.Tensor,
+        router_logits: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self._shared_experts is None:
             fused_out = AscendFusedMoE.forward(
