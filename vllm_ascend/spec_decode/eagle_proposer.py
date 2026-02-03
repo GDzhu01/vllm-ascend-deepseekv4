@@ -961,7 +961,7 @@ class EagleProposer(VllmEagleProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
-            positions_cpu=common_attn_metadata.positions_cpu[token_indices],
+            positions_cpu=common_attn_metadata.positions_cpu[token_indices] if common_attn_metadata.positions_cpu is not None else common_attn_metadata.positions_cpu,
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,
