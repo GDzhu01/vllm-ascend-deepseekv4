@@ -224,7 +224,9 @@ class MC2CommImpl(MoECommMethod):
     This implementation uses the MC2 communication method, which is optimized for
     Communication and Computation parallelism on Ascend devices.
     """
-
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
+    
     def _get_token_dispatcher(self):
         return TokenDispatcherWithMC2()
 
@@ -241,7 +243,9 @@ class AlltoAllCommImpl(MoECommMethod):
     between data parallel ranks before and after the MLP computation. It should
     have better performance than AllGatherCommImpl when DP size > 1.
     """
-
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
+    
     def _get_token_dispatcher(self):
         return TokenDispatcherWithAll2AllV(
             top_k=self.moe_config.experts_per_token,
