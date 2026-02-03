@@ -1320,21 +1320,18 @@ class AscendDSAImpl(DSAAttentionImpl):
         cos = attn_metadata.cos[layer_name]
         sin = attn_metadata.sin[layer_name]
         num_tokens = o_proj_input.shape[0]
-        if not has_prefill:
-            triton_apply_rope_partial_in_place(o_proj_input[:decode_tokens], -sin, cos)
-            o = o_proj_input
-        else:
-            o_nope, o_pe = o_proj_input.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-            o_pe = self.rope_single(o_pe, cos, sin, True)
-            o = torch.cat([o_nope, o_pe], dim=-1)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            o_proj_input.unsqueeze(1), cos, -sin,
+            rotary_mode="interleave",
+            partial_slice=[self.nope_head_dim, self.head_dim],
+        )
 
         # o
-        o = o.view(num_tokens, self.n_local_groups, -1)
-        # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-        o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
-        o = o.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o)
+        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
+        o_proj_input = torch_npu.npu_transpose_batchmatmul(o_proj_input, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        o_proj_input = o_proj_input.reshape(num_tokens, -1)
+        output[...] = self.wo_b(o_proj_input)
 
         return output_padded
 
@@ -1364,16 +1361,22 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
         q = triton_q_rms(q, self.eps)
-        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        q_pe = self.rope_single(q_pe, cos, sin)
-        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            q.unsqueeze(1), cos, sin,
+            rotary_mode="interleave",
+            partial_slice=[self.nope_head_dim, self.head_dim],
+        )
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
-        kv_pe = self.rope_single(kv_pe, cos, sin)
-        kv = torch.cat([kv_nope, kv_pe], dim=-1)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            kv.unsqueeze(1), cos, sin,
+            rotary_mode="interleave",
+            partial_slice=[self.nope_head_dim, self.head_dim],
+        )
 
         # swa exec kv
         torch_npu.npu_scatter_nd_update_(
@@ -1520,7 +1523,12 @@ class AscendDSAImpl(DSAAttentionImpl):
             if self.multistream_dsa_preprocess else None
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-        kv = triton_apply_rope_partial_in_place(kv, sin, cos)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            kv.unsqueeze(1), cos, sin,
+            rotary_mode="interleave",
+            partial_slice=[self.nope_head_dim, self.head_dim],
+        )
 
         # swa exec kv
         torch_npu.npu_scatter_nd_update_(
@@ -1540,7 +1548,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                 attention_calculation_stream())
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
         q = triton_q_rms(q, self.eps)
-        q = triton_apply_rope_partial_in_place(q, sin, cos)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            q.unsqueeze(1), cos, sin,
+            rotary_mode="interleave",
+            partial_slice=[self.nope_head_dim, self.head_dim],
+        )
 
         if self.compress_ratio > 1:
             compress_cos = attn_metadata.decode.compress_cos[layer_name]
@@ -1667,13 +1680,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
         q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
-        
-        if not with_prefill:
-            q = triton_apply_rope_partial_in_place(q, sin, cos)
-        else:
-            q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
-            q_pe = self.rope_single(q_pe, cos, sin)
-            q = torch.cat([q_nope, q_pe], dim=-1)
+
+        torch.ops._C_ascend.inplace_partial_rotary_mul(
+            q.unsqueeze(1), cos, sin,
+            rotary_mode="interleave",
+            partial_slice=[self.indexcom_head_dim-self.rope_head_dim, self.indexcom_head_dim],
+        )
 
         q = rotate_activation(q, attn_metadata)
         coff = 2 if self.compressor_overlap else 1
