@@ -9,6 +9,7 @@ on:
     types: [synchronize]
 
 jobs:
+  if: false
   main:
     runs-on: ubuntu-latest
     steps:
