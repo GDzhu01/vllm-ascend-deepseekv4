@@ -94,7 +94,8 @@ class EagleProposer(VllmEagleProposer):
         super().__init__(vllm_config, device, runner)
 
         self.use_async_scheduling = self.vllm_config.scheduler_config.async_scheduling
-        self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
+        self.use_compress = hasattr(self.vllm_config.model_config.hf_config,
+                                    "compress_ratios")
         # there is synchronization between mtp steps when enabling aclgraph,
         # disable aclgraph when use async scheduling to avoid the
         # synchronization overhead.
@@ -361,7 +362,7 @@ class EagleProposer(VllmEagleProposer):
                 num_computed_tokens_cpu=num_computed_tokens_cpu,
                 actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
                 block_table_tensor=self.runner.input_batch.block_table[0].
-                get_device_tensor()[:num_reqs],
+                get_device_tensor(num_reqs),
                 # This is used to hold a position.
                 slot_mapping=self.runner.input_batch.block_table[0].
                 slot_mapping.gpu,
@@ -961,7 +962,9 @@ class EagleProposer(VllmEagleProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
-            positions_cpu=common_attn_metadata.positions_cpu[token_indices],
+            positions_cpu=common_attn_metadata.positions_cpu[token_indices]
+            if common_attn_metadata.positions_cpu is not None else
+            common_attn_metadata.positions_cpu,
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,

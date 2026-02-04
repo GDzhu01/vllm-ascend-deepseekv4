@@ -27,9 +27,12 @@ class BlockTable:
                 hasattr(kv_cache_group, "kv_cache_spec") and \
                 hasattr(kv_cache_group.kv_cache_spec, "compress_ratio"):
             compress_ratio = kv_cache_group.kv_cache_spec.compress_ratio
-        self.max_num_blocks_per_req = max(cdiv(max_num_blocks_per_req, compress_ratio), 1)
-        self.max_num_batched_tokens = cdiv(max_num_batched_tokens, compress_ratio)
-        max_num_blocks_per_req = max(cdiv(max_num_blocks_per_req, compress_ratio), 1)
+        self.max_num_blocks_per_req = max(
+            cdiv(max_num_blocks_per_req, compress_ratio), 1)
+        self.max_num_batched_tokens = cdiv(max_num_batched_tokens,
+                                           compress_ratio)
+        max_num_blocks_per_req = max(
+            cdiv(max_num_blocks_per_req, compress_ratio), 1)
         self.pin_memory = pin_memory
         self.device = device
         self.physical_block_size = block_size
@@ -344,7 +347,9 @@ class MultiGroupBlockTable:
     ) -> None:
         for i, block_table in enumerate(self.block_tables):
             if positions_compressed_list and req_indices_compressed_list:
-                block_table.compute_slot_mapping(req_indices_compressed_list[i], positions_compressed_list[i])
+                block_table.compute_slot_mapping(
+                    req_indices_compressed_list[i],
+                    positions_compressed_list[i])
             else:
                 block_table.compute_slot_mapping(req_indices, positions)
 
