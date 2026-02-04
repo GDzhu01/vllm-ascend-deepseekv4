@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
-
+from vllm_ascend.utils import acl_graph_print
 
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
     x_shape = x.shape
@@ -860,9 +860,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         self.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
+
+        state_block = common_attn_metadata.state_block_table[:self.num_decodes]
         if num_reqs_actual is not None and num_reqs_actual < self.num_decodes:
             self.start_pos_decode[num_reqs_actual:].fill_(0)
-        
+            self.block_table[num_reqs_actual:self.num_decodes, ...].fill_(0)
+            state_block[num_reqs_actual:self.num_decodes, ...].fill_(0)
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
@@ -974,7 +977,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
             query_start_loc_cpu=query_start_loc_cpu,
-            state_block_table=common_attn_metadata.state_block_table[:self.num_decodes],
+            state_block_table=state_block,
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
             compress_sin=compress_sin,
@@ -1338,8 +1341,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_sparse_indices=compress_topk_idxs,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
+                cu_seqlens_q=actual_seq_lengths_query, # [0,1,2,3,4,5,6, pad 7]
+                seqused_kv=actual_seq_lengths_key,     # [119,119,119,119,119,119,119, pad 0]
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c4_metadata,
                 softmax_scale=self.softmax_scale,
@@ -1498,7 +1501,16 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode = 2,
                 enable_grad=False
             )
-
+            # acl_graph_print('attn_metadata.decode.state_block_table')
+            # acl_graph_print(attn_metadata.decode.state_block_table)
+            # acl_graph_print('actual_seq_lengths_query')
+            # acl_graph_print(actual_seq_lengths_query)
+            # acl_graph_print("start_pos")
+            # acl_graph_print(attn_metadata.decode.start_pos)
+            # acl_graph_print('block_table')
+            # acl_graph_print(compressed_kv_block_table)
+            # acl_graph_print('slotmapping')
+            # acl_graph_print(compressed_kv_slot_mapping.unsqueeze(-1))
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[0].view(-1, compressed_kv.shape[-1]),
