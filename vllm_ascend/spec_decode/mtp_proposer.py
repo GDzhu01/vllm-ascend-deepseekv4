@@ -10,6 +10,8 @@ from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.eagle import PADDING_SLOT_ID
+from vllm.v1.kv_cache_interface import AttentionSpec
+from vllm_ascend.attention.dsa_v1 import AscendDSAMetadata
 
 from vllm_ascend.ascend_forward_context import set_ascend_forward_context
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
@@ -300,7 +302,22 @@ class MtpProposer(EagleProposer):
         # builder padding some elements.
         common_attn_metadata.graph_pad_size = graph_pad_size
         common_attn_metadata.num_input_tokens = num_input_tokens
-        builder = self.runner.attn_groups[0][0].get_metadata_builder()
+
+        kv_cache_spec = AttentionSpec(
+            block_size=128,
+            num_kv_heads=1,
+            head_size=512,
+            dtype=torch.bfloat16,
+        )
+        swa_metadata_builder = self.runner.attn_backend.get_builder_cls()(
+            kv_cache_spec,
+            None,
+            self.vllm_config,
+            self.device,
+            AscendDSAMetadata,
+            supports_dcp_with_varlen=False,
+        )
+        builder = swa_metadata_builder
         attn_metadata_mtp = builder.build(0, common_attn_metadata,
                                           self.runner.get_model())
         attn_metadata = {}
