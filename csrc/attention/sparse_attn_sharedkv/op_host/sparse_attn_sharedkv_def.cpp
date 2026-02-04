@@ -9,7 +9,7 @@
  */
  
 /*!
- * \file sparse_attn_sharedkv_def.cpp
+ * \file sparse_wincmp_attn_sharedkv_def.cpp
  * \brief
  */
 
