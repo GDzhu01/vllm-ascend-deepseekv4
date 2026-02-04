@@ -267,6 +267,9 @@ class FusedMC2CommImpl(MoECommMethod):
     Communication and Computation parallelism on Ascend devices.
     """
 
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
+
     def _get_token_dispatcher(self):
         return TokenDispatcherWithMC2()
 
