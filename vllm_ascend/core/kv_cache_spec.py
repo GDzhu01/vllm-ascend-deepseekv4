@@ -1,10 +1,10 @@
-import torch
 from dataclasses import dataclass
 
+import torch
 from vllm.config import VllmConfig
-from vllm.v1.kv_cache_interface import AttentionSpec
-from vllm.utils.torch_utils import get_dtype_size
 from vllm.utils.math_utils import cdiv
+from vllm.utils.torch_utils import get_dtype_size
+from vllm.v1.kv_cache_interface import AttentionSpec
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,10 @@ class CompressAttentionSpec(AttentionSpec):
         Returns:
             The page size
         """
-        base_page_size = self.block_size * self.head_size * 1 * get_dtype_size(self.dtype)
-        indexer_page_size = self.block_size * self.indexer_head_size * 1 * get_dtype_size(self.dtype)
+        base_page_size = self.block_size * self.head_size * 1 * get_dtype_size(
+            self.dtype)
+        indexer_page_size = self.block_size * self.indexer_head_size * 1 * get_dtype_size(
+            self.dtype)
         page_size = (base_page_size + indexer_page_size) // self.compress_ratio
 
         return page_size
@@ -47,6 +49,7 @@ class CompressAttentionSpec(AttentionSpec):
 def pad_to_128(x: int):
     return ((x + 127) // 128) * 128
 
+
 @dataclass(frozen=True)
 class Compress4AttentionSpec(CompressAttentionSpec):
     # TODO(cmq): adapt the logic of quantization
@@ -62,7 +65,7 @@ class Compress4AttentionSpec(CompressAttentionSpec):
     #   nope+rope+scale head_dim = 448    +    64  +  7
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
-    #   pad to 128 to make sure the perfermance is ok
+    #   pad to 128 to make sure the performance is ok
 
     @property
     def compress_kv_size_bytes(self) -> int:
@@ -75,12 +78,14 @@ class Compress4AttentionSpec(CompressAttentionSpec):
 
     @property
     def indexer_k_size_bytes(self) -> int:
-        indexer_page_size = self.block_size * self.indexer_head_size * get_dtype_size(self.indexer_dtype)
+        indexer_page_size = self.block_size * self.indexer_head_size * get_dtype_size(
+            self.indexer_dtype)
         return indexer_page_size // self.compress_ratio
 
     @property
     def indexer_scale_size_bytes(self) -> int:
-        indexer_scale_page_size = self.block_size * self.indexer_scale_dim * get_dtype_size(self.indexer_scale_dtype)
+        indexer_scale_page_size = self.block_size * self.indexer_scale_dim * get_dtype_size(
+            self.indexer_scale_dtype)
         return indexer_scale_page_size // self.compress_ratio
 
     @property
@@ -91,7 +96,8 @@ class Compress4AttentionSpec(CompressAttentionSpec):
         Returns:
             The page size
         """
-        return (self.compress_kv_size_bytes + self.indexer_k_size_bytes + self.indexer_scale_size_bytes)
+        return (self.compress_kv_size_bytes + self.indexer_k_size_bytes +
+                self.indexer_scale_size_bytes)
 
     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
         """
@@ -110,7 +116,7 @@ class Compress128AttentionSpec(CompressAttentionSpec):
     #   nope+rope+scale head_dim = 448    +    64  +  7
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
-    #   pad to 128 to make sure the perfermance is ok
+    #   pad to 128 to make sure the performance is ok
 
     @property
     def page_size_bytes(self) -> int:
@@ -139,4 +145,3 @@ class Compress128AttentionSpec(CompressAttentionSpec):
         """
         max_model_len = vllm_config.model_config.max_model_len
         return cdiv(max_model_len, self.block_size) * self.page_size_bytes
-

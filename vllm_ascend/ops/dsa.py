@@ -19,27 +19,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 from torch import nn
 from vllm.attention.backends.abstract import AttentionMetadata
-from vllm_ascend.models.layer.attention.layer import DSAAttention
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.forward_context import ForwardContext, get_forward_context
-
+from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.utils.torch_utils import direct_register_custom_op
 
+from vllm_ascend.models.layer.attention.layer import DSAAttention
 
-
-from dataclasses import dataclass
-
-import torch
-
-from vllm.config import CacheConfig
-from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
 
 @dataclass
 class DSAModules:
@@ -57,7 +50,6 @@ class DSAModules:
     compressor: torch.nn.Module | None
     topk_indices_buffer: torch.Tensor | None
     indexer_rotary_emb: torch.nn.Module | None = None
-
 
 
 class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
@@ -84,21 +76,21 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         prefix: str = "",
     ) -> None:
         nn.Module.__init__(self)
-        self.dim=dim
-        self.n_heads=n_heads
-        self.scale=scale
-        self.n_local_heads=n_local_heads
-        self.q_lora_rank=q_lora_rank
-        self.o_lora_rank=o_lora_rank
-        self.head_dim=head_dim 
-        self.rope_head_dim=rope_head_dim
-        self.nope_head_dim=nope_head_dim
-        self.eps=eps
-        self.n_groups=n_groups
-        self.n_local_groups=n_local_groups
+        self.dim = dim
+        self.n_heads = n_heads
+        self.scale = scale
+        self.n_local_heads = n_local_heads
+        self.q_lora_rank = q_lora_rank
+        self.o_lora_rank = o_lora_rank
+        self.head_dim = head_dim
+        self.rope_head_dim = rope_head_dim
+        self.nope_head_dim = nope_head_dim
+        self.eps = eps
+        self.n_groups = n_groups
+        self.n_local_groups = n_local_groups
         self.window_size = window_size
-        self.compress_ratio=compress_ratio
-        
+        self.compress_ratio = compress_ratio
+
         self.wq_a = dsa_modules.wq_a
         self.q_norm = dsa_modules.q_norm
         self.wq_b = dsa_modules.wq_b
@@ -111,9 +103,9 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.compressor = dsa_modules.compressor
         self.topk_indices_buffer = dsa_modules.topk_indices_buffer
         self.indexer_rotary_emb = dsa_modules.indexer_rotary_emb
-        self.prefix= prefix
+        self.prefix = prefix
 
-        self.dsa_attn = DSAAttention(            
+        self.dsa_attn = DSAAttention(
             dim=self.dim,
             n_heads=self.n_heads,
             scale=self.scale,
@@ -181,7 +173,7 @@ def dsa_forward(
     else:
         attn_metadata = forward_context.attn_metadata
     kv_cache = self.dsa_attn.kv_cache[forward_context.virtual_engine]
-    kv_state = self.dsa_attn.kv_state[0] # TODO support PP
+    kv_state = self.dsa_attn.kv_state[0]  # TODO support PP
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,
                                kv_cache, attn_metadata, need_gather_q_kv,
                                output, kv_state)

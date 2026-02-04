@@ -253,7 +253,7 @@ def triton_apply_rope_partial_in_place(x, sin, cos):
         raise NotImplementedError(f"x_shape={x.shape} not supported")
     cores = bsz * head_num
     assert cores < 65535
-    triton_rope_kernel_in_place[(cores,)](
+    triton_rope_kernel_in_place[(cores, )](
         x,
         sin,
         cos,

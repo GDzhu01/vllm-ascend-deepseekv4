@@ -1,32 +1,36 @@
+# isort: off
 import os
 import sys
 import importlib
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from transformers import AutoConfig
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
+
 AutoConfig.register("deepseek_v4", DeepseekV4Config)
 
-import vllm
-from vllm.transformers_utils.config import _CONFIG_REGISTRY
-from vllm.transformers_utils.configs import _CLASS_TO_MODULE, __all__, __getattr__
-from vllm.transformers_utils.config import _maybe_update_auto_config_kwargs, _maybe_remap_hf_config_attrs
-from pathlib import Path
-from vllm.transformers_utils.config_parser_base import ConfigParserBase
-from transformers import PretrainedConfig
-import huggingface_hub
-from vllm.transformers_utils.repo_utils import _get_hf_token
+import vllm  # noqa: E402
+from vllm.transformers_utils.config import _CONFIG_REGISTRY  # noqa: E402
+from vllm.transformers_utils.configs import _CLASS_TO_MODULE, __all__, __getattr__  # noqa: E402
+from vllm.transformers_utils.config import _maybe_update_auto_config_kwargs, _maybe_remap_hf_config_attrs  # noqa: E402
+from pathlib import Path  # noqa: E402
+from vllm.transformers_utils.config_parser_base import ConfigParserBase  # noqa: E402
+from transformers import PretrainedConfig  # noqa: E402
+import huggingface_hub  # noqa: E402
+from vllm.transformers_utils.repo_utils import _get_hf_token  # noqa: E402
 
-from vllm import envs
+from vllm import envs  # noqa: E402
 if envs.VLLM_USE_MODELSCOPE:
-    from modelscope import AutoConfig
+    from modelscope import AutoConfig  # noqa: E402
 else:
-    from transformers import AutoConfig
+    from transformers import AutoConfig  # noqa: E402
 
 
-def __getattr__(name: str):
+def __getattr__(name: str):  # noqa: F811
     if "DeepseekV4Config" not in _CLASS_TO_MODULE:
         _CLASS_TO_MODULE.update({
-            "DeepseekV4Config": "vllm_ascend.transformers_utils.configs.deepseek_v4",
+            "DeepseekV4Config":
+            "vllm_ascend.transformers_utils.configs.deepseek_v4",
         })
     if name in _CLASS_TO_MODULE:
         module_name = _CLASS_TO_MODULE[name]
@@ -43,6 +47,7 @@ def __dir__():
 
 
 class HFConfigParser(ConfigParserBase):
+
     def parse(
         self,
         model: str | Path,
@@ -62,16 +67,14 @@ class HFConfigParser(ConfigParserBase):
         # Use custom model class if it's in our registry
         model_type = config_dict.get("model_type")
         if model_type is None:
-            model_type = (
-                "speculators"
-                if config_dict.get("speculators_config") is not None
-                else model_type
-            )
+            model_type = ("speculators"
+                          if config_dict.get("speculators_config") is not None
+                          else model_type)
         # Allow hf_overrides to override model_type before checking _CONFIG_REGISTRY
         if (hf_overrides := kwargs.pop("hf_overrides", None)) is not None:
             model_type = hf_overrides.get("model_type", model_type)
-        
-        if  "deepseek_v4" not in _CONFIG_REGISTRY:
+
+        if "deepseek_v4" not in _CONFIG_REGISTRY:
             _CONFIG_REGISTRY.update(deepseek_v4="DeepseekV4Config")
 
         if model_type in _CONFIG_REGISTRY:
@@ -85,7 +88,8 @@ class HFConfigParser(ConfigParserBase):
             )
         else:
             try:
-                kwargs = _maybe_update_auto_config_kwargs(kwargs, model_type=model_type)
+                kwargs = _maybe_update_auto_config_kwargs(
+                    kwargs, model_type=model_type)
                 config = AutoConfig.from_pretrained(
                     model,
                     trust_remote_code=trust_remote_code,
@@ -95,17 +99,15 @@ class HFConfigParser(ConfigParserBase):
                     **kwargs,
                 )
             except ValueError as e:
-                if (
-                    not trust_remote_code
-                    and "requires you to execute the configuration file" in str(e)
-                ):
+                if (not trust_remote_code
+                        and "requires you to execute the configuration file"
+                        in str(e)):
                     err_msg = (
                         "Failed to load the model config. If the model "
                         "is a custom model not yet available in the "
                         "HuggingFace transformers library, consider setting "
                         "`trust_remote_code=True` in LLM or using the "
-                        "`--trust-remote-code` flag in the CLI."
-                    )
+                        "`--trust-remote-code` flag in the CLI.")
                     raise RuntimeError(err_msg) from e
                 else:
                     raise e

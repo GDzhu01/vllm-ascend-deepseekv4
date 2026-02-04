@@ -1,19 +1,14 @@
-from functools import cache
 from typing import NamedTuple, cast, get_args
 
 import torch
 import vllm
-from vllm.attention.selector import _cached_get_attn_backend
 from vllm.attention.backends.abstract import AttentionBackend, AttentionType
-from vllm.attention.backends.registry import (
-    MAMBA_TYPE_TO_BACKEND_MAP,
-    MambaAttentionBackendEnum,
-)
+from vllm.attention.selector import _cached_get_attn_backend
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
-from vllm.utils.import_utils import resolve_obj_by_qualname
 
 logger = init_logger(__name__)
+
 
 class AttentionSelectorConfig(NamedTuple):
     head_size: int
@@ -28,18 +23,16 @@ class AttentionSelectorConfig(NamedTuple):
     attn_type: str = AttentionType.DECODER
 
     def __repr__(self):
-        return (
-            f"AttentionSelectorConfig(head_size={self.head_size}, "
-            f"dtype={self.dtype}, "
-            f"kv_cache_dtype={self.kv_cache_dtype}, "
-            f"block_size={self.block_size}, "
-            f"use_mla={self.use_mla}, "
-            f"has_sink={self.has_sink}, "
-            f"use_compress={self.use_compress}, "
-            f"use_sparse={self.use_sparse}, "
-            f"use_mm_prefix={self.use_mm_prefix}, "
-            f"attn_type={self.attn_type})"
-        )
+        return (f"AttentionSelectorConfig(head_size={self.head_size}, "
+                f"dtype={self.dtype}, "
+                f"kv_cache_dtype={self.kv_cache_dtype}, "
+                f"block_size={self.block_size}, "
+                f"use_mla={self.use_mla}, "
+                f"has_sink={self.has_sink}, "
+                f"use_compress={self.use_compress}, "
+                f"use_sparse={self.use_sparse}, "
+                f"use_mm_prefix={self.use_mm_prefix}, "
+                f"attn_type={self.attn_type})")
 
 
 def get_attn_backend(
@@ -60,8 +53,7 @@ def get_attn_backend(
         valid_cache_dtypes = get_args(CacheDType)
         assert kv_cache_dtype in valid_cache_dtypes, (
             f"Invalid kv_cache_dtype: {kv_cache_dtype}. "
-            f"Valid values are: {valid_cache_dtypes}"
-        )
+            f"Valid values are: {valid_cache_dtypes}")
 
     from vllm.config import get_current_vllm_config
 
@@ -85,8 +77,7 @@ def get_attn_backend(
         backend=backend_enum,
         attn_selector_config=attn_selector_config,
     )
-    
+
 
 vllm.attention.selector.AttentionSelectorConfig = AttentionSelectorConfig
 vllm.attention.selector.get_attn_backend = get_attn_backend
-
