@@ -385,6 +385,20 @@ class NPUModelRunner(GPUModelRunner):
             (self.max_num_reqs, cdiv(self.model_config.max_model_len, self.block_size)),
             dtype=torch.int32,
         )
+        kv_cache_spec = AttentionSpec(
+            block_size=self.block_size,
+            num_kv_heads=1,
+            head_size=512,
+            dtype=torch.bfloat16,
+        )
+        self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
+            kv_cache_spec,
+            list(self.runner_only_attn_layers),
+            self.vllm_config,
+            self.device,
+            AscendDSAMetadata,
+            supports_dcp_with_varlen=False,
+        )
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -1186,22 +1200,8 @@ class NPUModelRunner(GPUModelRunner):
 
         # ------------- make swa metadata -----------------
         if self.use_compress:
-            kv_cache_spec = AttentionSpec(
-                block_size=self.block_size,
-                num_kv_heads=1,
-                head_size=512,
-                dtype=torch.bfloat16,
-            )
-            swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                kv_cache_spec,
-                list(self.runner_only_attn_layers),
-                self.vllm_config,
-                self.device,
-                AscendDSAMetadata,
-                supports_dcp_with_varlen=False,
-            )
             common_prefix_len = 0
-            swa_attn_metadata = swa_metadata_builder.build(
+            swa_attn_metadata = self.swa_metadata_builder.build(
                 common_prefix_len=common_prefix_len,
                 common_attn_metadata=common_attn_metadata)
             for layer_name in self.runner_only_attn_layers:
@@ -2173,21 +2173,7 @@ class NPUModelRunner(GPUModelRunner):
 
                 # ------------- make swa metadata -----------------
             if self.use_compress:
-                kv_cache_spec = AttentionSpec(
-                    block_size=self.block_size,
-                    num_kv_heads=1,
-                    head_size=512,
-                    dtype=torch.bfloat16,
-                )
-                swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                    kv_cache_spec,
-                    list(self.runner_only_attn_layers),
-                    self.vllm_config,
-                    self.device,
-                    AscendDSAMetadata,
-                    supports_dcp_with_varlen=False,
-                )
-                swa_attn_metadata = swa_metadata_builder.build_for_graph_capture(
+                swa_attn_metadata = self.swa_metadata_builder.build_for_graph_capture(
                     common_attn_metadata, attn_state)
                 for layer_name in self.runner_only_attn_layers:
                     attn_metadata[layer_name] = swa_attn_metadata
