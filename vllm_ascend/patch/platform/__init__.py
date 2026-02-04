@@ -28,10 +28,9 @@ import vllm_ascend.patch.platform.patch_set_cudagraph_sizes  # noqa
 from vllm_ascend import envs
 from vllm_ascend.utils import vllm_version_is
 
-USE_MULTI_BLOCK_POOL = True
-
-if USE_MULTI_BLOCK_POOL:
+if envs.USE_MULTI_BLOCK_POOL:
     import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
+    import vllm_ascend.patch.platform.patch_selector  # noqa
     import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
     import vllm_ascend.patch.platform.patch_vllm_config  # noqa
     import vllm_ascend.patch.platform.patch_speculative_config  # noqa

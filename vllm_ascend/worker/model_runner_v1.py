@@ -1098,7 +1098,6 @@ class NPUModelRunner(GPUModelRunner):
                     num_reqs = num_reqs_padded
 
             # Make AscendCommonAttentionMetadata
-            # 传入 block_table_map，可以只初始化一次 metadata
             if self.use_compress:
                 common_attn_metadata = AscendCommonAttentionMetadata(
                     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
@@ -2795,7 +2794,6 @@ class NPUModelRunner(GPUModelRunner):
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
                 layer_name = kv_cache_tensor.shared_by[idx]
-                exact_layer_id = extract_layer_index(layer_name)
                 if "linear_attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # for mamba linear attention
@@ -2818,6 +2816,7 @@ class NPUModelRunner(GPUModelRunner):
                 elif "attn" in layer_name and self.use_compress:
                     c4_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
                     num_blocks = kv_cache_config.num_blocks
+                    exact_layer_id = extract_layer_index(layer_name)
 
                     if exact_layer_id % 2 == 0:
                         if self.vllm_config.kv_transfer_config is None:
@@ -2976,7 +2975,6 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        # reshape 成 [num_blocks, 128 // ratio, 1, head_size]
 
         # TODO(cmq): modify 6 to num_layers
         c4_layers = list(range(0, 43, 2))

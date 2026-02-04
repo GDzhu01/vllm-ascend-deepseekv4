@@ -59,49 +59,50 @@ class AscendQuantConfig(QuantizationConfig):
     def __init__(self, quant_config: Dict[str, Any]):
         super().__init__()
         self.quant_description = quant_config
-        
-        
-        # TODO
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if not name.startswith('model'):
-                new_name = f'model.{name}'
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if 'attn' in name and 'self_attn' not in name:
-                new_name = name.replace('.attn.','.self_attn.')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if 'ffn' in name:
-                new_name = name.replace('ffn','mlp')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name        
-            if 'w1' in name:
-                new_name = name.replace('.w1.','.gate_proj.')
-            if 'w2' in name:
-                new_name = name.replace('.w2.','.down_proj.')
-            if 'w3' in name:
-                new_name = name.replace('.w3.','.up_proj.')
+        vllm_config = get_current_vllm_config()
+        model_type = vllm_config.model_config.hf_text_config.model_type
+        if model_type == "deepseek_v4":
+            # TODO
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name=name
+                if not name.startswith('model'):
+                    new_name = f'model.{name}'
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
             
-            if 'head' in name and 'lm_head' not in name:
-                new_name = name.replace('head','lm_head')
-            if 'embed' in name and 'embed_tokens' not in name:
-                new_name = name.replace('embed','embed_tokens')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name=name
+                if 'attn' in name and 'self_attn' not in name:
+                    new_name = name.replace('.attn.','.self_attn.')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+            
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name=name
+                if 'ffn' in name:
+                    new_name = name.replace('ffn','mlp')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+            
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name=name        
+                if 'w1' in name:
+                    new_name = name.replace('.w1.','.gate_proj.')
+                if 'w2' in name:
+                    new_name = name.replace('.w2.','.down_proj.')
+                if 'w3' in name:
+                    new_name = name.replace('.w3.','.up_proj.')
+                
+                if 'head' in name and 'lm_head' not in name:
+                    new_name = name.replace('head','lm_head')
+                if 'embed' in name and 'embed_tokens' not in name:
+                    new_name = name.replace('embed','embed_tokens')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
             
             
         # TODO(whx): remove this adaptation after adding "shared_head"
