@@ -43,7 +43,7 @@ class MtpProposer(EagleProposer):
             num_tokens_across_dp,
             with_prefill,
             _,
-        ) = self.runner._sync_metadata_across_dp(num_tokens, with_prefill)
+        ) = self.runner._sync_metadata_across_dp(num_tokens, with_prefill, is_draft_model=True)
         if not self.use_cuda_graph:
             # there is synchronization between mtp steps when enabling aclgraph,
             # disable aclgraph when use async scheduling to avoid the
@@ -265,7 +265,8 @@ class MtpProposer(EagleProposer):
         # eager/acl piecewise mode need to update num_tokens_across_dp
         (num_input_tokens, num_tokens_across_dp, with_prefill,
          _) = self.runner._sync_metadata_across_dp(num_input_tokens,
-                                                   self.runner.with_prefill)
+                                                   self.runner.with_prefill,
+                                                   is_draft_model=True)
 
         # Enable shared_expert_dp and MTP FULL graph may cause accuracy issues.
         if scheduler_output and not self.enable_shared_expert_dp:
