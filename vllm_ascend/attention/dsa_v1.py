@@ -786,6 +786,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         index_topk = 512
         
         sas_c1_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -804,6 +805,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         )
         
         sas_c4_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -812,7 +814,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            topk=index_topk, #
+            cmp_topk=index_topk, #
             cmp_ratio=4, #
             ori_mask_mode=4, # 4:sliding window
             cmp_mask_mode=3, # 3:causal
@@ -825,6 +827,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         )
         
         sas_c128_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -954,6 +957,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         n_local_heads = self.model_config.hf_config.n_heads // tp_size
         index_topk = 512
         AscendDSAMetadataBuilder.decode_sas_c1_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -973,6 +977,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         )
         
         AscendDSAMetadataBuilder.decode_sas_c4_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -981,7 +986,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=max_seqlen_kv,
             batch_size=len(self.seq_lens[:self.num_decodes]),
-            topk=index_topk, #
+            cmp_topk=index_topk, #
             cmp_ratio=4, #
             ori_mask_mode=4, # 4:sliding window
             cmp_mask_mode=3, # 3:causal
@@ -994,6 +999,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         )
         
         AscendDSAMetadataBuilder.decode_sas_c128_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -1758,20 +1764,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             if kv is not None:
                 torch.ops.custom.indexer_compress_epilog(
+                    kv_cache[1].view(-1, kv.shape[-1]),
+                    kv_cache[2].view(-1, kv_cache[2].shape[-1]),
                     kv, 
                     attn_metadata.prefill.slot_mapping, 
-                    kv_cache[1].view(-1, kv.shape[-1]), 
-                    kv_cache[2].view(-1, kv_cache[2].shape[-1]), 
                     quant_mode=1, 
                     round_scale=True
                 )
         else:
             if kv is not None and len(attn_metadata.decode.slot_mapping.tolist()):
                 torch.ops.custom.indexer_compress_epilog(
+                    kv_cache[1].view(-1, kv.shape[-1]),
+                    kv_cache[2].view(-1, kv_cache[2].shape[-1]),
                     kv, 
                     attn_metadata.decode.slot_mapping, 
-                    kv_cache[1].view(-1, kv.shape[-1]), 
-                    kv_cache[2].view(-1, kv_cache[2].shape[-1]), 
                     quant_mode=1, 
                     round_scale=True
                 )
@@ -1780,10 +1786,14 @@ class AscendDSAImpl(DSAAttentionImpl):
             qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
+            max_seqlen_q = attn_metadata.prefill.max_query_len
+            max_seqlen_kv = attn_metadata.prefill.max_seq_lens
         else:
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
+            max_seqlen_q = attn_metadata.decode.max_seqlen_q
+            max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
 
         topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
             query=q,
@@ -1794,7 +1804,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,
-            metadata=None,
+            metadata=metadata,
             query_quant_mode=0,
             key_quant_mode=0,
             layout_query="TND",
