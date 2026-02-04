@@ -23,7 +23,6 @@ if HAS_TRITON:
     import vllm_ascend.patch.worker.patch_triton
 
 # isort: off
-import vllm_ascend.patch.worker.patch_selector # noqa
 import vllm_ascend.patch.platform.patch_sched_yield  # noqa
 import vllm_ascend.patch.worker.patch_bert  # noqa
 import vllm_ascend.patch.worker.patch_distributed  # noqa
