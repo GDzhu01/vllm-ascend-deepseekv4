@@ -1237,8 +1237,8 @@ class AscendDeepseekV4ForCausalLM(
                 name = name.replace(".scale", ".weight_scale")
             
             # TODO 需要支持MTP
-            if ".mtp" in name:
-                continue
+            # if ".mtp" in name:
+            #     continue
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')
