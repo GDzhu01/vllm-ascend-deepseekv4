@@ -30,6 +30,7 @@ from vllm_ascend.utils import vllm_version_is
 USE_MULTI_BLOCK_POOL = True
 
 if USE_MULTI_BLOCK_POOL:
+    import vllm_ascend.patch.platform.patch_parallel_config  # noqa
     import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
     import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
     import vllm_ascend.patch.platform.patch_vllm_config  # noqa
