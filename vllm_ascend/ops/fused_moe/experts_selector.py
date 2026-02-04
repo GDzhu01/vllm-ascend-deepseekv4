@@ -263,25 +263,25 @@ def _select_experts_with_fusion_ops(
         else:
             input_ids = None
             tid2eid_ones = None
-        # print(f'softplussssssssssssssssssssssssssssssssssssssssssssssssssssssssssss')
-        # topk_weights, topk_ids, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
-        #     x=router_logits,                        # 输入张量
-        #     k=top_k,                        # 选取的专家数量
-        #     bias=e_score_correction_bias,                # 偏置张量（可选）
-        #     input_ids=input_ids,      # 输入词表（可选）
-        #     tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
-        #     k_group=topk_group,           # 选取的组数量（可选）
-        #     group_count=num_expert_group,   # 总组数（可选）
-        #     routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
-        #     eps=float(1e-20),                  # 数值稳定性参数（可选）
-        #     group_select_mode=1,  # 组选择模式（可选）
-        #     renorm=0,            # 重归一化标志（可选）
-        #     norm_type=2,       # 归一化类型（可选）
-        #     out_flag=False          # 是否输出归一化结果（可选）
-        # )
         
-        # topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
-        # return topk_weights, topk_ids
+        topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
+            x=router_logits,                        # 输入张量
+            k=top_k,                        # 选取的专家数量
+            bias=e_score_correction_bias,                # 偏置张量（可选）
+            input_ids=input_ids,      # 输入词表（可选）
+            tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
+            k_group=topk_group,           # 选取的组数量（可选）
+            group_count=num_expert_group,   # 总组数（可选）
+            routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
+            eps=float(1e-20),                  # 数值稳定性参数（可选）
+            group_select_mode=1,  # 组选择模式（可选）
+            renorm=0,            # 重归一化标志（可选）
+            norm_type=2,       # 归一化类型（可选）
+            out_flag=False          # 是否输出归一化结果（可选）
+        )
+        
+        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+        return topk_weights, topk_ids
 
         scores = F.softplus(router_logits).sqrt()
         original_scores = scores
