@@ -1794,6 +1794,26 @@ class AscendDSAImpl(DSAAttentionImpl):
             block_table = attn_metadata.decode.block_table
             max_seqlen_q = attn_metadata.decode.max_seqlen_q
             max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
+        
+        metadata = torch.ops.custom.npu_quant_lightning_indexer_metadata(
+            num_heads_q = 64,
+            num_heads_k = 1,
+            head_dim=128,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            actual_seq_lengths_query=qlens.clone(), 
+            actual_seq_lengths_key=kvlens.clone(),
+            batch_size=len(kvlens),
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_kv,
+            layout_query="TND", 
+            layout_key="PA_BSND",
+            sparse_count=512,
+            sparse_mode=3,
+            pre_tokens=(1<<63)-1,
+            next_tokens=(1<<63)-1,
+            cmp_ratio=4
+        )
 
         topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
             query=q,
