@@ -74,7 +74,7 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype,
         if hasattr(model_config.hf_text_config, 'qk_rope_head_dim'):
             rope_dim = model_config.hf_text_config.qk_rope_head_dim
         else:
-            rope_dim = model_config.hf_text_config.rope_head_dim # zyl_modify
+            rope_dim = model_config.hf_text_config.rope_head_dim  # zyl_modify
         _cos_mla = torch.ones(max_num_batched_tokens,
                               1,
                               1,

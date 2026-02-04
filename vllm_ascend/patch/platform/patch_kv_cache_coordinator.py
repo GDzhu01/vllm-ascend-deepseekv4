@@ -1,12 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-import os
 from collections.abc import Sequence
+
 import vllm
-from vllm.v1.core.kv_cache_coordinator import (HybridKVCacheCoordinator,
-                                               KVCacheCoordinator,
-                                               KVCacheCoordinatorNoPrefixCache,
-                                               UnitaryKVCacheCoordinator)
+from vllm.v1.core.kv_cache_coordinator import KVCacheCoordinator
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
 from vllm.v1.kv_cache_interface import KVCacheConfig
@@ -14,10 +11,6 @@ from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
-
-# TODO: When running dsv4, this environment variable must be set to True. Consider how to remove it.
-from vllm_ascend import envs
-USE_MULTI_BLOCK_POOL = envs.USE_MULTI_BLOCK_POOL
 
 
 class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
@@ -53,8 +46,9 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
         # Needs special handling for find_longest_cache_hit if eagle is enabled
         self.use_eagle = use_eagle
         cache_num_blocks = [
-            kv_cache_config.num_blocks // kv_cache_group.kv_cache_spec.compress_ratio for kv_cache_group in
-            kv_cache_config.kv_cache_groups
+            kv_cache_config.num_blocks //
+            kv_cache_group.kv_cache_spec.compress_ratio
+            for kv_cache_group in kv_cache_config.kv_cache_groups
         ]
         self.block_pool = MultiBlockPool(
             cache_num_blocks,
@@ -107,8 +101,9 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
         """
         num_blocks_to_allocate = []
         for i, manager in enumerate(self.single_type_managers):
-            num_blocks_to_allocate.append(manager.get_num_blocks_to_allocate(
-                request_id, num_tokens, new_computed_blocks[i]))
+            num_blocks_to_allocate.append(
+                manager.get_num_blocks_to_allocate(request_id, num_tokens,
+                                                   new_computed_blocks[i]))
         # We need to use the C128 block pool to check the number of blocks for allocation, as C128 is the bottleneck for the block count.
         return num_blocks_to_allocate[1]
 
@@ -124,42 +119,7 @@ def get_kv_cache_coordinator(
     hash_block_size: int,
     metrics_collector: KVCacheMetricsCollector | None = None,
 ) -> KVCacheCoordinator:
-    if USE_MULTI_BLOCK_POOL:
-        return KVCacheCoordinatorWithMultiPool(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
-            enable_caching,
-            enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
-        )
-    if not enable_caching:
-        return KVCacheCoordinatorNoPrefixCache(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
-            enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
-        )
-    if len(kv_cache_config.kv_cache_groups) == 1:
-        return UnitaryKVCacheCoordinator(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
-            enable_caching,
-            enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
-        )
-    return HybridKVCacheCoordinator(
+    return KVCacheCoordinatorWithMultiPool(
         kv_cache_config,
         max_model_len,
         use_eagle,

@@ -1,26 +1,22 @@
-
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar, Generic, Protocol, TypeVar, get_args
-import torch
+from abc import abstractmethod
+from typing import Generic, TypeVar
 
-from vllm.attention.backends.abstract import (
-    AttentionBackend,
-    AttentionImpl,
-    AttentionLayer,
-    AttentionType,
-    is_quantized_kv_cache,
-)
+import torch
+from vllm.attention.backends.abstract import AttentionImpl, AttentionLayer
+
 
 class AttentionMetadata:
     pass
+
 
 T = TypeVar("T", bound=AttentionMetadata)
 
 
 class DSAAttentionImpl(AttentionImpl[T], Generic[T]):
+
     @abstractmethod
     def __init__(
         self,
@@ -53,6 +49,3 @@ class DSAAttentionImpl(AttentionImpl[T], Generic[T]):
         output_block_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         raise NotImplementedError
-
-def is_quantized_kv_cache(kv_cache_dtype: str) -> bool:
-    return kv_cache_dtype != "auto"

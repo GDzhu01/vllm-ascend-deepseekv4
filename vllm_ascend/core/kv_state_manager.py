@@ -2,6 +2,7 @@ from vllm.v1.request import Request
 
 
 class KVStateManager:
+
     def __init__(
         self,
         max_num_seqs: int,
@@ -19,16 +20,18 @@ class KVStateManager:
             return None
         request_id = request.request_id
         if request_id in self.req_to_state_id:
-            raise ValueError(f"Request {request_id} already allocated, only allocate state while prefill.")
+            raise ValueError(
+                f"Request {request_id} already allocated, only allocate state while prefill."
+            )
         state_to_allocate = self.states_pool.pop()
         self.req_to_state_id[request_id] = state_to_allocate
         self.get_resource_usage()
         return state_to_allocate
 
     def free(
-            self,
-            request: Request = None,
-        ) -> None:
+        self,
+        request: Request = None,
+    ) -> None:
         request_id = request.request_id
         if request_id not in self.req_to_state_id:
             # NOTE(zxr): sometimes, a request may not allocate state but free, it should not raise an error

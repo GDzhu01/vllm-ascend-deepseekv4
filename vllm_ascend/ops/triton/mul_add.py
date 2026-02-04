@@ -1,6 +1,7 @@
+import torch
 import triton
 import triton.language as tl
-import torch
+
 from vllm_ascend.ops.triton.triton_utils import get_vectorcore_num
 
 
