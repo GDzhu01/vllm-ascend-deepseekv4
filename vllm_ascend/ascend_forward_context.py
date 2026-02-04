@@ -15,7 +15,8 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.utils import (AscendDeviceType, enable_sp, flashcomm2_enable,
                                get_ascend_device_type, has_layer_idx,
                                is_drafter_moe_model, is_moe_model,
-                               speculative_enable_dispatch_gmm_combine_decode)
+                               speculative_enable_dispatch_gmm_combine_decode,
+                               is_w8a8_dynamic)
 
 
 class MoECommType(Enum):
@@ -241,6 +242,8 @@ def select_moe_comm_method(num_tokens: int,
     quant_type = getattr(
         vllm_config.model_config.hf_text_config, 'moe_quantize',
         getattr(vllm_config.model_config.hf_text_config, 'quantize', None))
+    if is_w8a8_dynamic():
+        quant_type = 'w8a8_dynamic'
 
     if not vllm_config.parallel_config.enable_expert_parallel or get_ep_group(
     ).world_size == 1:
