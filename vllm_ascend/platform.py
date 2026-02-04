@@ -18,19 +18,10 @@
 import os
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
-from datetime import timedelta
 
 import torch
-from torch.distributed import PrefixStore, ProcessGroup
 from vllm.logger import logger
 from vllm.platforms import Platform, PlatformEnum
-from torch.distributed.distributed_c10d import (
-    Backend,
-    PrefixStore,
-    _get_default_timeout,
-)
-from torch.distributed.rendezvous import rendezvous
-
 
 # todo: please remove it when solve cuda hard code in vllm
 os.environ["VLLM_DISABLE_SHARED_EXPERTS_STREAM"] = "1"
@@ -623,30 +614,3 @@ class NPUPlatform(Platform):
                     "Parameter 'flash_attn_max_num_splits_for_cuda_graph' is "
                     "ignored on Ascend. Resetting to default (32).")
                 att_config.flash_attn_max_num_splits_for_cuda_graph = 32
-
-    @staticmethod
-    def stateless_init_device_torch_dist_pg(
-        backend: str,
-        prefix_store: "PrefixStore",
-        group_rank: int,
-        group_size: int,
-        timeout: timedelta,
-    ) -> "ProcessGroup":
-        pg: ProcessGroup = ProcessGroup(
-            prefix_store,
-            group_rank,
-            group_size,
-        )
-        from torch.distributed import is_hccl_available
-        assert is_hccl_available()
-        from torch_npu._C._distributed_c10d import ProcessGroupHCCL
-        backend_options = ProcessGroupHCCL.Options()
-        backend_options._timeout = timeout
-        backend_class = ProcessGroupHCCL(prefix_store, group_rank, group_size,
-                                        backend_options)
-        device = torch.device("npu")
-        backend_class._set_sequence_number_for_group()
-        backend_type = ProcessGroup.BackendType.CUSTOM
-        pg._register_backend(device, backend_type, backend_class)
-
-        return pg
