@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
+from vllm_ascend.utils import acl_graph_print
+
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
     x_shape = x.shape
     dim = x.shape[-1]
@@ -865,6 +867,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             self.start_pos_decode[num_reqs_actual:].fill_(0)
             self.block_table[num_reqs_actual:self.num_decodes, ...].fill_(0)
             state_block[num_reqs_actual:self.num_decodes, ...].fill_(0)
+
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
@@ -1500,7 +1503,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode = 2,
                 enable_grad=False
             )
-            
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
                             kv_cache[0].view(-1, compressed_kv.shape[-1]),

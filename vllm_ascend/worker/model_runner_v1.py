@@ -1075,6 +1075,8 @@ class NPUModelRunner(GPUModelRunner):
                         self.query_start_loc.copy_to_gpu(num_reqs_padded + 1)
                         self.seq_lens.np[num_reqs:].fill(0)
                         self.seq_lens.copy_to_gpu(num_reqs_padded)
+                        self.swa_slot_mapping.np[total_num_scheduled_tokens:num_input_tokens+1].fill(-1)
+                        self.swa_slot_mapping.copy_to_gpu(num_input_tokens+1)
 
                     # So we are trying to simulate the behavior of GPUModelRunner's
                     # prepare_inputs for uniform decode mode by padding query_start_loc
