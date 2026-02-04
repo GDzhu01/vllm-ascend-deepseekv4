@@ -2,57 +2,28 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Attention layer."""
 
-import functools
 from typing import cast
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 import vllm.envs as envs
-from vllm.attention.backends.abstract import (
-    AttentionBackend,
-    AttentionType,
-    MLAAttentionImpl,
-)
-from vllm_ascend.attention.abstract import DSAAttentionImpl
-
-from vllm.attention.backends.registry import AttentionBackendEnum
-from vllm.attention.layers.mm_encoder_attention import maybe_get_vit_flash_attn_backend
+from vllm.attention.backends.abstract import AttentionBackend
+from vllm.attention.layer import _init_kv_cache_quant
 from vllm.attention.selector import get_attn_backend
-from vllm.attention.utils.fa_utils import get_flash_attn_version
-from vllm.attention.utils.kv_sharing_utils import validate_kv_sharing_target
-from vllm.attention.utils.kv_transfer_utils import maybe_transfer_kv_layer
 from vllm.config import CacheConfig, get_current_vllm_config
-from vllm.config.multimodal import MultiModalConfig
 from vllm.config.vllm import VllmConfig
-from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
-from vllm.model_executor.layers.linear import (
-    ColumnParallelLinear,
-    UnquantizedLinearMethod,
-)
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
-from vllm.model_executor.layers.quantization.kv_cache import BaseKVCacheMethod
-from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
-from vllm.model_executor.models.vision import get_vit_attn_backend
 from vllm.platforms import current_platform
-from vllm.utils.torch_utils import (
-    direct_register_custom_op,
-    kv_cache_dtype_str_to_dtype,
-)
-from vllm.v1.kv_cache_interface import (
-    FullAttentionSpec,
-    KVCacheSpec,
-    MLAAttentionSpec,
-    SlidingWindowSpec,
-)
-from vllm.attention.layer import _init_kv_cache_quant
+from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
+from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
+
+from vllm_ascend.attention.abstract import DSAAttentionImpl
 
 logger = init_logger(__name__)
+
 
 class DSAAttention(nn.Module, AttentionLayerBase):
     """Multi-Head Latent Attention layer.
@@ -86,19 +57,19 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         **extra_impl_args,
     ):
         super().__init__()
-        self.dim=dim
-        self.n_heads=n_heads
-        self.scale=scale
-        self.n_local_heads=n_local_heads
-        self.q_lora_rank=q_lora_rank
-        self.o_lora_rank=o_lora_rank
-        self.head_dim=head_dim 
-        self.rope_head_dim=rope_head_dim
-        self.nope_head_dim=nope_head_dim
-        self.n_groups=n_groups
-        self.n_local_groups=n_local_groups
+        self.dim = dim
+        self.n_heads = n_heads
+        self.scale = scale
+        self.n_local_heads = n_local_heads
+        self.q_lora_rank = q_lora_rank
+        self.o_lora_rank = o_lora_rank
+        self.head_dim = head_dim
+        self.rope_head_dim = rope_head_dim
+        self.nope_head_dim = nope_head_dim
+        self.n_groups = n_groups
+        self.n_local_groups = n_local_groups
         self.window_size = window_size
-        self.compress_ratio=compress_ratio
+        self.compress_ratio = compress_ratio
         self.layer_name = prefix
         self.head_size = self.head_dim
 
@@ -112,9 +83,8 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             calculate_kv_scales = False
 
         # Initialize KV cache quantization attributes
-        _init_kv_cache_quant(
-            self, quant_config, prefix, kv_cache_dtype, calculate_kv_scales
-        )
+        _init_kv_cache_quant(self, quant_config, prefix, kv_cache_dtype,
+                             calculate_kv_scales)
 
         dtype = torch.get_default_dtype()
         self.attn_backend = get_attn_backend(
@@ -127,15 +97,10 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             use_compress=True,
         )
 
-        if (
-            cache_config is not None
-            and cache_config.enable_prefix_caching
-            and vllm_is_batch_invariant()
-            and (
-                self.attn_backend.get_name() == "TRITON_MLA"
-                or self.attn_backend.get_name() == "FLASHINFER"
-            )
-        ):
+        if (cache_config is not None and cache_config.enable_prefix_caching
+                and vllm_is_batch_invariant()
+                and (self.attn_backend.get_name() == "TRITON_MLA"
+                     or self.attn_backend.get_name() == "FLASHINFER")):
             logger.warning_once(
                 "Disabling prefix caching for TRITON_MLA / FLASHINFER "
                 "with batch invariance, as it is not yet supported.",
@@ -143,8 +108,9 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             )
             cache_config.enable_prefix_caching = False
 
-        impl_cls = cast(type[DSAAttentionImpl], self.attn_backend.get_impl_cls())
-        self.impl = impl_cls(         
+        impl_cls = cast(type[DSAAttentionImpl],
+                        self.attn_backend.get_impl_cls())
+        self.impl = impl_cls(
             dim=self.dim,
             n_heads=self.n_heads,
             scale=self.scale,
@@ -169,15 +135,11 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         compilation_config.static_forward_context[prefix] = self
 
         self.kv_cache = [
-            torch.tensor([])
-            for _ in range(
-                get_current_vllm_config().parallel_config.pipeline_parallel_size
-            )
+            torch.tensor([]) for _ in range(get_current_vllm_config(
+            ).parallel_config.pipeline_parallel_size)
         ]
 
-        self.kv_state = [
-            torch.tensor([])
-        ]
+        self.kv_state = [torch.tensor([])]
 
         self.use_sparse = True
 
@@ -199,14 +161,12 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         if hasattr(self.impl, "process_weights_after_loading"):
             self.impl.process_weights_after_loading(act_dtype)
 
-
     def get_attn_backend(self) -> type[AttentionBackend]:
         return self.attn_backend
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        kv_cache_dtype = kv_cache_dtype_str_to_dtype(
-            self.kv_cache_dtype, vllm_config.model_config
-        )
+        kv_cache_dtype = kv_cache_dtype_str_to_dtype(self.kv_cache_dtype,
+                                                     vllm_config.model_config)
         return MLAAttentionSpec(
             block_size=vllm_config.cache_config.block_size,
             num_kv_heads=1,

@@ -21,8 +21,6 @@ import copy
 import gc
 from types import NoneType
 from typing import Optional
-import importlib.util
-import importlib
 
 import torch
 import torch.nn as nn
@@ -283,10 +281,11 @@ class NPUWorker(WorkerBase):
         block_num = (max_num_reqs + 1) * state_block_multiple
 
         # swa: [args.max_batch_size, args.window_size, self.head_dim]
-        swa_memory = block_num * block_size * head_dim * get_dtype_size(torch.bfloat16) * num_layers
+        swa_memory = block_num * block_size * head_dim * get_dtype_size(
+            torch.bfloat16) * num_layers
 
         # compress: [args.max_batch_size, coff * compress_ratio, coff * self.head_dim], dtype=torch.float32
-        state_dtype_size = get_dtype_size(torch.float32) # torch.float32
+        state_dtype_size = get_dtype_size(torch.float32)  # torch.float32
         # C4 compressor memory
         c4_kv_state_byte_size = block_num * block_size * c4_coff * head_dim * state_dtype_size
         c4_score_state_byte_size = c4_kv_state_byte_size
@@ -297,11 +296,13 @@ class NPUWorker(WorkerBase):
         # C128 compressor memory
         c128_kv_state_byte_size = block_num * block_size * c128_coff * head_dim * state_dtype_size
         c128_score_state_byte_size = c128_kv_state_byte_size
-        c128_memory = (c128_kv_state_byte_size + c128_score_state_byte_size) * num_c128_layers
+        c128_memory = (c128_kv_state_byte_size +
+                       c128_score_state_byte_size) * num_c128_layers
 
         total_fix_memory = swa_memory + c4_memory + c128_memory
-        logger.info(f'Preallocate {total_fix_memory} Bytes memory for swa and states.')
- 
+        logger.info(
+            f'Preallocate {total_fix_memory} Bytes memory for swa and states.')
+
         return total_fix_memory
 
     @torch.inference_mode()

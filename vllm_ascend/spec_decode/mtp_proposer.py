@@ -70,7 +70,7 @@ class MtpProposer(EagleProposer):
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
                     block_table_tensor=self.runner.input_batch.block_table[0].
-                    get_device_tensor(),
+                    get_device_tensor(num_reqs),
                     slot_mapping=self.runner.input_batch.block_table[0].
                     slot_mapping.gpu,
                     positions=self.runner.positions.gpu,
@@ -82,8 +82,7 @@ class MtpProposer(EagleProposer):
                     common_attn_metadata.prefill_context_parallel_metadata = \
                         self.runner.pcp_manager.long_seq_metadata
                     common_attn_metadata.block_table_tensor = \
-                        self.runner.input_batch.block_table[0].get_device_tensor()[
-                            :num_reqs * self.decode_threshold]
+                        self.runner.input_batch.block_table[0].get_device_tensor(num_reqs * self.decode_threshold)
 
                 builder = self.runner.attn_groups[0][0].get_metadata_builder()
                 # `AscendAttentionState.SpecDecoding` is only designed for mla, `AscendAttentionState.ChunkedPrefill` is used in self-attention.
@@ -343,8 +342,8 @@ class MtpProposer(EagleProposer):
                                                num_decodes])
                             else:
                                 if self.use_compress:
-                                    actual_size = len(
-                                        decode_metadata.query_start_loc_cpu) - 1
+                                    actual_size = len(decode_metadata.
+                                                      query_start_loc_cpu) - 1
                                 else:
                                     actual_size = len(
                                         decode_metadata.actual_seq_lengths_q)
@@ -413,7 +412,9 @@ class MtpProposer(EagleProposer):
                 positions = target_positions[last_token_indices]
                 hidden_states = hidden_states[last_token_indices]
                 slot_mapping = attn_metadata_i.slot_mapping[last_token_indices]
-                swa_slot_mapping = attn_metadata_i.swa_slot_mapping[last_token_indices]
+                if self.use_compress:
+                    swa_slot_mapping = attn_metadata_i.swa_slot_mapping[
+                        last_token_indices]
                 attn_metadata_i.slot_mapping.fill_(-1)
                 if self.use_compress:
                     attn_metadata_i.swa_slot_mapping.fill_(-1)
@@ -476,8 +477,11 @@ class MtpProposer(EagleProposer):
             if decode_metadata is not None and (self.speculative_config.disable_padded_drafter_batch or \
                     aclgraph_runtime_mode != CUDAGraphMode.FULL):
                 if self.use_compress:
-                    decode_metadata.query_start_loc = self.arange[:batch_size + 1]
-                    decode_metadata.query_start_loc_cpu = self.arange_cpu[:batch_size + 1]
+                    decode_metadata.query_start_loc = self.arange[:batch_size +
+                                                                  1]
+                    decode_metadata.query_start_loc_cpu = self.arange_cpu[:
+                                                                          batch_size
+                                                                          + 1]
 
                     decode_metadata.max_seqlen_q += 1
                     decode_metadata.max_seqlen_kv = batch_size
@@ -519,12 +523,14 @@ class MtpProposer(EagleProposer):
             # Otherwise, the KV cache will be inadvertently updated with the
             # padding tokens.
             slot_mapping += 1
-            swa_slot_mapping += 1
             if self.pcp_size > 1:
                 exceeds_max_model_len = exceeds_max_model_len.repeat_interleave(
                     slot_mapping.size(0) // exceeds_max_model_len.size(0))
             slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
-            swa_slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
+            if self.use_compress:
+                swa_slot_mapping += 1
+                swa_slot_mapping.masked_fill_(exceeds_max_model_len,
+                                              PADDING_SLOT_ID)
 
             # copy inputs to buffer for cudagraph
             self.input_ids[:batch_size] = input_ids
@@ -550,7 +556,8 @@ class MtpProposer(EagleProposer):
                 attn_metadata_i.slot_mapping[:batch_size] = slot_mapping
 
                 if self.use_compress:
-                    attn_metadata_i.swa_slot_mapping[:batch_size] = swa_slot_mapping
+                    attn_metadata_i.swa_slot_mapping[:
+                                                     batch_size] = swa_slot_mapping
 
             if self.speculative_config.disable_padded_drafter_batch:
                 self.positions[batch_size:num_input_tokens] = 0

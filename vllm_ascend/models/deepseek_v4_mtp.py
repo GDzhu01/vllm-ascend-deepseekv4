@@ -6,47 +6,35 @@ from collections.abc import Callable, Iterable
 import torch
 import torch.nn as nn
 from transformers import PretrainedConfig
-
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import VllmConfig
+from vllm.distributed import (get_tensor_model_parallel_rank,
+                              get_tensor_model_parallel_world_size)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.vocab_parallel_embedding import (
-    ParallelLMHead,
-    VocabParallelEmbedding,
-)
+    ParallelLMHead, VocabParallelEmbedding)
 from vllm.model_executor.model_loader.weight_utils import (
-    default_weight_loader,
-    maybe_remap_kv_scale_name,
-)
+    default_weight_loader, maybe_remap_kv_scale_name)
+from vllm.model_executor.models.interfaces import SupportsPP
+from vllm.model_executor.models.utils import PPMissingLayer, maybe_prefix
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
-from .deepseek_v4 import (
-    DeepseekV2DecoderLayer,
-    DeepseekV2MixtureOfExperts,
-    DeepseekV4MoE,
-    get_spec_layer_idx_from_weight_name,
-)
-from vllm.model_executor.models.interfaces import SupportsPP
-from vllm.model_executor.models.utils import (
-    PPMissingLayer,
-    maybe_prefix,
-)
-from vllm.distributed import (
-    get_tensor_model_parallel_rank,
-    get_tensor_model_parallel_world_size,
-)
 from vllm_ascend.ascend_config import get_ascend_config
+
+from .deepseek_v4 import (DeepseekV2DecoderLayer, DeepseekV2MixtureOfExperts,
+                          DeepseekV4MoE, get_spec_layer_idx_from_weight_name)
 
 logger = init_logger(__name__)
 
 
 class SharedHead(nn.Module):
+
     def __init__(
         self,
         config: PretrainedConfig,
@@ -67,6 +55,7 @@ class SharedHead(nn.Module):
 
 
 class DeepSeekMultiTokenPredictorLayer(nn.Module):
+
     def __init__(self, vllm_config: VllmConfig, prefix: str) -> None:
         super().__init__()
 
@@ -74,8 +63,12 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         self.config = config
         quant_config = vllm_config.quant_config
 
-        self.e_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.h_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.e_proj = nn.Linear(config.hidden_size,
+                                config.hidden_size,
+                                bias=False)
+        self.h_proj = nn.Linear(config.hidden_size,
+                                config.hidden_size,
+                                bias=False)
 
         self.enorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.hnorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -94,9 +87,9 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         else:
             topk_indices_buffer = None
 
-        self.shared_head = SharedHead(
-            config=config, prefix=prefix, quant_config=quant_config
-        )
+        self.shared_head = SharedHead(config=config,
+                                      prefix=prefix,
+                                      quant_config=quant_config)
         self.mtp_block = DeepseekV2DecoderLayer(
             vllm_config,
             prefix,
@@ -108,12 +101,13 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         self.hc_mult = hc_mult = config.hc_mult
         hc_dim = hc_mult * config.hidden_size
 
-        self.hc_head_fn = nn.Parameter(torch.empty(hc_mult, hc_dim,dtype = torch.float32))
-        self.hc_head_base = nn.Parameter(torch.empty(hc_mult,dtype = torch.float32))
-        self.hc_head_scale = nn.Parameter(torch.empty(1,dtype = torch.float32))
+        self.hc_head_fn = nn.Parameter(
+            torch.empty(hc_mult, hc_dim, dtype=torch.float32))
+        self.hc_head_base = nn.Parameter(
+            torch.empty(hc_mult, dtype=torch.float32))
+        self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
 
         self.norm_eps = config.rms_norm_eps
-
 
     def forward(
         self,
@@ -125,25 +119,27 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
     ) -> torch.Tensor:
         assert inputs_embeds is not None
         # masking inputs at position 0, as not needed by MTP
-        inputs_embeds = torch.where(positions.unsqueeze(-1) == 0, 0, inputs_embeds)
+        inputs_embeds = torch.where(
+            positions.unsqueeze(-1) == 0, 0, inputs_embeds)
         inputs_embeds = self.enorm(inputs_embeds)
         previous_hidden_states = self.hnorm(previous_hidden_states)
 
-        hidden_states = (
-            self.e_proj(inputs_embeds) + self.h_proj(previous_hidden_states)
-        )
+        hidden_states = (self.e_proj(inputs_embeds) +
+                         self.h_proj(previous_hidden_states))
 
         hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult, 1)
 
-        hidden_states, residual = self.mtp_block(
-            positions=positions, hidden_states=hidden_states, residual=None
-        )
+        hidden_states, residual = self.mtp_block(positions=positions,
+                                                 hidden_states=hidden_states,
+                                                 residual=None)
 
-        hidden_states = self.hc_head(hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base)
+        hidden_states = self.hc_head(hidden_states, self.hc_head_fn,
+                                     self.hc_head_scale, self.hc_head_base)
 
         return hidden_states
 
-    def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
+    def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor,
+                hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(1).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
@@ -154,6 +150,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
 
 
 class DeepSeekMultiTokenPredictor(nn.Module):
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         config = vllm_config.model_config.hf_config
@@ -161,17 +158,14 @@ class DeepSeekMultiTokenPredictor(nn.Module):
         self.num_mtp_layers = getattr(config, "num_nextn_predict_layers", 1)
         # to map the exact layer index from weights
 
-        self.layers = torch.nn.ModuleDict(
-            {
-                str(idx): DeepSeekMultiTokenPredictorLayer(
-                    vllm_config, f"{prefix}.{idx}"
-                )
-                for idx in range(
-                    0,
-                    self.num_mtp_layers,
-                )
-            }
-        )
+        self.layers = torch.nn.ModuleDict({
+            str(idx):
+            DeepSeekMultiTokenPredictorLayer(vllm_config, f"{prefix}.{idx}")
+            for idx in range(
+                0,
+                self.num_mtp_layers,
+            )
+        })
         self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
             config.hidden_size,
@@ -207,20 +201,20 @@ class DeepSeekMultiTokenPredictor(nn.Module):
     ) -> torch.Tensor:
         current_step_idx = spec_step_idx % self.num_mtp_layers
         mtp_layer = self.layers[str(current_step_idx)]
-        logits = self.logits_processor(
-            mtp_layer.shared_head.head, mtp_layer.shared_head(hidden_states)
-        )
+        logits = self.logits_processor(mtp_layer.shared_head.head,
+                                       mtp_layer.shared_head(hidden_states))
         return logits
 
 
 @support_torch_compile
 class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         self.config = vllm_config.model_config.hf_config
-        self.model = DeepSeekMultiTokenPredictor(
-            vllm_config=vllm_config, prefix=maybe_prefix(prefix, "mtp")
-        )
+        self.model = DeepSeekMultiTokenPredictor(vllm_config=vllm_config,
+                                                 prefix=maybe_prefix(
+                                                     prefix, "mtp"))
         # Set MoE hyperparameters
         self.set_moe_parameters()
 
@@ -256,9 +250,8 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
         inputs_embeds: torch.Tensor | None = None,
         spec_step_idx: int = 0,
     ) -> torch.Tensor:
-        hidden_states = self.model(
-            input_ids, positions, hidden_states, inputs_embeds, spec_step_idx
-        )
+        hidden_states = self.model(input_ids, positions, hidden_states,
+                                   inputs_embeds, spec_step_idx)
         return hidden_states
 
     def compute_logits(
@@ -268,11 +261,12 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
     ) -> torch.Tensor | None:
         return self.model.compute_logits(hidden_states, spec_step_idx)
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+    def load_weights(self, weights: Iterable[tuple[str,
+                                                   torch.Tensor]]) -> set[str]:
         rocm_aiter_moe_shared_expert_enabled = (
-            rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()
-        )
-        rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(), "mix_placement", False)
+            rocm_aiter_ops.is_fusion_moe_shared_experts_enabled())
+        rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(),
+                                                       "mix_placement", False)
         stacked_params_mapping = [
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
@@ -282,12 +276,9 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts
-            + (
-                self.config.n_shared_experts
-                if rocm_aiter_moe_shared_expert_enabled
-                else 0
-            ),
+            num_experts=self.config.n_routed_experts +
+            (self.config.n_shared_experts
+             if rocm_aiter_moe_shared_expert_enabled else 0),
             num_redundant_experts=self.num_redundant_experts,
         )
 
@@ -316,11 +307,11 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                 name = name.replace("mtp.0.", "model.layers.0.mtp_block.")
 
             if ".w1." in name:
-                name = name.replace(".w1.",".gate_proj.")
+                name = name.replace(".w1.", ".gate_proj.")
             if ".w2." in name:
-                name = name.replace(".w2.",".down_proj.")
+                name = name.replace(".w2.", ".down_proj.")
             if ".w3." in name:
-                name = name.replace(".w3.",".up_proj.")
+                name = name.replace(".w3.", ".up_proj.")
 
             if ".head." in name:
                 name = name.replace(".head.", ".shared_head.head.")
@@ -332,28 +323,30 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                 name = name.replace(".emb.tok_emb.", ".embed_tokens.")
 
             if "attn" in name and "self_attn" not in name:
-                name = name.replace(".attn.",".self_attn.")
+                name = name.replace(".attn.", ".self_attn.")
             if ".ffn." in name:
-                name = name.replace(".ffn.",".mlp.")
+                name = name.replace(".ffn.", ".mlp.")
             if ".ffn_norm." in name:
-                name = name.replace(".ffn_norm.",".post_attention_layernorm.")
+                name = name.replace(".ffn_norm.", ".post_attention_layernorm.")
             if ".attn_norm." in name:
-                name = name.replace(".attn_norm.",".input_layernorm.")
+                name = name.replace(".attn_norm.", ".input_layernorm.")
 
             if ".gate.bias" in name:
-                name=name.replace(".gate.bias",".gate.e_score_correction_bias")
+                name = name.replace(".gate.bias",
+                                    ".gate.e_score_correction_bias")
 
             if "sink" in name:
                 # Handle attention sinks (distributed across ranks)
                 param = params_dict[name]
-                narrow_weight = loaded_weight.narrow(0, head_start, heads_per_rank)
+                narrow_weight = loaded_weight.narrow(0, head_start,
+                                                     heads_per_rank)
                 param.data.copy_(narrow_weight)
                 loaded_params.add(name)
                 continue
 
             is_fusion_moe_shared_experts_layer = (
-                rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)
-            )
+                rocm_aiter_moe_shared_expert_enabled
+                and ("mlp.shared_experts" in name))
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 # Skip non-stacked layers and experts (experts handled below).
                 if weight_name not in name:
@@ -372,9 +365,8 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
 
                 # QKV fusion is optional, fall back to normal
                 # weight loading if it's not enabled
-                if (
-                    param_name == "fused_qkv_a_proj"
-                ) and name_mapped not in params_dict:
+                if (param_name == "fused_qkv_a_proj"
+                    ) and name_mapped not in params_dict:
                     continue
                 else:
                     name = name_mapped
@@ -398,7 +390,8 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                 # accordingly.
                 num_chunks = 1
                 if is_fusion_moe_shared_experts_layer:
-                    num_chunks = getattr(self.config, "n_shared_experts", 1) or 1
+                    num_chunks = getattr(self.config, "n_shared_experts",
+                                         1) or 1
                     # Determine split axis based on op type
                     # gate/up: ColumnParallel → split along dim 0
                     # down: RowParallel → split along dim 1
@@ -406,8 +399,7 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                     total = loaded_weight.shape[split_dim]
                     assert total % num_chunks == 0, (
                         f"Shared expert weight dim {total} "
-                        f"not divisible by num_chunks {num_chunks}"
-                    )
+                        f"not divisible by num_chunks {num_chunks}")
                     chunk_size = total // num_chunks
 
                 for j in range(num_chunks):
@@ -416,13 +408,13 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
 
                     if is_fusion_moe_shared_experts_layer:
                         if split_dim == 0:
-                            weight_to_load = loaded_weight[
-                                j * chunk_size : (j + 1) * chunk_size, :
-                            ]
+                            weight_to_load = loaded_weight[j *
+                                                           chunk_size:(j + 1) *
+                                                           chunk_size, :]
                         else:
-                            weight_to_load = loaded_weight[
-                                :, j * chunk_size : (j + 1) * chunk_size
-                            ]
+                            weight_to_load = loaded_weight[:, j *
+                                                           chunk_size:(j + 1) *
+                                                           chunk_size]
                         # Synthesize an expert-style name so expert mapping
                         # can route it
                         chunk_name = name.replace(
@@ -445,15 +437,15 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
 
                         # Do not modify `name` since the loop may continue here
                         # Instead, create a new variable
-                        name_mapped = chunk_name.replace(weight_name, param_name)
+                        name_mapped = chunk_name.replace(
+                            weight_name, param_name)
 
                         param = params_dict[name_mapped]
                         # We should ask the weight loader to return success or
                         # not here since otherwise we may skip experts with
                         # other available replicas.
-                        weight_loader = typing.cast(
-                            Callable[..., bool], param.weight_loader
-                        )
+                        weight_loader = typing.cast(Callable[..., bool],
+                                                    param.weight_loader)
                         success = weight_loader(
                             param,
                             weight_to_load,
@@ -492,9 +484,8 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                         #     continue
 
                         param = params_dict[name]
-                        weight_loader = getattr(
-                            param, "weight_loader", default_weight_loader
-                        )
+                        weight_loader = getattr(param, "weight_loader",
+                                                default_weight_loader)
                         weight_loader(param, loaded_weight)
             if not is_fusion_moe_shared_experts_layer:
                 loaded_params.add(name)
@@ -524,9 +515,8 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                 break
         if not spec_layer_weight:
             # treat rest weights as weights for transformer layer block
-            name = name.replace(
-                f"model.layers.{spec_layer}.", f"model.layers.{spec_layer}.mtp_block."
-            )
+            name = name.replace(f"model.layers.{spec_layer}.",
+                                f"model.layers.{spec_layer}.mtp_block.")
         elif shared_weight:
             # treat shared weights as top level weights
             name = name.replace(f"model.layers.{spec_layer}.", "model.")
@@ -534,9 +524,16 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
 
     def no_mtp_block_in_name(self, layer_name: str) -> bool:
         names = [
-            ".hc_head_fn", ".hc_head_base", ".hc_head_scale",
-            ".e_proj.", ".h_proj.", ".enorm.", ".hnorm.",
-            ".norm.", ".head.", ".emb.tok_emb.",
+            ".hc_head_fn",
+            ".hc_head_base",
+            ".hc_head_scale",
+            ".e_proj.",
+            ".h_proj.",
+            ".enorm.",
+            ".hnorm.",
+            ".norm.",
+            ".head.",
+            ".emb.tok_emb.",
         ]
         for name in names:
             if name in layer_name:

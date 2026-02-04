@@ -47,7 +47,6 @@ from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import (AscendDeviceType, get_ascend_device_type,
                                weak_ref_tensors)
 
-
 # default max value of sliding window size
 SWA_INT_MAX = 2147483647
 

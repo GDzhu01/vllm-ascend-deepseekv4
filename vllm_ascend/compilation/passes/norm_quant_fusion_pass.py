@@ -289,36 +289,29 @@ class RMSNormDynamicQuantPattern:
         """
         rms_norm_input = torch.randn(2, 4, device="npu", dtype=self.dtype)
         rms_norm_weight = torch.randn(4, device="npu", dtype=self.dtype)
-        return [
-            rms_norm_input, rms_norm_weight
-        ]
+        return [rms_norm_input, rms_norm_weight]
 
     def register(self, pm_pass: PatternMatcherPass):
 
-        def pattern(
-                rms_norm_input: torch.Tensor,
-                rms_norm_weight: torch.Tensor
-            ):
+        def pattern(rms_norm_input: torch.Tensor,
+                    rms_norm_weight: torch.Tensor):
             """
             Pattern for RMSNormDynamicQuant fusion.
             """
-            out0, _ = torch.ops.npu.npu_rms_norm(rms_norm_input, rms_norm_weight, self.eps)
+            out0, _ = torch.ops.npu.npu_rms_norm(rms_norm_input,
+                                                 rms_norm_weight, self.eps)
             out0 = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(out0, True)
-            quantized_output, quantized_output_scale = torch.ops.npu.npu_dynamic_quant(out0)
+            quantized_output, quantized_output_scale = torch.ops.npu.npu_dynamic_quant(
+                out0)
             return quantized_output, quantized_output_scale
 
-        def replacement(
-                rms_norm_input: torch.Tensor,
-                rms_norm_weight: torch.Tensor
-            ):
+        def replacement(rms_norm_input: torch.Tensor,
+                        rms_norm_weight: torch.Tensor):
             """
             Replacement for the RMSNormDynamicQuant fusion.
             """
             quantized_output, quantized_output_scale = torch.ops.custom.npu_rms_norm_dynamic_quant(
-                rms_norm_input,
-                rms_norm_weight,
-                epsilon=self.eps
-            )
+                rms_norm_input, rms_norm_weight, epsilon=self.eps)
             quantized_output = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
                 quantized_output, True)
             return quantized_output, quantized_output_scale
