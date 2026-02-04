@@ -1008,7 +1008,7 @@ class NPUModelRunner(GPUModelRunner):
                     sum(self.pcp_manager.num_pcp_pads_cpu[:num_reqs]))
 
                 blk_table = self.input_batch.block_table[kv_cache_group_id]
-                blk_table_tensor = blk_table.get_device_tensor(num_reqs)
+                blk_table_tensor = blk_table.get_device_tensor()
                 slot_mapping = blk_table.slot_mapping.gpu[:
                                                           maybe_pcp_full_tokens]
                 if self.pcp_size == 1:
@@ -1092,7 +1092,7 @@ class NPUModelRunner(GPUModelRunner):
                 num_input_tokens=num_input_tokens,
                 actual_seq_lengths_q=self.actual_seq_lengths_q,
                 # TODO: change this to the right block table for linear attn
-                block_table_tensor=blk_table_tensor,
+                block_table_tensor=blk_table_tensor[:num_reqs],
                 slot_mapping=slot_mapping,
                 state_ids=state_ids,
                 swa_slot_mapping=self.swa_slot_mapping.gpu[:total_num_scheduled_tokens],
@@ -2082,7 +2082,7 @@ class NPUModelRunner(GPUModelRunner):
             for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
                 blk_table = self.input_batch.block_table[kv_cache_group_id]
-                block_table_tensor = blk_table.get_device_tensor(num_reqs)
+                block_table_tensor = blk_table.get_device_tensor()
                 slot_mapping = blk_table.slot_mapping.gpu[:num_tokens]
 
                 long_seq_metadata = None if self.pcp_size * self.dcp_size == 1 else self.pcp_manager.generate_pcp_metadata(
