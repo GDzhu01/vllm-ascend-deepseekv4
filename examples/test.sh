@@ -12,45 +12,20 @@ export VLLM_VERSION=0.13.0
 # export ASCEND_RT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
 # export ASCEND_RT_VISIBLE_DEVICES=8,9
 nohup vllm serve /home/models/hello2026/ \
-  --max_model_len 512 \
-  --max-num-batched-tokens 512 \
+  --max_model_len 32000 \
+  --max-num-batched-tokens 32000 \
   --served-model-name qwen \
   --gpu-memory-utilization 0.95 \
   --data-parallel-size 4 \
   --enable-expert-parallel \
-  --max-num-seqs 2 \
+  --async-scheduling \
+  --max-num-seqs 32 \
   --port 8666 \
   --block-size 128 \
-  --enforce_eager \
-  --additional_config '{"enable_cpu_binding": "True"}' \
+  --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}' \
   2>&1 | tee run_online.log
 
-#   --async-scheduling \
+#   --enforce_eager \ --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
 #   --quantization ascend \
-
-# nohup vllm serve /home/z00828031/weights/dummy_dsv4_layer4_es12/ \
-#   --max_model_len 1024 \
-#   --max-num-batched-tokens 1024 \
-#   --served-model-name qwen \
-#   --gpu-memory-utilization 0.80 \
-#   --data-parallel-size 2 \
-#   --enable-expert-parallel \
-#   --port 8444 \
-#   --block-size 128 \
-#   --enforce_eager \
-#   --additional_config '{"enable_cpu_binding": "True"}' \
-#   2>&1 | tee run.log
-
-# nohup vllm serve /home/z00828031/weights/dummy_dsv4_layer4_es12/ \
-#   --max_model_len 1024 \
-#   --max-num-batched-tokens 1024 \
-#   --served-model-name qwen \
-#   --gpu-memory-utilization 0.80 \
-#   --enable-expert-parallel \
-#   --port 8444 \
-#   --block-size 128 \
-#   --enforce_eager \
-#   --additional_config '{"enable_cpu_binding": "True"}' \
-#   2>&1 | tee run.log
-
-
+# --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \

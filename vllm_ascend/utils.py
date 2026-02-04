@@ -928,7 +928,9 @@ def weak_ref_tensor(tensor: Any) -> Any:
     but will not keep the original tensor alive.
     """
     if isinstance(tensor, torch.Tensor):
-        return torch.ops._C_ascend.weak_ref_tensor(tensor)
+        # return torch.ops._C_ascend.weak_ref_tensor(tensor)
+        from torch_npu._C import _weak_ref_tensor
+        return _weak_ref_tensor(tensor)
     else:
         return tensor
 

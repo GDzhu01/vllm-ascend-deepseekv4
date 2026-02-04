@@ -774,7 +774,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         compressed_tokens_start, compressed_tokens_end = _get_compressed_decode_token_start_and_end(decode_input_positions, self.compressor_ratio)
 
-        prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:compressed_tokens_end]
+        prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:compressed_tokens_start + compressed_tokens_end]
 
         AscendDSAMetadataBuilder.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
@@ -1356,7 +1356,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         torch.ops.custom.kv_compress_epilog(
             kv_state[0].view(-1, kv_state[0].shape[-1]),
             kv.view(-1, kv.shape[-1]),
-            attn_metadata.prefill.swa_slot_mapping,
+            attn_metadata.prefill.swa_slot_mapping[:kv.shape[0]],
             quant_group_size=64,
             quant_mode=2
         )
@@ -1420,7 +1420,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         torch.ops.custom.kv_compress_epilog(
             cache,
             kv.reshape(-1, kv.shape[-1]),
-            slot_mapping,
+            slot_mapping[:kv.shape[0]],
             quant_group_size=64,
             quant_mode=2
         )
@@ -1532,7 +1532,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         torch.ops.custom.kv_compress_epilog(
             kv_state[0].view(-1, kv_state[0].shape[-1]),
             kv.view(-1, kv.shape[-1]),
-            attn_metadata.decode.swa_slot_mapping,
+            attn_metadata.decode.swa_slot_mapping[:kv.shape[0]],
             quant_group_size=64,
             quant_mode=2
         )
@@ -1598,7 +1598,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 torch.ops.custom.kv_compress_epilog(
                     kv_cache[0].view(-1, kv_cache[0].shape[-1]),
                     compressed_kv.view(-1, compressed_kv.shape[-1]),
-                    compressed_kv_slot_mapping,
+                    compressed_kv_slot_mapping[:compressed_kv.shape[0]],
                     quant_group_size=64,
                     quant_mode=2
                 )
