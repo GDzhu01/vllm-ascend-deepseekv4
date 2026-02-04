@@ -64,6 +64,7 @@ _ASCEND_CUSTOMOP_IS_REIGISTERED = False
 _DEFAULT_BUFFER_SIZE = 200
 _MIN_DP_BUFFER_SIZE = 50
 _IS_MOE_MODEL = None
+_IS_W8A8_DYNAMIC = None
 _IS_DRAFTER_MOE_MODEL = None
 _IS_VL_MODEL = None
 _ENABLE_SP = None
@@ -73,6 +74,12 @@ _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
 _ATNN_CALCULATION_STREAM = None
+
+
+class QuantType(Enum):
+    NONE = 0
+    W8A8 = 1
+    W4A8 = 2
 
 
 def _print_callback_on_stream(*args):
@@ -800,6 +807,20 @@ def is_moe_model(vllm_config: VllmConfig):
         model_configs = vllm_config.model_config.hf_text_config.to_dict()
         _IS_MOE_MODEL = _is_contain_expert(model_configs)
     return _IS_MOE_MODEL
+
+
+def is_w8a8_dynamic(quant_type: QuantType = None):
+    """Checks if the MoE module is W8A8 DYNAMIC"""
+    global _IS_W8A8_DYNAMIC
+    # _IS_W8A8_DYNAMIC would be set in AscendFusedMoE initialization(ignore MTP draft model)
+    if _IS_W8A8_DYNAMIC is not None:
+        return _IS_W8A8_DYNAMIC
+    if quant_type is not None:
+        if quant_type == QuantType.W8A8:
+            _IS_W8A8_DYNAMIC = True
+        else:
+            _IS_W8A8_DYNAMIC = False
+    return _IS_W8A8_DYNAMIC
 
 
 def is_drafter_moe_model(vllm_config: VllmConfig):

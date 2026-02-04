@@ -24,11 +24,12 @@ from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.fused_moe import FusedMoEConfig
 
 import vllm_ascend.envs as envs_ascend
+from vllm_ascend.utils import QuantType
 from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.ops.fused_moe.moe_mlp import unified_apply_mlp
 from vllm_ascend.ops.fused_moe.prepare_finalize import (
     PrepareAndFinalize, PrepareAndFinalizeWithAll2All,
-    PrepareAndFinalizeWithAllGather, PrepareAndFinalizeWithMC2, QuantType)
+    PrepareAndFinalizeWithAllGather, PrepareAndFinalizeWithMC2)
 from vllm_ascend.ops.fused_moe.token_dispatcher import (
     MoETokenDispatcher, TokenDispatcherWithAll2AllV,
     TokenDispatcherWithAllGather, TokenDispatcherWithMC2)
