@@ -81,8 +81,11 @@ def get_quant_method(quant_description: Dict[str, Any],
     if quant_description.get("quant_method") == COMPRESSED_TENSORS_METHOD:
         return get_quant_method_llmcompressor(layer)
 
-    return get_quant_method_modelslim(quant_description, prefix, layer_type,
-                                      packed_modules_mapping, tid2eid=tid2eid)
+    return get_quant_method_modelslim(quant_description,
+                                      prefix,
+                                      layer_type,
+                                      packed_modules_mapping,
+                                      tid2eid=tid2eid)
 
 
 def get_quant_method_llmcompressor(layer: torch.nn.Module):

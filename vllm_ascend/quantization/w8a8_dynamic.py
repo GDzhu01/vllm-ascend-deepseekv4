@@ -80,9 +80,7 @@ class AscendW8A8DynamicLinearMethod:
         bias: Optional[torch.Tensor] = None,
         tp_rank: Optional[int] = 0,
     ) -> torch.Tensor:
-        # print(f'x: {x.shape}')
         quantized_x, pertoken_scale = torch_npu.npu_dynamic_quant(x)
-        # print(f'quantized_x: {quantized_x.shape}, pertoken_scale: {pertoken_scale.shape}')
         output = torch_npu.npu_quant_matmul(
             quantized_x,
             layer.weight,

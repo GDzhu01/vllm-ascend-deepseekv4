@@ -76,7 +76,7 @@ def get_value_from_lines(lines: List[str], key: str) -> str:
 def get_chip_type() -> str:
     try:
         if envs.SOC_VERSION == 'ascend910_95':
-            logging.info(f"current compile op with SOC_VERSION: ascend910_95")
+            logging.info("current compile op with SOC_VERSION: ascend910_95")
             return envs.SOC_VERSION
         npu_info_lines = subprocess.check_output(
             ['npu-smi', 'info', '-l']).decode().strip().split('\n')
@@ -246,9 +246,12 @@ class build_and_install_aclnn(Command):
         try:
             print("Running bash build_aclnn.sh ...")
             print("================ROOT_DIR is", ROOT_DIR)
-            print("================soc version is ", envs.SOC_VERSION, "======general soc version is", get_general_soc_version() )
-            subprocess.check_call(
-                ["bash", "csrc/build_aclnn.sh", ROOT_DIR, get_general_soc_version()])
+            print("================soc version is ", envs.SOC_VERSION,
+                  "======general soc version is", get_general_soc_version())
+            subprocess.check_call([
+                "bash", "csrc/build_aclnn.sh", ROOT_DIR,
+                get_general_soc_version()
+            ])
             print("buid_aclnn.sh executed successfully!")
         except subprocess.CalledProcessError as e:
             print(f"Error running build_aclnn.sh: {e}")

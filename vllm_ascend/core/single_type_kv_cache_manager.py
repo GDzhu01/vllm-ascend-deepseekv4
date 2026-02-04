@@ -5,22 +5,20 @@ from collections.abc import Sequence
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_utils import BlockHashList, KVCacheBlock
-from vllm.v1.kv_cache_interface import (
-    KVCacheSpec,
-)
+from vllm.v1.core.single_type_kv_cache_manager import (
+    SingleTypeKVCacheManager, spec_manager_map)
+from vllm.v1.kv_cache_interface import KVCacheSpec
 from vllm.v1.request import Request
 
-from vllm.v1.core.single_type_kv_cache_manager import SingleTypeKVCacheManager
-from vllm.v1.core.single_type_kv_cache_manager import spec_manager_map
-from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
-                                            Compress4AttentionSpec,
-                                            Compress128AttentionSpec)
+from vllm_ascend.core.kv_cache_spec import (Compress4AttentionSpec,
+                                            Compress128AttentionSpec,
+                                            CompressAttentionSpec)
 
 
 class CompressAttentionManager(SingleTypeKVCacheManager):
-    def __init__(
-        self, kv_cache_spec: CompressAttentionSpec, block_pool: BlockPool, **kwargs
-    ) -> None:
+
+    def __init__(self, kv_cache_spec: CompressAttentionSpec,
+                 block_pool: BlockPool, **kwargs) -> None:
         super().__init__(kv_cache_spec, block_pool, **kwargs)
         self.compress_ratio = kv_cache_spec.compress_ratio
         self._null_block = block_pool.null_block
@@ -37,13 +35,11 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
 
         num_tokens //= self.compress_ratio
 
-        return super().get_num_blocks_to_allocate(
-            request_id, num_tokens, new_computed_blocks
-        )
+        return super().get_num_blocks_to_allocate(request_id, num_tokens,
+                                                  new_computed_blocks)
 
-    def allocate_new_blocks(
-        self, request_id: str, num_tokens: int
-    ) -> list[KVCacheBlock]:
+    def allocate_new_blocks(self, request_id: str,
+                            num_tokens: int) -> list[KVCacheBlock]:
         """
         Allocate new blocks for the request to give it at least `num_tokens`
         token slots.
@@ -64,7 +60,8 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         if num_new_blocks <= 0:
             return []
         else:
-            new_blocks = self.block_pool.get_new_blocks(num_new_blocks, self.kv_cache_group_id)
+            new_blocks = self.block_pool.get_new_blocks(
+                num_new_blocks, self.kv_cache_group_id)
             req_blocks.extend(new_blocks)
             return new_blocks
 
@@ -79,9 +76,7 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         """
         num_tokens //= self.compress_ratio
 
-        return super().cache_blocks(
-            request, num_tokens
-        )
+        return super().cache_blocks(request, num_tokens)
 
     @classmethod
     def find_longest_cache_hit(
@@ -97,13 +92,11 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         pcp_world_size: int = 1,
     ) -> tuple[list[KVCacheBlock], ...]:
         assert isinstance(kv_cache_spec, CompressAttentionSpec), (
-            "SFACompressRatio4Manager can only be used for C128"
-        )
+            "SFACompressRatio4Manager can only be used for C128")
         assert dcp_world_size == 1, "DCP not support mamba now."
         assert pcp_world_size == 1, "PCP not support mamba now."
         computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
-            [] for _ in range(len(kv_cache_group_ids))
-        )
+            [] for _ in range(len(kv_cache_group_ids)))
         return computed_blocks
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
@@ -130,15 +123,12 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         self.num_cached_block.pop(request_id, None)
 
 
-def get_manager_for_kv_cache_spec(
-    kv_cache_spec: KVCacheSpec, **kwargs
-) -> SingleTypeKVCacheManager:
-    print(f"old_map: {spec_manager_map}")
+def get_manager_for_kv_cache_spec(kv_cache_spec: KVCacheSpec,
+                                  **kwargs) -> SingleTypeKVCacheManager:
     spec_manager_map.update({
         Compress4AttentionSpec: CompressAttentionManager,
         Compress128AttentionSpec: CompressAttentionManager,
     })
-    print(f"new_map: {spec_manager_map}")
     manager_class = spec_manager_map[type(kv_cache_spec)]
     manager = manager_class(kv_cache_spec, **kwargs)
     return manager

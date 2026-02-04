@@ -3,6 +3,7 @@
 from transformers import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 
+
 class DeepseekV4Config(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`DeepseekV3Model`]. It is used to instantiate an DeepSeek
@@ -116,7 +117,8 @@ class DeepseekV4Config(PretrainedConfig):
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",
         "layers.*.mlp.experts.*.up_proj": "local_colwise",
         "layers.*.mlp.experts.*.down_proj": "local_rowwise",
-        "layers.*.mlp.experts.*": "local",  # each expert is wrapped in a module list
+        "layers.*.mlp.experts.*":
+        "local",  # each expert is wrapped in a module list
         "layers.*.mlp.shared_experts.gate_proj": "local_colwise",
         "layers.*.mlp.shared_experts.up_proj": "local_colwise",
         "layers.*.mlp.shared_experts.down_proj": "local_rowwise",
@@ -124,7 +126,8 @@ class DeepseekV4Config(PretrainedConfig):
         "layers.*.mlp.gate_proj": "local_colwise",
         "layers.*.mlp.up_proj": "local_colwise",
         "layers.*.mlp.down_proj": "local_rowwise",
-        "layers.*.mlp": "gather",  # This is the only moment where results are gathered
+        "layers.*.mlp":
+        "gather",  # This is the only moment where results are gathered
     }
     base_model_pp_plan = {
         "embed_tokens": (["input_ids"], ["inputs_embeds"]),
@@ -159,9 +162,12 @@ class DeepseekV4Config(PretrainedConfig):
         o_groups=8,
         o_lora_rank=1024,
         window_size=128,
-        compress_ratios=[1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4],
+        compress_ratios=[
+            1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
+            128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
+            128, 4, 128, 4, 128, 4, 128, 4, 128, 4
+        ],
         # yarn
-
         compress_rope_theta=40000,
         # original_seq_len=65536,
         # rope_theta=10000,
@@ -173,7 +179,7 @@ class DeepseekV4Config(PretrainedConfig):
         max_seq_len=65536,
         rope_theta=10000.0,
         rope_scaling=None,
-        
+
         # index
         index_n_heads=64,
         index_head_dim=128,
@@ -195,67 +201,65 @@ class DeepseekV4Config(PretrainedConfig):
         **kwargs,
     ):
         # base
-        self.vocab_size=vocab_size
-        self.moe_inter_dim=moe_inter_dim
-        self.n_hash_layers=n_hash_layers
-        self.hidden_size=hidden_size
-        self.num_hidden_layers=num_hidden_layers
-        self.moe_layer_freq=moe_layer_freq
-        self.num_attention_heads=num_attention_heads
-        
+        self.vocab_size = vocab_size
+        self.moe_inter_dim = moe_inter_dim
+        self.n_hash_layers = n_hash_layers
+        self.hidden_size = hidden_size
+        self.num_hidden_layers = num_hidden_layers
+        self.moe_layer_freq = moe_layer_freq
+        self.num_attention_heads = num_attention_heads
+
         # moe
-        self.n_routed_experts=n_routed_experts
-        self.n_shared_experts=n_shared_experts
-        self.n_activated_experts=n_activated_experts
-        self.score_func=score_func
-        self.num_experts_per_tok=num_experts_per_tok
-        self.first_k_dense_replace=first_k_dense_replace
-        self.topk_method=topk_method
-        self.routed_scaling_factor=routed_scaling_factor
-        
+        self.n_routed_experts = n_routed_experts
+        self.n_shared_experts = n_shared_experts
+        self.n_activated_experts = n_activated_experts
+        self.score_func = score_func
+        self.num_experts_per_tok = num_experts_per_tok
+        self.first_k_dense_replace = first_k_dense_replace
+        self.topk_method = topk_method
+        self.routed_scaling_factor = routed_scaling_factor
+
         # mqa
-        self.q_lora_rank=q_lora_rank
-        self.head_dim=head_dim
-        self.rope_head_dim=rope_head_dim
-        self.norm_eps=norm_eps
-        self.o_groups=o_groups
-        self.o_lora_rank=o_lora_rank
-        self.window_size=window_size
-        self.compress_ratios=compress_ratios
+        self.q_lora_rank = q_lora_rank
+        self.head_dim = head_dim
+        self.rope_head_dim = rope_head_dim
+        self.norm_eps = norm_eps
+        self.o_groups = o_groups
+        self.o_lora_rank = o_lora_rank
+        self.window_size = window_size
+        self.compress_ratios = compress_ratios
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
 
         # index
-        self.index_n_heads=index_n_heads
-        self.index_head_dim=index_head_dim
-        self.index_topk=index_topk
-        
+        self.index_n_heads = index_n_heads
+        self.index_head_dim = index_head_dim
+        self.index_topk = index_topk
+
         # hc
-        self.hc_mult=hc_mult
-        self.hc_sinkhorn_iters=hc_sinkhorn_iters
-        self.hc_eps=hc_eps
-        self.dtype=dtype
-        self.scale_fmt=scale_fmt
-        
-        
-        
+        self.hc_mult = hc_mult
+        self.hc_sinkhorn_iters = hc_sinkhorn_iters
+        self.hc_eps = hc_eps
+        self.dtype = dtype
+        self.scale_fmt = scale_fmt
+
         #
         self.moe_intermediate_size = moe_inter_dim
         self.rms_norm_eps = 1e-6
-        self.pad_token_id=None
-        self.bos_token_id=0
-        self.eos_token_id=1
-        self.tie_word_embeddings=False
+        self.pad_token_id = None
+        self.bos_token_id = 0
+        self.eos_token_id = 1
+        self.tie_word_embeddings = False
         self.attention_bias = False
         self.max_position_embeddings = max_position_embeddings
-        self.initializer_range  = 0.02
+        self.initializer_range = 0.02
         self.hidden_act = 'silu'
-        self.norm_topk_prob=norm_topk_prob
+        self.norm_topk_prob = norm_topk_prob
 
         self.rope_theta = rope_theta
         self.rope_scaling = rope_scaling
-        self.compress_rope_theta=compress_rope_theta
-        self.max_seq_len=max_seq_len
+        self.compress_rope_theta = compress_rope_theta
+        self.max_seq_len = max_seq_len
         if self.rope_scaling is not None and "type" in self.rope_scaling:
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
 

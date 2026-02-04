@@ -59,51 +59,50 @@ class AscendQuantConfig(QuantizationConfig):
     def __init__(self, quant_config: Dict[str, Any]):
         super().__init__()
         self.quant_description = quant_config
-        
-        
-        # TODO
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if not name.startswith('model'):
-                new_name = f'model.{name}'
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if 'attn' in name and 'self_attn' not in name:
-                new_name = name.replace('.attn.','.self_attn.')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name
-            if 'ffn' in name:
-                new_name = name.replace('ffn','mlp')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-        
-        extra_quant_dict = {}
-        for name in self.quant_description.keys():
-            new_name=name        
-            if 'w1' in name:
-                new_name = name.replace('.w1.','.gate_proj.')
-            if 'w2' in name:
-                new_name = name.replace('.w2.','.down_proj.')
-            if 'w3' in name:
-                new_name = name.replace('.w3.','.up_proj.')
-            
-            if 'head' in name and 'lm_head' not in name:
-                new_name = name.replace('head','lm_head')
-            if 'embed' in name and 'embed_tokens' not in name:
-                new_name = name.replace('embed','embed_tokens')
-            extra_quant_dict[new_name] = self.quant_description[name]
-        self.quant_description.update(extra_quant_dict)
-            
-            
+        model_config = get_current_vllm_config().model_config
+        if model_config and model_config.hf_text_config.model_type == "deepseek_v4":
+            # TODO
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name = name
+                if not name.startswith('model'):
+                    new_name = f'model.{name}'
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name = name
+                if 'attn' in name and 'self_attn' not in name:
+                    new_name = name.replace('.attn.', '.self_attn.')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name = name
+                if 'ffn' in name:
+                    new_name = name.replace('ffn', 'mlp')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+
+            extra_quant_dict = {}
+            for name in self.quant_description.keys():
+                new_name = name
+                if 'w1' in name:
+                    new_name = name.replace('.w1.', '.gate_proj.')
+                if 'w2' in name:
+                    new_name = name.replace('.w2.', '.down_proj.')
+                if 'w3' in name:
+                    new_name = name.replace('.w3.', '.up_proj.')
+
+                if 'head' in name and 'lm_head' not in name:
+                    new_name = name.replace('head', 'lm_head')
+                if 'embed' in name and 'embed_tokens' not in name:
+                    new_name = name.replace('embed', 'embed_tokens')
+                extra_quant_dict[new_name] = self.quant_description[name]
+            self.quant_description.update(extra_quant_dict)
+
         # TODO(whx): remove this adaptation after adding "shared_head"
         # to prefix of DeepSeekShareHead in vLLM.
         extra_quant_dict = {}
@@ -115,10 +114,6 @@ class AscendQuantConfig(QuantizationConfig):
                 new_k = k.replace("weight_packed", "weight")
                 extra_quant_dict[new_k] = self.quant_description[k]
         self.quant_description.update(extra_quant_dict)
-        
-        # for k in self.quant_description.keys():
-        #     print(f'k after fix: {k}')
-        # exit()
 
     def __repr__(self) -> str:
         return "AscendQuantConfig:\n" + super().__repr__()
@@ -159,12 +154,15 @@ class AscendQuantConfig(QuantizationConfig):
         substr_mapping = QUANT_MODEL_SUBSTR_MAPPINGS.get(model_type)
         if prefix_mapping:
             hf_to_vllm_mapper = WeightsMapper(
-                orig_to_new_prefix=prefix_mapping,orig_to_new_substr=substr_mapping)
+                orig_to_new_prefix=prefix_mapping,
+                orig_to_new_substr=substr_mapping)
             return hf_to_vllm_mapper._map_name(prefix)
         return prefix
 
-    def get_quant_method(self, layer: torch.nn.Module,
-                         prefix: str, tid2eid=None) -> Optional["QuantizeMethodBase"]:
+    def get_quant_method(self,
+                         layer: torch.nn.Module,
+                         prefix: str,
+                         tid2eid=None) -> Optional["QuantizeMethodBase"]:
         vllm_config = get_current_vllm_config()
         model_type = vllm_config.model_config.hf_text_config.model_type
 
@@ -186,7 +184,6 @@ class AscendQuantConfig(QuantizationConfig):
         from vllm.attention.layer import Attention
         if prefix.startswith("language_model"):
             prefix = prefix.split('.', 1)[-1]
-        # print(f'prefix in get_quant_method: {prefix}')
         if isinstance(layer, LinearBase):
             if self.is_layer_skipped_ascend(prefix,
                                             self.packed_modules_mapping):
@@ -201,8 +198,11 @@ class AscendQuantConfig(QuantizationConfig):
             if self.is_layer_skipped_ascend(prefix,
                                             self.packed_modules_mapping):
                 return AscendUnquantizedFusedMoEMethod(layer.moe_config)
-            return AscendFusedMoEMethod(self, prefix,
-                                        self.packed_modules_mapping, layer, tid2eid=tid2eid)
+            return AscendFusedMoEMethod(self,
+                                        prefix,
+                                        self.packed_modules_mapping,
+                                        layer,
+                                        tid2eid=tid2eid)
         elif isinstance(layer, VocabParallelEmbedding):
             if self.is_layer_skipped_ascend(prefix,
                                             self.packed_modules_mapping):
@@ -217,11 +217,6 @@ class AscendQuantConfig(QuantizationConfig):
         fused_mapping: Mapping[str, List[str]] = MappingProxyType({})):
         # adapted from vllm.model_executor.layers.quantization.utils.quant_utils.is_layer_skipped
         proj_name = prefix.split(".")[-1]
-        # for k in self.quant_description.keys():
-        #     print(f'after fix: {k}')
-        # print(f'proj_name: {proj_name}')
-        # for k in fused_mapping:
-        #     print(f'fused_mapping: {k}')
         if proj_name in fused_mapping:
             shard_prefixes = [
                 prefix.replace(proj_name, shard_proj_name)
@@ -573,9 +568,12 @@ class AscendFusedMoEMethod(FusedMoEMethodBase):
         quant_config: The Ascend quantization config.
     """
 
-    def __init__(self, quant_config: AscendQuantConfig, prefix: str,
-                 packed_modules_mapping: Dict[str,
-                                              Any], layer: torch.nn.Module, tid2eid=None):
+    def __init__(self,
+                 quant_config: AscendQuantConfig,
+                 prefix: str,
+                 packed_modules_mapping: Dict[str, Any],
+                 layer: torch.nn.Module,
+                 tid2eid=None):
         super().__init__(layer.moe_config)
         self.quant_method = get_quant_method(quant_config.quant_description,
                                              prefix,

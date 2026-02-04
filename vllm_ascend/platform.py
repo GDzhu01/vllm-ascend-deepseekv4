@@ -367,7 +367,8 @@ class NPUPlatform(Platform):
             model_config.hf_text_config.model_type == "deepseek_v32" and \
             speculative_config.enforce_eager:
             speculative_config.enforce_eager = False
-        if hasattr(vllm_config.model_config.hf_config, "compress_ratios"):
+
+        if model_config and hasattr(model_config.hf_config, "compress_ratios"):
             from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
             kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
                 vllm_config)
@@ -397,8 +398,9 @@ class NPUPlatform(Platform):
         CUR_DIR = os.path.dirname(os.path.realpath(__file__))
         CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
                                        "custom_transformer")
-        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-                                "custom_transformer","op_api","lib")
+        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom",
+                                          "vendors", "custom_transformer",
+                                          "op_api", "lib")
         if os.path.exists(CUSTOM_OPP_PATH):
             current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
                                                    "")
@@ -407,20 +409,22 @@ class NPUPlatform(Platform):
                     "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
             else:
                 os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
-            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
-                                        "")
-            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
-            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
+            current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+            os.environ[
+                "LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
         _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):
         backend_map = {
-            (True, False,False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
-            (False, False,False):
+            (True, False, False):
+            "vllm_ascend.attention.mla_v1.AscendMLABackend",
+            (False, False, False):
             "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
-            (True, True,False): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
-            (True,True,True): "vllm_ascend.attention.dsa_v1.AscendDSABackend",
+            (True, True, False):
+            "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True, True, True):
+            "vllm_ascend.attention.dsa_v1.AscendDSABackend",
         }
 
         return backend_map[(attn_selector_config.use_mla,

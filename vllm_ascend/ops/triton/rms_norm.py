@@ -1,7 +1,6 @@
+import torch
 import triton
 import triton.language as tl
-import torch
-import torch_npu
 
 
 @triton.jit
@@ -25,7 +24,9 @@ def triton_rms_kernel(
         offset_row = row_start + tl.arange(0, BLOCK_M)
         mask_r = offset_row < TOTAL_BATCH
         mask_row = mask_r[:, None]
-        offset_hidden = offset_row[:, None] * hidden_state_stride_bs + offset_d[None, :]
+        offset_hidden = offset_row[:,
+                                   None] * hidden_state_stride_bs + offset_d[
+                                       None, :]
 
         x = tl.load(hidden_state_ptr + offset_hidden, mask=mask_row)
 
@@ -36,7 +37,7 @@ def triton_rms_kernel(
 
 
 def triton_q_rms(
-    q, # bs, 64, 512
+    q,  # bs, 64, 512
     variance_epsilon,
 ):
     bs, head_num, dim = q.shape
@@ -46,14 +47,15 @@ def triton_q_rms(
     if dim > 2048:
         raise NotImplementedError("dim > 2048 not supported")
 
-    device_properties = triton.runtime.driver.active.utils.get_device_properties(q.device)
+    device_properties = triton.runtime.driver.active.utils.get_device_properties(
+        q.device)
     num_vectorcore = device_properties.get("num_vectorcore", -1)
 
     ROW_BLOCK_SIZE = 16  # A safe default balancing parallelism and register pressure.
     batch_per_core = triton.cdiv(total_batch, num_vectorcore)
     BLOCK_M = min(ROW_BLOCK_SIZE, batch_per_core)
 
-    grid = (num_vectorcore,)
+    grid = (num_vectorcore, )
     norm_output = torch.empty_like(q)
 
     triton_rms_kernel[grid](

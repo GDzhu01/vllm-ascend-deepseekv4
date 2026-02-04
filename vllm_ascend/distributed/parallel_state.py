@@ -355,7 +355,7 @@ def destroy_ascend_model_parallel():
     if _OLORA_TP:
         _OLORA_TP.destroy()
     _OLORA_TP = None
-    
+
     global _P_TP
     if _P_TP:
         _P_TP.destroy()
