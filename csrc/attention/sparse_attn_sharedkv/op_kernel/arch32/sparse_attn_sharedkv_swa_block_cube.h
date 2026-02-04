@@ -365,63 +365,121 @@ __aicore__ inline void SWACubeBlock<SAST>::ComputeMm1(const RunInfo &info, const
 
             if (info.isOri) {
                 uint32_t curS2Offset = info.s2Idx * constInfo.s2BaseSize + info.s2StartPoint + nL1 * N_SPLIT_SIZE;
-                while (copyFinishRowCnt < nL1Size) {
-                    // 由于ori_left的存在， 即使第一块搬运也可能并非是pa_block的零点位
-                    copyRowCnt = constInfo.paOriBlockSize - curS2Offset % constInfo.paOriBlockSize;
-                    if (copyFinishRowCnt + copyRowCnt > nL1Size) {
-                        copyRowCnt = nL1Size - copyFinishRowCnt;
+                if constexpr (PAGE_ATTENTION) {
+                    while (copyFinishRowCnt < nL1Size) {
+                        // 由于ori_left的存在， 即使第一块搬运也可能并非是pa_block的零点位
+                        copyRowCnt = constInfo.paOriBlockSize - curS2Offset % constInfo.paOriBlockSize;
+                        if (copyFinishRowCnt + copyRowCnt > nL1Size) {
+                            copyRowCnt = nL1Size - copyFinishRowCnt;
+                        }
+                        Position startPos;
+                        startPos.bIdx = info.bIdx;
+                        startPos.n2Idx = info.n2Idx;
+                        startPos.s2Idx = curS2Offset;
+                        // 256、32等待7buf命名更改
+                        startPos.dIdx = kL1 * 256;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
+                        PAShape shape;
+                        shape.blockSize = constInfo.paOriBlockSize;
+                        shape.headNum = constInfo.kvHeadNum;
+                        shape.headDim = constInfo.headDim;
+                        shape.actHeadDim = 256;
+                        shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
+                        shape.copyRowNum = copyRowCnt;
+                        shape.copyRowNumAlign = nL1SizeAlign;
+                        kTensor = bL1Tensor[copyFinishRowCnt * 16];
+                        DataCopyPA<KV_T, KV_LAYOUT_T>(kTensor, oriKvGm, oriBlockTableGm, shape, startPos);
+                        // 更新循环变量
+                        copyFinishRowCnt += copyRowCnt;
+                        curSeqIdx += copyRowCnt;
+                        curS2Offset += copyRowCnt;
                     }
-                    Position startPos;
-                    startPos.bIdx = info.bIdx;
-                    startPos.n2Idx = info.n2Idx;
-                    startPos.s2Idx = curS2Offset;
-                    // 256、32等待7buf命名更改
-                    startPos.dIdx = kL1 * 256;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
-                    PAShape shape;
-                    shape.blockSize = constInfo.paOriBlockSize;
-                    shape.headNum = constInfo.kvHeadNum;
-                    shape.headDim = constInfo.headDim;
-                    shape.actHeadDim = 256;
-                    shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
-                    shape.copyRowNum = copyRowCnt;
-                    shape.copyRowNumAlign = nL1SizeAlign;
-                    kTensor = bL1Tensor[copyFinishRowCnt * 16];
-                    DataCopyPA<KV_T, KV_LAYOUT_T>(kTensor, oriKvGm, oriBlockTableGm, shape, startPos);
-                    // 更新循环变量
-                    copyFinishRowCnt += copyRowCnt;
-                    curSeqIdx += copyRowCnt;
-                    curS2Offset += copyRowCnt;
+                } else {
+                    if (kL1 == 0) {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim +
+                                nL1 * N_SPLIT_SIZE * constInfo.headDim], nd2nzPara);
+                    } else {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, 
+                                    oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim + (constInfo.headDim >> 1) +
+                                        nL1 * N_SPLIT_SIZE * constInfo.headDim], 
+                                    nd2nzPara);
+                    }
                 }
             } else {
                 uint32_t curS2Offset = info.relativeS2Idx * constInfo.s2BaseSize + nL1 * N_SPLIT_SIZE;
-                while (copyFinishRowCnt < nL1Size) {
-                    // 由于ori_left的存在， 即使第一块搬运也可能并非是pa_block的零点位
-                    copyRowCnt = constInfo.paCmpBlockSize - curS2Offset % constInfo.paCmpBlockSize;
-                    if (copyFinishRowCnt + copyRowCnt > nL1Size) {
-                        copyRowCnt = nL1Size - copyFinishRowCnt;
+                if constexpr (PAGE_ATTENTION) {
+                    while (copyFinishRowCnt < nL1Size) {
+                        // 由于ori_left的存在， 即使第一块搬运也可能并非是pa_block的零点位
+                        copyRowCnt = constInfo.paCmpBlockSize - curS2Offset % constInfo.paCmpBlockSize;
+                        if (copyFinishRowCnt + copyRowCnt > nL1Size) {
+                            copyRowCnt = nL1Size - copyFinishRowCnt;
+                        }
+
+                        Position startPos;
+                        startPos.bIdx = info.bIdx;
+                        startPos.n2Idx = info.n2Idx;
+                        startPos.s2Idx = curS2Offset;
+                        // 256、32等待7buf命名更改
+                        startPos.dIdx = kL1 * 256;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
+
+                        PAShape shape;
+                        shape.blockSize = constInfo.paCmpBlockSize;
+                        shape.headNum = constInfo.kvHeadNum;
+                        shape.headDim = constInfo.headDim;
+                        shape.actHeadDim = 256;
+                        shape.maxblockNumPerBatch = constInfo.cmpMaxBlockNumPerBatch;
+                        shape.copyRowNum = copyRowCnt;
+                        shape.copyRowNumAlign = nL1SizeAlign;
+                        kTensor = bL1Tensor[copyFinishRowCnt * 16];
+                        DataCopyPA<KV_T, KV_LAYOUT_T>(kTensor, cmpKvGm, cmpBlockTableGm, shape, startPos);
+                        // 更新循环变量
+                        copyFinishRowCnt += copyRowCnt;
+                        curSeqIdx += copyRowCnt;
+                        curS2Offset += copyRowCnt;
                     }
-
-                    Position startPos;
-                    startPos.bIdx = info.bIdx;
-                    startPos.n2Idx = info.n2Idx;
-                    startPos.s2Idx = curS2Offset;
-                    // 256、32等待7buf命名更改
-                    startPos.dIdx = kL1 * 256;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
-
-                    PAShape shape;
-                    shape.blockSize = constInfo.paCmpBlockSize;
-                    shape.headNum = constInfo.kvHeadNum;
-                    shape.headDim = constInfo.headDim;
-                    shape.actHeadDim = 256;
-                    shape.maxblockNumPerBatch = constInfo.cmpMaxBlockNumPerBatch;
-                    shape.copyRowNum = copyRowCnt;
-                    shape.copyRowNumAlign = nL1SizeAlign;
-                    kTensor = bL1Tensor[copyFinishRowCnt * 16];
-                    DataCopyPA<KV_T, KV_LAYOUT_T>(kTensor, cmpKvGm, cmpBlockTableGm, shape, startPos);
-                    // 更新循环变量
-                    copyFinishRowCnt += copyRowCnt;
-                    curSeqIdx += copyRowCnt;
-                    curS2Offset += copyRowCnt;
+                } else {
+                    if (kL1 == 0) {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, cmpKvGm[info.tensorCmpBOffset + curS2Offset * constInfo.headDim], nd2nzPara);
+                    } else {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, 
+                                    cmpKvGm[info.tensorCmpBOffset + curS2Offset * constInfo.headDim + (constInfo.headDim >> 1)], 
+                                    nd2nzPara);
+                    }
                 }
             }
 
@@ -580,61 +638,91 @@ __aicore__ inline void SWACubeBlock<SAST>::ComputeMm2(const RunInfo &info, const
 
                 if (info.isOri) {
                     uint32_t curS2Offset = info.s2Idx * constInfo.s2BaseSize + info.s2StartPoint + kL1 * K_L0_SPLIT_SIZE;
-                    while (copyFinishRowCnt < kL0Size) {
-                        copyRowCnt = constInfo.paOriBlockSize - curS2Offset % constInfo.paOriBlockSize;
-                        if (copyFinishRowCnt + copyRowCnt > kL0Size) {
-                            copyRowCnt = kL0Size - copyFinishRowCnt;
-                        }
-                        Position startPos;
-                        startPos.bIdx = info.bIdx;
-                        startPos.n2Idx = info.n2Idx;
-                        startPos.s2Idx = curS2Offset;
-                        startPos.dIdx = nL1 * N_SPLIT_SIZE;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
-                        PAShape shape;
-                        shape.blockSize = constInfo.paOriBlockSize;
-                        shape.headNum = constInfo.kvHeadNum;
-                        shape.headDim = constInfo.headDim;
-                        shape.actHeadDim = nL1Size;
-                        shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
-                        shape.copyRowNum = copyRowCnt;
-                        shape.copyRowNumAlign = kL0SizeAlign;
-                        subvTensor = bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE + copyFinishRowCnt * 16];
-                        DataCopyPA<KV_T, KV_LAYOUT_T>(subvTensor, oriKvGm, oriBlockTableGm, shape, startPos);
+                    if constexpr (PAGE_ATTENTION) {
+                        while (copyFinishRowCnt < kL0Size) {
+                            copyRowCnt = constInfo.paOriBlockSize - curS2Offset % constInfo.paOriBlockSize;
+                            if (copyFinishRowCnt + copyRowCnt > kL0Size) {
+                                copyRowCnt = kL0Size - copyFinishRowCnt;
+                            }
+                            Position startPos;
+                            startPos.bIdx = info.bIdx;
+                            startPos.n2Idx = info.n2Idx;
+                            startPos.s2Idx = curS2Offset;
+                            startPos.dIdx = nL1 * N_SPLIT_SIZE;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
+                            PAShape shape;
+                            shape.blockSize = constInfo.paOriBlockSize;
+                            shape.headNum = constInfo.kvHeadNum;
+                            shape.headDim = constInfo.headDim;
+                            shape.actHeadDim = nL1Size;
+                            shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
+                            shape.copyRowNum = copyRowCnt;
+                            shape.copyRowNumAlign = kL0SizeAlign;
+                            subvTensor = bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE + copyFinishRowCnt * 16];
+                            DataCopyPA<KV_T, KV_LAYOUT_T>(subvTensor, oriKvGm, oriBlockTableGm, shape, startPos);
 
-                        // 更新循环变量
-                        copyFinishRowCnt += copyRowCnt;
-                        curSeqIdx += copyRowCnt;
-                        curS2Offset += copyRowCnt;
+                            // 更新循环变量
+                            copyFinishRowCnt += copyRowCnt;
+                            curSeqIdx += copyRowCnt;
+                            curS2Offset += copyRowCnt;
+                        }
+                    } else {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = kL0Size;      // 行数
+                        nd2nzPara.dValue = N_SPLIT_SIZE; // constInfo.headDim;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = kL0SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE],
+                                oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim +
+                                nL1 * N_SPLIT_SIZE], nd2nzPara);
                     }
                 } else {
                     uint32_t curS2Offset = info.relativeS2Idx * constInfo.s2BaseSize + K_L0_SPLIT_SIZE * kL1;
-                    while (copyFinishRowCnt < kL0Size) {
-                        copyRowCnt = constInfo.paCmpBlockSize - curS2Offset % constInfo.paCmpBlockSize;
-                        if (copyFinishRowCnt + copyRowCnt > kL0Size) {
-                            copyRowCnt = kL0Size - copyFinishRowCnt;
+                    if constexpr (PAGE_ATTENTION) {
+                        while (copyFinishRowCnt < kL0Size) {
+                            copyRowCnt = constInfo.paCmpBlockSize - curS2Offset % constInfo.paCmpBlockSize;
+                            if (copyFinishRowCnt + copyRowCnt > kL0Size) {
+                                copyRowCnt = kL0Size - copyFinishRowCnt;
+                            }
+
+                            Position startPos;
+                            startPos.bIdx = info.bIdx;
+                            startPos.n2Idx = info.n2Idx;
+                            startPos.s2Idx = curS2Offset;
+                            // 256、32等待7buf命名更改
+                            startPos.dIdx = nL1 * N_SPLIT_SIZE;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
+
+                            PAShape shape;
+                            shape.blockSize = constInfo.paCmpBlockSize;
+                            shape.headNum = constInfo.kvHeadNum;
+                            shape.headDim = constInfo.headDim;
+                            shape.actHeadDim = nL1Size;
+                            shape.maxblockNumPerBatch = constInfo.cmpMaxBlockNumPerBatch;
+                            shape.copyRowNum = copyRowCnt;
+                            shape.copyRowNumAlign = kL0SizeAlign;
+                            subvTensor = bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE + copyFinishRowCnt * 16];
+                            DataCopyPA<KV_T, KV_LAYOUT_T>(subvTensor, cmpKvGm, cmpBlockTableGm, shape, startPos);
+                            // 更新循环变量
+                            copyFinishRowCnt += copyRowCnt;
+                            curSeqIdx += copyRowCnt;
+                            curS2Offset += copyRowCnt;
                         }
-
-                        Position startPos;
-                        startPos.bIdx = info.bIdx;
-                        startPos.n2Idx = info.n2Idx;
-                        startPos.s2Idx = curS2Offset;
-                        // 256、32等待7buf命名更改
-                        startPos.dIdx = nL1 * N_SPLIT_SIZE;  // mm1 右矩阵 bn2s2d, d为k轴不切; mm2 右矩阵, s2为k轴, d轴切分
-
-                        PAShape shape;
-                        shape.blockSize = constInfo.paCmpBlockSize;
-                        shape.headNum = constInfo.kvHeadNum;
-                        shape.headDim = constInfo.headDim;
-                        shape.actHeadDim = nL1Size;
-                        shape.maxblockNumPerBatch = constInfo.cmpMaxBlockNumPerBatch;
-                        shape.copyRowNum = copyRowCnt;
-                        shape.copyRowNumAlign = kL0SizeAlign;
-                        subvTensor = bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE + copyFinishRowCnt * 16];
-                        DataCopyPA<KV_T, KV_LAYOUT_T>(subvTensor, cmpKvGm, cmpBlockTableGm, shape, startPos);
-                        // 更新循环变量
-                        copyFinishRowCnt += copyRowCnt;
-                        curSeqIdx += copyRowCnt;
-                        curS2Offset += copyRowCnt;
+                    } else {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = kL0Size;      // 行数
+                        nd2nzPara.dValue = N_SPLIT_SIZE; // constInfo.headDim;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = kL0SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor[(kL1 - kOffset) * K_L0_SPLIT_SIZE * N_SPLIT_SIZE],
+                                cmpKvGm[info.tensorCmpBOffset + curS2Offset * constInfo.headDim +
+                                nL1 * N_SPLIT_SIZE], nd2nzPara);
                     }
                 }
             }

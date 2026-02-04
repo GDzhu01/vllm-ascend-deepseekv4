@@ -226,119 +226,119 @@ struct AssignContext {
 
 class SparseAttnSharedkvMetadataCpuKernel : public CpuKernel {
 public:
-  SparseAttnSharedkvMetadataCpuKernel() = default;
-  ~SparseAttnSharedkvMetadataCpuKernel() = default;
-  uint32_t Compute(CpuKernelContext &ctx) override;
+    SparseAttnSharedkvMetadataCpuKernel() = default;
+    ~SparseAttnSharedkvMetadataCpuKernel() = default;
+    uint32_t Compute(CpuKernelContext &ctx) override;
 
 private:
-  bool Prepare(CpuKernelContext &ctx);
-  bool ParamsCheck();
-  bool ParamsInit();
-  bool BalanceSchedule(SplitResult &splitRes);
-  bool GenMetaData(SplitResult &splitRes);
-  ValidSocVersion ProcessSocVersion();
-  // util
-  uint32_t GetS1SeqSize(uint32_t bIdx);
-  uint32_t GetS2SeqSize(uint32_t bIdx);
-  int64_t CalcPreTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
-  int64_t CalcNextTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
-  Range<int64_t> CalcS2TokenRange(uint32_t s1GIdx, const BatchCache &batchCache);
-  int64_t WinCalcCost(uint32_t basicM, uint32_t basicS2);
-  int64_t CmpCalcCost(uint32_t basicM, uint32_t basicS2);
-  void CalcCostTable(uint32_t s1NormalSize, uint32_t s2NormalSize, uint32_t s1GTailSize,
-  uint32_t winS2TailSize, uint32_t cmpS2TailSize);
+    bool Prepare(CpuKernelContext &ctx);
+    bool ParamsCheck();
+    bool ParamsInit();
+    bool BalanceSchedule(SplitResult &splitRes);
+    bool GenMetaData(SplitResult &splitRes);
+    ValidSocVersion ProcessSocVersion();
+    // util
+    uint32_t GetS1SeqSize(uint32_t bIdx);
+    uint32_t GetS2SeqSize(uint32_t bIdx);
+    int64_t CalcPreTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
+    int64_t CalcNextTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
+    Range<int64_t> CalcS2TokenRange(uint32_t s1GIdx, const BatchCache &batchCache);
+    int64_t WinCalcCost(uint32_t basicM, uint32_t basicS2);
+    int64_t CmpCalcCost(uint32_t basicM, uint32_t basicS2);
+    void CalcCostTable(uint32_t s1NormalSize, uint32_t s2NormalSize, uint32_t s1GTailSize,
+    uint32_t winS2TailSize, uint32_t cmpS2TailSize);
 
-  // cache calculation
-  void CalcBatchCache(uint32_t bIdx, const SplitContext &splitContext, BatchCache &batchCache);
-  void CalcBlockRangeAndTailSize(Range<int64_t> &oriS2TokenRange, const BatchCache &batchCache, S1GCache &s1GCache);
-  void CalcWinS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
-  void CalcCmpS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
-  void GatherWinAndCmpCache(S1GCache &s1GCache);
-  void CalcS1GCache(uint32_t s1GIdx, const SplitContext &splitContext, const BatchCache &batchCache, S1GCache &s1GCache);
+    // cache calculation
+    void CalcBatchCache(uint32_t bIdx, const SplitContext &splitContext, BatchCache &batchCache);
+    void CalcBlockRangeAndTailSize(Range<int64_t> &oriS2TokenRange, const BatchCache &batchCache, S1GCache &s1GCache);
+    void CalcWinS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
+    void CalcCmpS1GCache(S1GCache &s1GCache, const SplitInfo &splitInfo);
+    void GatherWinAndCmpCache(S1GCache &s1GCache);
+    void CalcS1GCache(uint32_t s1GIdx, const SplitContext &splitContext, const BatchCache &batchCache, S1GCache &s1GCache);
 
-  // preprocess
-  void CalcSplitInfo(SplitContext &splitContext);
-  void CalcBatchCost(uint32_t bIdx, const SplitContext &splitContext, CostInfo &costInfo);
-  void CalcCostInfo(SplitContext &splitContext);
+    // preprocess
+    void CalcSplitInfo(SplitContext &splitContext);
+    void CalcBatchCost(uint32_t bIdx, const SplitContext &splitContext, CostInfo &costInfo);
+    void CalcCostInfo(SplitContext &splitContext);
 
-  // assign
-  void UpdateCursor(const SplitContext &splitContext, AssignContext &assignContext);
-  void AssignByBatch(const SplitContext &splitContext, AssignContext &assignContext);
-  void AssignByRow(const SplitContext &splitContext, AssignContext &assignContext);
-  int64_t CalcCurBlockCost(AssignContext &assignContext);
-  void AssignByBlock(const SplitContext &splitContext, AssignContext &assignContext);
-  void ForceAssign(const SplitContext &splitContext, AssignContext &assignContext);
-  void AssignBlocksToCore(const SplitContext &splitContext, AssignContext &assignContext, SplitResult &result);
+    // assign
+    void UpdateCursor(const SplitContext &splitContext, AssignContext &assignContext);
+    void AssignByBatch(const SplitContext &splitContext, AssignContext &assignContext);
+    void AssignByRow(const SplitContext &splitContext, AssignContext &assignContext);
+    int64_t CalcCurBlockCost(AssignContext &assignContext);
+    void AssignByBlock(const SplitContext &splitContext, AssignContext &assignContext);
+    void ForceAssign(const SplitContext &splitContext, AssignContext &assignContext);
+    void AssignBlocksToCore(const SplitContext &splitContext, AssignContext &assignContext, SplitResult &result);
 
-  // FD
-  bool IsNeedRecordFDInfo(const AssignContext &assignContext, const SplitResult &splitRes);
-  void RecordFDInfo(const SplitContext &splitContext, const AssignContext &assignContext, SplitResult &result);
+    // FD
+    bool IsNeedRecordFDInfo(const AssignContext &assignContext, const SplitResult &splitRes);
+    void RecordFDInfo(const SplitContext &splitContext, const AssignContext &assignContext, SplitResult &result);
 
-  // main
-  void SplitFD(SplitResult &splitRes);
-  void CalcSplitPlan(int64_t costLimit, const SplitContext &splitContext, SplitResult &result);
-  void SplitCore();
-
-private:
-  // context for log use
-  CpuKernelContext *context_ = nullptr;
-
-  // input
-  Tensor *actSeqLenQ_ = nullptr;
-  Tensor *actSeqLenOriKV_ = nullptr;
-  Tensor *actSeqLenCmpKV_ = nullptr;
-  Tensor *SeqUsedQ_ = nullptr;
-  Tensor *SeqUsedKV_ = nullptr;
-
-  // output
-  Tensor *metaData_ = nullptr;
-
-  // attributes
-  uint32_t batchSize_ = 0;
-  uint32_t querySeqSize_ = 0;
-  uint32_t queryHeadNum_ = 0;
-  uint32_t KVSeqSize_ = 0;
-  uint32_t kvHeadNum_ = 0;
-  uint32_t headDim_ = 0;
-  uint32_t oriTopK_ = 0;
-  uint32_t cmpTopK_ = 0;
-  uint32_t cmpRatio_ = -1;
-  uint32_t winMaskMode_ = 4;
-  uint32_t cmpMaskMode_ = 3;
-  int64_t winLeft_ = 127;
-  int64_t winRight_ = 0;
-  std::string layoutQuery_ = "BSND";
-  std::string layoutKV_ = "PA_ND";
-  bool hasOriKV_ = true;
-  bool hasCmpKV_ = true;
-  uint32_t aicCoreNum_ = 24U;
-  uint32_t aivCoreNum_ = 48U;
-
-  // attr
-  uint32_t coreNum_ = 24U; // new
-  std::string socVersion_ = "ascend910B";
-  int64_t preToken_ = 0; // new
-  int64_t nextToken_ = 0; // new
-  uint32_t groupSize_ = 0;
-  uint32_t mBaseSize_ = 0;
-  uint32_t s2BaseSize_ = 0;
-  uint32_t gS1BaseSizeOfFd_ = 0;
-  bool isS1G_ = true;
-  bool isCFA = false;
-  bool isSCFA = false;
-  bool supportFd = false;
-  uint32_t sparseMode_ = 0;
-  uint32_t attentionMode_ = 1;
-  BlockCost<int64_t> typeCost_;
+    // main
+    void SplitFD(SplitResult &splitRes);
+    void CalcSplitPlan(int64_t costLimit, const SplitContext &splitContext, SplitResult &result);
+    void SplitCore();
 
 private:
-  enum class ParamId : uint32_t {
+    // context for log use
+    CpuKernelContext *context_ = nullptr;
+
+    // input
+    Tensor *actSeqLenQ_ = nullptr;
+    Tensor *actSeqLenOriKv_ = nullptr;
+    Tensor *actSeqLenCmpKv_ = nullptr;
+    Tensor *seqUsedQ_ = nullptr;
+    Tensor *seqUsedKv_ = nullptr;
+
+    // output
+    Tensor *metaData_ = nullptr;
+
+    // attributes
+    uint32_t batchSize_ = 0;
+    uint32_t querySeqSize_ = 0;
+    uint32_t queryHeadNum_ = 0;
+    uint32_t kvSeqSize_ = 0;
+    uint32_t kvHeadNum_ = 0;
+    uint32_t headDim_ = 0;
+    uint32_t oriTopK_ = 0;
+    uint32_t cmpTopK_ = 0;
+    uint32_t cmpRatio_ = -1;
+    uint32_t oriMaskMode_ = 4;
+    uint32_t cmpMaskMode_ = 3;
+    int64_t winLeft_ = 127;
+    int64_t winRight_ = 0;
+    std::string layoutQuery_ = "BSND";
+    std::string layoutKv_ = "PA_ND";
+    bool hasOriKv_ = true;
+    bool hasCmpKv_ = true;
+    uint32_t aicCoreNum_ = 24U;
+    uint32_t aivCoreNum_ = 48U;
+
+    // attr
+    uint32_t coreNum_ = 24U; // new
+    std::string socVersion_ = "ascend910B";
+    int64_t preToken_ = 0; // new
+    int64_t nextToken_ = 0; // new
+    uint32_t groupSize_ = 0;
+    uint32_t mBaseSize_ = 0;
+    uint32_t s2BaseSize_ = 0;
+    uint32_t gS1BaseSizeOfFd_ = 0;
+    bool isS1G_ = true;
+    bool isCFA = false;
+    bool isSCFA = false;
+    bool supportFd = false;
+    uint32_t sparseMode_ = 0;
+    uint32_t attentionMode_ = 1;
+    BlockCost<int64_t> typeCost_;
+
+private:
+    enum class ParamId : uint32_t {
     // input
     actSeqLenQ = 0,
-    actSeqLenOriKV = 1,
-    actSeqLenCmpKV = 2,
-    SeqUsedQ = 3,
-    SeqUsedKV = 4,
+    actSeqLenOriKv = 1,
+    actSeqLenCmpKv = 2,
+    seqUsedQ = 3,
+    seqUsedKv = 4,
     // output
     metaData = 0,
   };

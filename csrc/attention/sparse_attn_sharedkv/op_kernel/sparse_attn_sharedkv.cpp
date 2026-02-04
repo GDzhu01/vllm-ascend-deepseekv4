@@ -30,8 +30,8 @@ using namespace SASKernel;
         GET_TILING_DATA_WITH_STRUCT(tilingdataClass, tiling_data_in, tiling);                     \
         const tilingdataClass *__restrict tiling_data = &tiling_data_in;                          \
         op.Init(query, oriKV, cmpKV, cmpSparseIndices, oriBlockTable, cmpBlockTable, cuSeqlensQ,  \
-                seqUsedQ, seqUsedKV, sinks, metadata, attentionOut, user, tiling_data, tiling,   \
-                &tPipe);                                                                          \
+                cuSeqlensOriKv, cuSeqlensCmpKv, seqUsedQ, seqUsedKV, sinks, metadata,             \
+                attentionOut, user, tiling_data, tiling, &tPipe);                                 \
         op.Process();                                                                             \
     } while (0)
 

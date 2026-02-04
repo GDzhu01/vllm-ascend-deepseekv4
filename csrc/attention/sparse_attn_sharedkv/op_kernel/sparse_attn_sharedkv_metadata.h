@@ -21,32 +21,32 @@
 namespace optiling {
 
 // Constants
-inline constexpr uint32_t AIC_CORE_NUM = 36;
-inline constexpr uint32_t AIV_CORE_NUM = 72;
+constexpr uint32_t AIC_CORE_NUM = 36;
+constexpr uint32_t AIV_CORE_NUM = 72;
 constexpr uint32_t SAS_META_SIZE = 1024;
 using SAS_METADATA_T = int32_t;
 
-inline constexpr uint32_t FA_METADATA_SIZE = 8;
-inline constexpr uint32_t FD_METADATA_SIZE = 8;
+constexpr uint32_t FA_METADATA_SIZE = 8;
+constexpr uint32_t FD_METADATA_SIZE = 8;
 
 // FA Metadata Index Definitions
-inline constexpr uint32_t FA_CORE_ENABLE_INDEX = 0;
-inline constexpr uint32_t FA_BN2_START_INDEX = 1;
-inline constexpr uint32_t FA_M_START_INDEX = 2;
-inline constexpr uint32_t FA_S2_START_INDEX = 3;
-inline constexpr uint32_t FA_BN2_END_INDEX = 4;
-inline constexpr uint32_t FA_M_END_INDEX = 5;
-inline constexpr uint32_t FA_S2_END_INDEX = 6;
-inline constexpr uint32_t FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX = 7;
+constexpr uint32_t FA_CORE_ENABLE_INDEX = 0;
+constexpr uint32_t FA_BN2_START_INDEX = 1;
+constexpr uint32_t FA_M_START_INDEX = 2;
+constexpr uint32_t FA_S2_START_INDEX = 3;
+constexpr uint32_t FA_BN2_END_INDEX = 4;
+constexpr uint32_t FA_M_END_INDEX = 5;
+constexpr uint32_t FA_S2_END_INDEX = 6;
+constexpr uint32_t FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX = 7;
 
 // FD Metadata Index Definitions
-inline constexpr uint32_t FD_CORE_ENABLE_INDEX = 0;
-inline constexpr uint32_t FD_BN2_IDX_INDEX = 1;
-inline constexpr uint32_t FD_M_IDX_INDEX = 2;
-inline constexpr uint32_t FD_WORKSPACE_IDX_INDEX = 3;
-inline constexpr uint32_t FD_WORKSPACE_NUM_INDEX = 4;
-inline constexpr uint32_t FD_M_START_INDEX = 5;
-inline constexpr uint32_t FD_M_NUM_INDEX = 6;
+constexpr uint32_t FD_CORE_ENABLE_INDEX = 0;
+constexpr uint32_t FD_BN2_IDX_INDEX = 1;
+constexpr uint32_t FD_M_IDX_INDEX = 2;
+constexpr uint32_t FD_WORKSPACE_IDX_INDEX = 3;
+constexpr uint32_t FD_WORKSPACE_NUM_INDEX = 4;
+constexpr uint32_t FD_M_START_INDEX = 5;
+constexpr uint32_t FD_M_NUM_INDEX = 6;
 
 /**
  * @brief 获取属性的绝对索引
@@ -68,8 +68,8 @@ __aicore__ inline uint32_t GetAttrAbsIndex(uint32_t coreIdx, uint32_t metaIdx, b
 
 namespace detail {
     struct SasMetaData {
-        uint32_t FAMetadata[AIC_CORE_NUM][FA_METADATA_SIZE];
-        uint32_t FDMetadata[AIV_CORE_NUM][FD_METADATA_SIZE];
+        uint32_t faMetadata[AIC_CORE_NUM][FA_METADATA_SIZE];
+        uint32_t fdMetadata[AIV_CORE_NUM][FD_METADATA_SIZE];
     };
 };
 

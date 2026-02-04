@@ -15,9 +15,9 @@
 
 #include <cstdio>
 #include <cmath>
-#include "sparse_attn_sharedkv_metadata_aicpu.h"
 #include "../../sparse_attn_sharedkv/op_kernel/sparse_attn_sharedkv_metadata.h"
 #include "../../common/aicpu/cpu_context_util.h"
+#include "sparse_attn_sharedkv_metadata_aicpu.h"
 
 using namespace optiling;
 
@@ -35,14 +35,14 @@ SparseAttnSharedkvMetadataCpuKernel::Compute(CpuKernelContext &ctx) {
 
 bool SparseAttnSharedkvMetadataCpuKernel::Prepare(
     CpuKernelContext &ctx) {
-  // input
-  actSeqLenQ_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenQ));
-  actSeqLenOriKV_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenOriKV));
-  actSeqLenCmpKV_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenCmpKV));
-  SeqUsedQ_ = ctx.Input(static_cast<uint32_t>(ParamId::SeqUsedQ));
-  SeqUsedKV_ = ctx.Input(static_cast<uint32_t>(ParamId::SeqUsedKV));
-  // output
-  metaData_ = ctx.Output(static_cast<uint32_t>(ParamId::metaData));
+    // input
+    actSeqLenQ_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenQ));
+    actSeqLenOriKv_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenOriKv));
+    actSeqLenCmpKv_ = ctx.Input(static_cast<uint32_t>(ParamId::actSeqLenCmpKv));
+    seqUsedQ_ = ctx.Input(static_cast<uint32_t>(ParamId::seqUsedQ));
+    seqUsedKv_ = ctx.Input(static_cast<uint32_t>(ParamId::seqUsedKv));
+    // output
+    metaData_ = ctx.Output(static_cast<uint32_t>(ParamId::metaData));
 
     bool requiredAttrs = GetAttrValue(ctx, "num_heads_q", queryHeadNum_) &&
                         GetAttrValue(ctx, "num_heads_kv", kvHeadNum_) &&
@@ -54,34 +54,34 @@ bool SparseAttnSharedkvMetadataCpuKernel::Prepare(
         return false;
     }
 
-  // attributes optional
-  GetAttrValueOpt(ctx, "batch_size", batchSize_);
-  GetAttrValueOpt(ctx, "max_seqlen_q", querySeqSize_);
-  GetAttrValueOpt(ctx, "max_seqlen_kv", KVSeqSize_);
-  GetAttrValueOpt(ctx, "ori_topk", oriTopK_);
-  GetAttrValueOpt(ctx, "cmp_topk", cmpTopK_);
-  GetAttrValueOpt(ctx, "cmp_ratio", cmpRatio_);
-  GetAttrValueOpt(ctx, "ori_mask_mode", winMaskMode_);
-  GetAttrValueOpt(ctx, "cmp_mask_mode", cmpMaskMode_);
-  GetAttrValueOpt(ctx, "ori_win_left", winLeft_);
-  GetAttrValueOpt(ctx, "ori_win_right", winRight_);
-  GetAttrValueOpt(ctx, "layout_q", layoutQuery_);
-  GetAttrValueOpt(ctx, "layout_kv", layoutKV_);
-  GetAttrValueOpt(ctx, "has_ori_kv", hasOriKV_);
-  GetAttrValueOpt(ctx, "has_cmp_kv", hasCmpKV_);
+    // attributes optional
+    GetAttrValueOpt(ctx, "batch_size", batchSize_);
+    GetAttrValueOpt(ctx, "max_seqlen_q", querySeqSize_);
+    GetAttrValueOpt(ctx, "max_seqlen_kv", kvSeqSize_);
+    GetAttrValueOpt(ctx, "ori_topk", oriTopK_);
+    GetAttrValueOpt(ctx, "cmp_topk", cmpTopK_);
+    GetAttrValueOpt(ctx, "cmp_ratio", cmpRatio_);
+    GetAttrValueOpt(ctx, "ori_mask_mode", oriMaskMode_);
+    GetAttrValueOpt(ctx, "cmp_mask_mode", cmpMaskMode_);
+    GetAttrValueOpt(ctx, "ori_win_left", winLeft_);
+    GetAttrValueOpt(ctx, "ori_win_right", winRight_);
+    GetAttrValueOpt(ctx, "layout_q", layoutQuery_);
+    GetAttrValueOpt(ctx, "layout_kv", layoutKv_);
+    GetAttrValueOpt(ctx, "has_ori_kv", hasOriKv_);
+    GetAttrValueOpt(ctx, "has_cmp_kv", hasCmpKv_);
 
-  coreNum_ = aicCoreNum_;
-  sparseMode_ = static_cast<uint32_t>(SparseMode::BAND);
-  preToken_ = (winLeft_ > -1) ? winLeft_ : INT64_MAX;
-  nextToken_ = 0;
-  attentionMode_ = 1;
-  isS1G_ = (layoutQuery_ == "BSND" || layoutQuery_ == "BSH" || layoutQuery_ == "TND");
+    coreNum_ = aicCoreNum_;
+    sparseMode_ = oriMaskMode_;
+    preToken_ = (winLeft_ > -1) ? winLeft_ : INT64_MAX;
+    nextToken_ = 0;
+    attentionMode_ = 1;
+    isS1G_ = (layoutQuery_ == "BSND" || layoutQuery_ == "BSH" || layoutQuery_ == "TND");
 
   return (ParamsCheck() && ParamsInit());
 }
 
 bool SparseAttnSharedkvMetadataCpuKernel::ParamsCheck() {
-  return true;
+    return true;
 }
 
 ValidSocVersion SparseAttnSharedkvMetadataCpuKernel::ProcessSocVersion() {
@@ -123,12 +123,12 @@ bool SparseAttnSharedkvMetadataCpuKernel::ParamsInit() {
 
 uint32_t SparseAttnSharedkvMetadataCpuKernel::GetS1SeqSize(uint32_t bIdx)
 {
-    // 1. 如果 SeqUsedQ_ 传了，直接使用
-    if (SeqUsedQ_ != nullptr && SeqUsedQ_->GetData() != nullptr) {
-        const int32_t *seqUsedPtr = static_cast<const int32_t*>(SeqUsedQ_->GetData());
+    // 1. 如果 seqUsedQ_ 传了，直接使用
+    if (seqUsedQ_ != nullptr && seqUsedQ_->GetData() != nullptr) {
+        const int32_t *seqUsedPtr = static_cast<const int32_t*>(seqUsedQ_->GetData());
         return static_cast<uint32_t>(seqUsedPtr[bIdx]);
     }
-    // 2. SeqUsedQ_ 没传，判断 Layout
+    // 2. seqUsedQ_ 没传，判断 Layout
     if (layoutQuery_ == "TND") {
         // 如果是 TND，尝试使用 actSeqLenQ_
         if (actSeqLenQ_ != nullptr && actSeqLenQ_->GetData() != nullptr) {
@@ -142,21 +142,21 @@ uint32_t SparseAttnSharedkvMetadataCpuKernel::GetS1SeqSize(uint32_t bIdx)
 
 uint32_t SparseAttnSharedkvMetadataCpuKernel::GetS2SeqSize(uint32_t bIdx)
 {
-    // 1. 如果 SeqUsedKV_ 传了，直接使用
-    if (SeqUsedKV_ != nullptr && SeqUsedKV_->GetData() != nullptr) {
-        const int32_t *seqUsedPtr = static_cast<const int32_t*>(SeqUsedKV_->GetData());
+    // 1. 如果 seqUsedKv_ 传了，直接使用
+    if (seqUsedKv_ != nullptr && seqUsedKv_->GetData() != nullptr) {
+        const int32_t *seqUsedPtr = static_cast<const int32_t*>(seqUsedKv_->GetData());
         return static_cast<uint32_t>(seqUsedPtr[bIdx]);
     }
-    // 2. SeqUsedKV_ 没传，判断 Layout
-    if (layoutKV_ == "TND") {
-        // 如果是 TND，尝试使用 actSeqLenOriKV_
-        if (actSeqLenOriKV_ != nullptr && actSeqLenOriKV_->GetData() != nullptr) {
-            const int32_t *s2Ptr = static_cast<const int32_t*>(actSeqLenOriKV_->GetData());
+    // 2. seqUsedKv_ 没传，判断 Layout
+    if (layoutKv_ == "TND") {
+        // 如果是 TND，尝试使用 actSeqLenOriKv_
+        if (actSeqLenOriKv_ != nullptr && actSeqLenOriKv_->GetData() != nullptr) {
+            const int32_t *s2Ptr = static_cast<const int32_t*>(actSeqLenOriKv_->GetData());
             return static_cast<uint32_t>(s2Ptr[bIdx + 1U] - s2Ptr[bIdx]);
         }
     }
-    // 3. 如果不是 TND，或者 actSeqLenOriKV_ 为空，使用 KVSeqSize_
-    return KVSeqSize_;
+    // 3. 如果不是 TND，或者 actSeqLenOriKv_ 为空，使用 kvSeqSize_
+    return kvSeqSize_;
 }
 
 void SparseAttnSharedkvMetadataCpuKernel::CalcSplitInfo(SplitContext &splitContext)
@@ -830,36 +830,36 @@ bool SparseAttnSharedkvMetadataCpuKernel::GenMetaData(SplitResult &splitRes) {
     // FA Metadata Generate
     for (size_t i = 0; i < aicCoreNum_; ++i) {
         if (i >= splitRes.usedCoreNum) {
-            metaDataPtr->FAMetadata[i][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
+            metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
             continue;
         }
-        metaDataPtr->FAMetadata[i][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
+        metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
         // FA START
-        metaDataPtr->FAMetadata[i][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
-        metaDataPtr->FAMetadata[i][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
-        metaDataPtr->FAMetadata[i][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
+        metaDataPtr->faMetadata[i][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
+        metaDataPtr->faMetadata[i][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
+        metaDataPtr->faMetadata[i][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
         // FA END
-        metaDataPtr->FAMetadata[i][FA_BN2_END_INDEX] = splitRes.bN2End[i];
-        metaDataPtr->FAMetadata[i][FA_M_END_INDEX] = splitRes.gS1End[i];
-        metaDataPtr->FAMetadata[i][FA_S2_END_INDEX] = splitRes.s2End[i];
+        metaDataPtr->faMetadata[i][FA_BN2_END_INDEX] = splitRes.bN2End[i];
+        metaDataPtr->faMetadata[i][FA_M_END_INDEX] = splitRes.gS1End[i];
+        metaDataPtr->faMetadata[i][FA_S2_END_INDEX] = splitRes.s2End[i];
         // 
-        metaDataPtr->FAMetadata[i][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
+        metaDataPtr->faMetadata[i][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
     }
 
     // FD Metadata Generate
     for (size_t i = 0; i < aivCoreNum_; ++i) {
         if (i >= splitRes.fdRes.fdUsedVecNum) {
-            metaDataPtr->FDMetadata[i][FD_CORE_ENABLE_INDEX] = 0; // AIV disenable
+            metaDataPtr->fdMetadata[i][FD_CORE_ENABLE_INDEX] = 0; // AIV disenable
             continue;
         }
-        metaDataPtr->FDMetadata[i][FD_CORE_ENABLE_INDEX] = 1; // AIV enable
+        metaDataPtr->fdMetadata[i][FD_CORE_ENABLE_INDEX] = 1; // AIV enable
         uint32_t curFdIdx = splitRes.fdRes.fdIdx[i];
-        metaDataPtr->FDMetadata[i][FD_BN2_IDX_INDEX] = splitRes.fdRes.fdBN2Idx[curFdIdx];
-        metaDataPtr->FDMetadata[i][FD_M_IDX_INDEX] = splitRes.fdRes.fdMIdx[curFdIdx];
-        metaDataPtr->FDMetadata[i][FD_WORKSPACE_IDX_INDEX] = splitRes.fdRes.fdWorkspaceIdx[curFdIdx];
-        metaDataPtr->FDMetadata[i][FD_WORKSPACE_NUM_INDEX] = splitRes.fdRes.fdS2SplitNum[curFdIdx];
-        metaDataPtr->FDMetadata[i][FD_M_START_INDEX] = splitRes.fdRes.fdMStart[i];
-        metaDataPtr->FDMetadata[i][FD_M_NUM_INDEX] = splitRes.fdRes.fdMNum[i];
+        metaDataPtr->fdMetadata[i][FD_BN2_IDX_INDEX] = splitRes.fdRes.fdBN2Idx[curFdIdx];
+        metaDataPtr->fdMetadata[i][FD_M_IDX_INDEX] = splitRes.fdRes.fdMIdx[curFdIdx];
+        metaDataPtr->fdMetadata[i][FD_WORKSPACE_IDX_INDEX] = splitRes.fdRes.fdWorkspaceIdx[curFdIdx];
+        metaDataPtr->fdMetadata[i][FD_WORKSPACE_NUM_INDEX] = splitRes.fdRes.fdS2SplitNum[curFdIdx];
+        metaDataPtr->fdMetadata[i][FD_M_START_INDEX] = splitRes.fdRes.fdMStart[i];
+        metaDataPtr->fdMetadata[i][FD_M_NUM_INDEX] = splitRes.fdRes.fdMNum[i];
     }
     return true;
 }
