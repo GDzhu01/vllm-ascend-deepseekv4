@@ -213,6 +213,10 @@ public:
 
 private:
     bool Prepare(CpuKernelContext &ctx);
+    bool CheckSingleParam();
+    bool CheckExistence();
+    bool CheckConsistency();
+    bool CheckFeature();
     bool ParamsCheck();
     bool ParamsInit();
     bool BalanceSchedule(SplitResult &splitRes);
@@ -260,13 +264,13 @@ private:
     CpuKernelContext* context_ = nullptr;
     // input
     Tensor *actSeqLenQ_ = nullptr;
-    Tensor *actSeqLenKV_ = nullptr;
+    Tensor *actSeqLenKey_ = nullptr;
     // output
     Tensor *metaData_ = nullptr;
     // attributes
     std::string socVersion_ = "";//新增
     bool supportFd_ = false; //新增。是否开启LD
-    uint32_t cmpRatio_ = 4; //新增,LIQ压缩率
+    int32_t cmpRatio_ = 4; //新增,LIQ压缩率
     uint32_t aicCoreNum_ = 24U;
     uint32_t aivCoreNum_ = 48U;
     uint32_t batchSize_ = 0;
@@ -282,7 +286,7 @@ private:
     uint32_t sparseBlockSize_ = 0;
     uint32_t sparseBlockCount_ = 0; // new
     std::string layoutQuery_ = "BSND";
-    std::string layoutKV_ = "BSND";
+    std::string layoutKey_ = "BSND";
     uint32_t sparseMode_ = 0;
     uint32_t attentionMode_ = 0;
     uint32_t ropeHeadDim_ = 0;

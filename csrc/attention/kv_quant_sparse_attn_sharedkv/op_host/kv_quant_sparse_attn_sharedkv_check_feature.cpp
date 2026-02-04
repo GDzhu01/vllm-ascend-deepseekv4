@@ -22,6 +22,19 @@ using std::string;
 using std::pair;
 namespace optiling {
 
+ge::graphStatus KvQuantSASTilingCheck::CheckFeatureWinKV() const
+{
+    OP_CHECK_IF(oriWinLeft_ != 127, // 127:当前不泛化
+        OP_LOGE(opName_, "oriWinLeft_ only support 127, but got %u", oriWinLeft_),
+        return ge::GRAPH_FAILED);
+
+    OP_CHECK_IF(oriWinRight_ != 0, // 0:当前不泛化
+        OP_LOGE(opName_, "oriWinRight_ only support 0, but got %u", oriWinRight_),
+        return ge::GRAPH_FAILED);
+
+    return ge::GRAPH_SUCCESS;
+}
+
 ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
 {
     OP_CHECK_IF(bSize_ <= 0,
@@ -33,7 +46,7 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
             return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n1Size_ != 64,
-            OP_LOGE(opName_, "q_head_num should be 1, but got %u", n1Size_),
+            OP_LOGE(opName_, "q_head_num should be 64, but got %u", n1Size_),
             return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n2Size_ != 1,
@@ -49,8 +62,16 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
         OP_LOGE(opName_, "group num should be 64, but got %u", gSize_),
         return ge::GRAPH_FAILED);
 
-    OP_CHECK_IF(qkHeadDim_ != 512, // 512:当前不泛化
-        OP_LOGE(opName_, "q_head_dim only support 512, but got %u", qkHeadDim_),
+    OP_CHECK_IF(dSize_ != 512, // 512:当前不泛化
+        OP_LOGE(opName_, "dSize only support 512, but got %u", dSize_),
+        return ge::GRAPH_FAILED);
+
+    OP_CHECK_IF(dSizeV_ != 512, // 512:当前不泛化
+        OP_LOGE(opName_, "dSizeV only support 512, but got %u", dSizeV_),
+        return ge::GRAPH_FAILED);
+
+    OP_CHECK_IF(dSizeVInput_ != 640, // 640:当前不泛化
+        OP_LOGE(opName_, "dSizeVInput only support 640, but got %u", dSizeVInput_),
         return ge::GRAPH_FAILED);
 
     return ge::GRAPH_SUCCESS;
@@ -86,11 +107,13 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantAttr() const
         *opParamInfo_.kvQuantMode),
         return ge::GRAPH_FAILED);
 
-    OP_CHECK_IF(*opParamInfo_.tileSize != 64, // 64:当前不泛化
-        OP_LOGE(opName_, "tile_size should be 64, but got %ld",
-        *opParamInfo_.tileSize),
-        return ge::GRAPH_FAILED);
-
+    if (*opParamInfo_.kvQuantMode == 1) {
+        OP_CHECK_IF(*opParamInfo_.tileSize != 64, // 64:当前不泛化
+            OP_LOGE(opName_, "tile_size should be 64, but got %ld",
+            *opParamInfo_.tileSize),
+            return ge::GRAPH_FAILED);
+    }
+    
     OP_CHECK_IF(*opParamInfo_.ropeHeadDim != 64, // 64:当前不泛化
         OP_LOGE(opName_, "rope_head_dim should be 64, but got %d",
         *opParamInfo_.ropeHeadDim),
@@ -120,6 +143,7 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquant() const
         ge::GRAPH_SUCCESS != CheckFeatureAntiquantShape() ||
         ge::GRAPH_SUCCESS != CheckFeatureAntiquantLayout() ||
         ge::GRAPH_SUCCESS != CheckFeatureAntiquantDtype() ||
+        ge::GRAPH_SUCCESS != CheckFeatureWinKV() ||
         ge::GRAPH_SUCCESS != CheckFeatureAntiquantPa()) {
         return ge::GRAPH_FAILED;
     }

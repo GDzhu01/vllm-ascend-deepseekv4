@@ -22,32 +22,32 @@
 namespace optiling {
 
 // Constants
-static constexpr uint32_t AIC_CORE_NUM = 36;
-static constexpr uint32_t AIV_CORE_NUM = 72;
+inline constexpr uint32_t AIC_CORE_NUM = 36;
+inline constexpr uint32_t AIV_CORE_NUM = 72;
 constexpr uint32_t QLI_META_SIZE = 1024;
 using QLI_METADATA_T = int32_t;
 
-static constexpr uint32_t LI_METADATA_SIZE = 8;
-static constexpr uint32_t LD_METADATA_SIZE = 8;
+inline constexpr uint32_t LI_METADATA_SIZE = 8;
+inline constexpr uint32_t LD_METADATA_SIZE = 8;
 
 // LI Metadata Index Definitions
-static constexpr uint32_t LI_CORE_ENABLE_INDEX = 0;
-static constexpr uint32_t LI_BN2_START_INDEX = 1;
-static constexpr uint32_t LI_M_START_INDEX = 2;
-static constexpr uint32_t LI_S2_START_INDEX = 3;
-static constexpr uint32_t LI_BN2_END_INDEX = 4;
-static constexpr uint32_t LI_M_END_INDEX = 5;
-static constexpr uint32_t LI_S2_END_INDEX = 6;
-static constexpr uint32_t LI_FIRST_LD_DATA_WORKSPACE_IDX_INDEX = 7;
+inline constexpr uint32_t LI_CORE_ENABLE_INDEX = 0;
+inline constexpr uint32_t LI_BN2_START_INDEX = 1;
+inline constexpr uint32_t LI_M_START_INDEX = 2;
+inline constexpr uint32_t LI_S2_START_INDEX = 3;
+inline constexpr uint32_t LI_BN2_END_INDEX = 4;
+inline constexpr uint32_t LI_M_END_INDEX = 5;
+inline constexpr uint32_t LI_S2_END_INDEX = 6;
+inline constexpr uint32_t LI_FIRST_LD_DATA_WORKSPACE_IDX_INDEX = 7;
 
 // LD Metadata Index Definitions
-static constexpr uint32_t LD_CORE_ENABLE_INDEX = 0;
-static constexpr uint32_t LD_BN2_IDX_INDEX = 1;
-static constexpr uint32_t LD_M_IDX_INDEX = 2;
-static constexpr uint32_t LD_WORKSPACE_IDX_INDEX = 3;
-static constexpr uint32_t LD_WORKSPACE_NUM_INDEX = 4;
-static constexpr uint32_t LD_M_START_INDEX = 5;
-static constexpr uint32_t LD_M_NUM_INDEX = 6;
+inline constexpr uint32_t LD_CORE_ENABLE_INDEX = 0;
+inline constexpr uint32_t LD_BN2_IDX_INDEX = 1;
+inline constexpr uint32_t LD_M_IDX_INDEX = 2;
+inline constexpr uint32_t LD_WORKSPACE_IDX_INDEX = 3;
+inline constexpr uint32_t LD_WORKSPACE_NUM_INDEX = 4;
+inline constexpr uint32_t LD_M_START_INDEX = 5;
+inline constexpr uint32_t LD_M_NUM_INDEX = 6;
 
  /**
  * @brief 获取属性的绝对索引

@@ -132,6 +132,7 @@ struct SplitCoreInfo {
     uint32_t gS1Start = 0U;
     uint32_t gS1End = 0U;
     bool isLD = false;  // 当前核是否需要进行Decode归约任务
+    bool isCoreEnable = false;
 };
 
 template <typename T>

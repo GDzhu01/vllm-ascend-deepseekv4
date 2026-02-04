@@ -64,6 +64,7 @@ namespace optiling {
     constexpr uint32_t COFF_ATTR_INDEX = 2;
     constexpr uint32_t NORM_EPS_ATTR_INDEX = 3;
     constexpr uint32_t ROTARY_MODE_ATTR_INDEX = 4;
+    constexpr uint32_t ENABLE_GRAD_ATTR_INDEX = 5;
 
     // OUTPUT
     constexpr uint32_t CMP_KV_OUTPUT_INDEX = 0;
@@ -138,6 +139,7 @@ const std::vector<int> CMP_RATIO {2, 4, 8, 16, 32, 64, 128};
 const std::vector<int> ROTARY_MODE {1, 2};
 #endif
 const std::vector<uint32_t> HEAD_DIM {128, 512};
+const std::vector<bool> ENABLE_GRAD {false};
 
 enum class ROTARY_MODE:uint8_t {
     HALF = 1,
@@ -170,6 +172,7 @@ struct CompressorContext {
     const int *cmpRatio;
     const float *normEps;
     const int *rotaryMode;
+    const bool *enableGrad;
     TemplateId templateId;
 
     ge::DataType dtype = ge::DT_BF16; 
@@ -240,6 +243,7 @@ private:
     ge::graphStatus CheckSingleParaCoff() const;
     ge::graphStatus CheckSingleParaNormEps() const;
     ge::graphStatus CheckSingleParaRotaryMode() const;
+    ge::graphStatus CheckSingleParaEnableGrad() const;
     ge::graphStatus CheckRequiredParaExistence() const;
     ge::graphStatus CheckRequiredInOutExistence() const;
     ge::graphStatus CheckRequiredAttrExistence() const;
@@ -252,6 +256,7 @@ private:
     ge::graphStatus CheckDimNumConsistency() const;
     ge::graphStatus CheckEmptyTensor() const;
     ge::graphStatus CheckScenarioConsistency() const;
+    ge::graphStatus CheckBlockDimConstrain() const;
 
     size_t ubSize_ = 0;
     size_t l1Size_ = 0;
@@ -262,7 +267,6 @@ private:
     uint32_t aivNum_ = 0;
     platform_ascendc::SocVersion socVersion_ = platform_ascendc::SocVersion::ASCEND910B;
     size_t libapiSize_ = 0;
-    // platform_ascendc::SocVersion socVersion_;
     size_t workspaceSize_ = 0;
     uint8_t coff = 1;
 
