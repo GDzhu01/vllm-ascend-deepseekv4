@@ -59,7 +59,7 @@ CASE_DS_FULL_DECODE_ONLY = LLMTestCase(
     golden_answers=[
         "\n\nI'm not sure how to approach this problem. I'm not sure how to use the information given to find the length of $AD$.",
         "\n\nI'm not sure how to approach this problem. I'm not sure if I'm supposed to use the fact that the area of a",
-        "\n\n## Answer\n\n$a + b + c = 0$\n\nSolution\n\nLet $x$ be the common root of the equations"
+        "\n\n## Answer\n\n$a + b + c = 0$\n\nSolution:\n\nLet $x$ be the common root of the"
     ])
 
 CASE_QWEN_EX = LLMTestCase(
