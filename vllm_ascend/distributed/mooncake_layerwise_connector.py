@@ -219,7 +219,7 @@ class KVCacheSendingLayerThread(threading.Thread):
             state_addr_start_idx = self.state_addr_start_idx[layer_idx]
             if state_addr_start_idx == len(
                     local_kv_base_addr[layer_name]
-                ) and local_kv_base_addr[layer_name]:
+            ) and local_kv_base_addr[layer_name]:
                 # layer with only kv caches, no state cache
                 layer_local_kv_base_addr = local_kv_base_addr[layer_name]
                 layer_remote_kv_base_addr = remote_kv_base_addrs[layer_name]
