@@ -15,7 +15,7 @@ class KVStateManager:
     def allocate_slots(
         self,
         request: Request = None,
-    ) -> int:
+    ) -> int | None:
         if len(self.states_pool) == 0:
             return None
         request_id = request.request_id

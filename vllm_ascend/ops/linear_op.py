@@ -794,7 +794,8 @@ class ShardedCPColumnParallelOp(CustomColumnParallelOp):
 def _get_column_parallel_op(
     prefix, layer
 ) -> Optional[Union[MLPColumnParallelOp, SequenceColumnParallelOp,
-                    ShardedCPColumnParallelOp, Flashcomm2OshardQKVParallelOp]]:
+                    ShardedCPColumnParallelOp, Flashcomm2OshardQKVParallelOp,
+                    OLoraColumnParallelOp]]:
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
     if "wo_a" in prefix and olora_tp_enable():
@@ -826,7 +827,8 @@ def _get_row_parallel_op(
     prefix, layer
 ) -> Optional[Union[MLPRowParallelOp, OProjRowParallelOp,
                     Flashcomm2OProjRowParallelOp, MatmulAllreduceRowParallelOp,
-                    SequenceRowParallelOp, ShardedCPRowParallelOp]]:
+                    SequenceRowParallelOp, ShardedCPRowParallelOp,
+                    OLoraRowParallelOp]]:
     if enable_dsa_cp_with_layer_shard() and "o_proj" in prefix:
         return ShardedCPRowParallelOp(layer)
     if "wo_b" in prefix and olora_tp_enable():

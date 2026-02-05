@@ -78,7 +78,7 @@ class KVStateNewRequestData(NewRequestData):
         request: Request,
         block_ids: tuple[list[int], ...],
         prefill_token_ids: list[int] | None = None,
-        state_id: int = None,
+        state_id: int | None = None,
     ) -> "KVStateNewRequestData":
         return cls(
             req_id=request.request_id,

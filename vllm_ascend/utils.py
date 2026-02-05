@@ -815,7 +815,7 @@ def is_moe_model(vllm_config: VllmConfig):
     return _IS_MOE_MODEL
 
 
-def is_w8a8_dynamic(quant_type: QuantType = None):
+def is_w8a8_dynamic(quant_type: Optional[QuantType] = None):
     """Checks if the MoE module is W8A8 DYNAMIC"""
     global _IS_W8A8_DYNAMIC
     # _IS_W8A8_DYNAMIC would be set in AscendFusedMoE initialization(ignore MTP draft model)
@@ -1222,7 +1222,8 @@ def parse_layer_idx(prefix: str) -> Optional[int]:
 def get_compressed_pos_and_indices(
     num_computed_tokens: np.ndarray, num_scheduled_tokens: np.ndarray,
     arrange_np: np.ndarray, use_compress: bool
-) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+) -> tuple[Optional[List[np.ndarray]], Optional[List[np.ndarray]],
+           Optional[List[np.ndarray]]]:
     """
     Batch generate compressed position ids for multi-requests on DSv4.
     Calculate compressed position ids independently for each single request.

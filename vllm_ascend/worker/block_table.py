@@ -342,8 +342,8 @@ class MultiGroupBlockTable:
         self,
         req_indices: np.ndarray,
         positions: np.ndarray,
-        positions_compressed_list: list[np.ndarray] = None,
-        req_indices_compressed_list: list[np.ndarray] = None,
+        positions_compressed_list: Optional[list[np.ndarray]] = None,
+        req_indices_compressed_list: Optional[list[np.ndarray]] = None,
     ) -> None:
         for i, block_table in enumerate(self.block_tables):
             if positions_compressed_list and req_indices_compressed_list:

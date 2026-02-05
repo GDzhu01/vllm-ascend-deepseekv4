@@ -57,17 +57,17 @@ class MooncakeAgentMetadata(msgspec.Struct, omit_defaults=True, dict=True):
 class ReqMeta:
     local_block_ids: list[int]
     local_state_id: int = -1
-    token_ids: Optional[list[int]]
+    token_ids: Optional[list[int]] = None
     # Not None if layer-wise is disabled
-    remote_block_ids: list[int]
+    remote_block_ids: list[int] = field(default_factory=list)
     remote_state_id: int = -1
-    remote_engine_id: Optional[str]
-    remote_host: Optional[str]
-    remote_port: Optional[int]
-    remote_te_rpc_port: Optional[int]
-    remote_kv_caches_base_addr: Optional[dict[str, list[int]]]
-    metaserver: Optional[str]
-    chunk_finish: Optional[bool]
+    remote_engine_id: Optional[str] = None
+    remote_host: Optional[str] = None
+    remote_port: Optional[int] = None
+    remote_te_rpc_port: Optional[int] = None
+    remote_kv_caches_base_addr: Optional[dict[str, list[int]]] = None
+    metaserver: Optional[str] = None
+    chunk_finish: Optional[bool] = None
 
 
 @dataclass
@@ -233,6 +233,7 @@ class KVCacheSendingLayerThread(threading.Thread):
                 layer_local_kv_base_addr = []
             else:
                 # layer with both kv cache and state cache
+                assert remote_kv_base_addrs is not None
                 layer_local_kv_base_addr = local_kv_base_addr[
                     layer_name][:state_addr_start_idx]
                 layer_remote_kv_base_addr = remote_kv_base_addrs[
@@ -289,6 +290,7 @@ class KVCacheSendingLayerThread(threading.Thread):
                 self.v_buffer.data_ptr()
             ]
 
+            assert remote_kv_base_addrs is not None
             layer_remote_kv_base_addr = remote_kv_base_addrs[layer_name]
 
             src_list, dst_list, length_list = [], [], []
@@ -1008,15 +1010,14 @@ class MooncakeLayerwiseConnectorWorker:
         self.is_dsv4 = state_caches is not None
 
         self.num_blocks = self.kv_cache_config.num_blocks
-        self.block_len = dict[str, list[int]]()
-        self.kv_caches_base_addr = dict[str, list[int]]()
-        self.state_addr_start_idx = dict[str, int]()
-        ptrs = []
-        lengths = []
+        self.block_len: dict[str, list[int]] = {}
+        self.state_addr_start_idx: dict[str, int] = {}
+        ptrs: list[int] = []
+        lengths: list[int] = []
 
         for layer_name, kv_cache_tuple in kv_caches.items():
             self.block_len[layer_name] = []
-            self.remote_kv_caches_base_addr[layer_name] = []
+            self.remote_kv_caches_base_addr[layer_name] = {}
             self.state_addr_start_idx[layer_name] = len(kv_cache_tuple)
             for single_kv_cache in kv_cache_tuple:
                 block_start_rank = 1

@@ -65,7 +65,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         head_dim: int,
         rope_head_dim: int | None,
         nope_head_dim: int,
-        eps: int,
+        eps: float,
         n_groups: int,
         n_local_groups: int,
         window_size: int,

@@ -33,10 +33,12 @@ from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
-if HAS_TRITON:
     from vllm_ascend.ops.triton.rms_norm import triton_q_rms
+
+if HAS_TRITON:
+    from vllm_ascend.ops.triton.rms_norm import triton_q_rms  # noqa: F811
 else:
-    triton_q_rms = None
+    triton_q_rms = None  # type: ignore
 
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
@@ -292,12 +294,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     aclgraph_support: ClassVar[AttentionCGSupport] = \
         AttentionCGSupport.UNIFORM_BATCH
     hadamard = None
-    start_pos_prefill: Optional[torch.Tensor] = None
-    start_pos_decode: Optional[torch.Tensor] = None
-    decode_sas_c1_metadata: Optional[torch.Tensor] = None
-    decode_sas_c4_metadata: Optional[torch.Tensor] = None
-    decode_sas_c128_metadata: Optional[torch.Tensor] = None
-    decode_qli_metadata: Optional[torch.Tensor] = None
+    start_pos_prefill: torch.Tensor
+    start_pos_decode: torch.Tensor
+    decode_sas_c1_metadata: torch.Tensor
+    decode_sas_c4_metadata: torch.Tensor
+    decode_sas_c128_metadata: torch.Tensor
+    decode_qli_metadata: torch.Tensor
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
@@ -1073,6 +1075,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 "Currently we only support building dummy metadata for DecodeOnly and SpecDecoding state"
             )
 
+        assert attn_metadata is not None
         attn_metadata.attn_state = attn_state
         return attn_metadata
 
@@ -1191,7 +1194,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             x = x_rot.reshape(1, num_tokens, -1, rotary_dim)
         return x
 
-    def forward(
+    def forward(  # type: ignore[override]
         self,
         layer_name,
         hidden_states: torch.Tensor,  # query in unified attn
@@ -1199,7 +1202,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         attn_metadata: M,
         need_gather_q_kv: bool = False,
         output: Optional[torch.Tensor] = None,
-        kv_state: Tuple[torch.Tensor] = None,
+        kv_state: Optional[Tuple[torch.Tensor]] = None,
     ) -> torch.Tensor:
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
@@ -1221,6 +1224,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                                    device=hidden_states.device)
 
         if has_prefill:
+            assert attn_metadata.prefill is not None
+            assert kv_state is not None
             output_prefill = self._forward_prefill(layer_name,
                                                    prefill_hidden_states,
                                                    kv_cache, attn_metadata,
@@ -1230,6 +1235,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             sin = attn_metadata.prefill.sin[layer_name]
 
         if has_decode:
+            assert attn_metadata.decode is not None
+            assert kv_state is not None
             output_decode = self._forward_decode(layer_name,
                                                  decode_hidden_states,
                                                  kv_cache, attn_metadata,
@@ -1272,13 +1279,14 @@ class AscendDSAImpl(DSAAttentionImpl):
         return output_padded
 
     def _forward_prefill(
-        self,
-        layer_name,
-        hidden_states: torch.Tensor,
-        kv_cache: Tuple,
-        attn_metadata: AscendDSAMetadata,
-        kv_state: Tuple,
+            self,
+            layer_name,
+            hidden_states: torch.Tensor,
+            kv_cache: Tuple,
+            attn_metadata: AscendDSAMetadata,
+            kv_state: Tuple,  # type: ignore
     ):
+        assert attn_metadata.prefill is not None
         if self.compress_ratio == 4:
             (_, compressor_kv_state, compressor_score_state, _, _) = kv_state
         elif self.compress_ratio == 128:
@@ -1307,6 +1315,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
+        assert self.rope_head_dim is not None
         kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
@@ -1434,13 +1443,14 @@ class AscendDSAImpl(DSAAttentionImpl):
         return attn_output
 
     def _forward_decode(
-        self,
-        layer_name,
-        hidden_states: torch.Tensor,
-        kv_cache: Tuple,
-        attn_metadata: AscendDSAMetadata,
-        kv_state: Tuple,
+            self,
+            layer_name,
+            hidden_states: torch.Tensor,
+            kv_cache: Tuple,
+            attn_metadata: AscendDSAMetadata,
+            kv_state: Tuple,  # type: ignore
     ):
+        assert attn_metadata.decode is not None
         if self.compress_ratio == 4:
             (_, compressor_kv_state, compressor_score_state, _, _) = kv_state
         elif self.compress_ratio == 128:
@@ -1494,6 +1504,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # win kv & tok_dis
             kv = self.wkv(hidden_states)
             kv = self.kv_norm(kv)
+            assert self.rope_head_dim is not None
             kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
             torch.ops._C_ascend.inplace_partial_rotary_mul(
@@ -1667,11 +1678,15 @@ class AscendDSAImpl(DSAAttentionImpl):
         coff = 2 if self.compressor_overlap else 1
 
         if with_prefill:
+            assert attn_metadata.prefill is not None
             kv_block_table = attn_metadata.prefill.state_block_table
             score_block_table = attn_metadata.prefill.state_block_table
+            start_pos = attn_metadata.prefill.start_pos
         else:
+            assert attn_metadata.decode is not None
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
+            start_pos = attn_metadata.decode.start_pos
 
         kv, _, _, _, _ = torch.ops._C_ascend.compressor(
             x,
@@ -1687,8 +1702,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             score_block_table=score_block_table,
             cu_seqlens=actual_seq_lengths_query,
             seqused=None,  #actual_seq_lengths_key,
-            start_pos=attn_metadata.prefill.start_pos
-            if with_prefill else attn_metadata.decode.start_pos,
+            start_pos=start_pos,
             rope_head_dim=self.rope_head_dim,
             cmp_ratio=self.compress_ratio,
             coff=coff,
@@ -1720,6 +1734,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_scale = kv_scale.unsqueeze(-1)
 
         if with_prefill:
+            assert attn_metadata.prefill is not None
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                     kv_cache[1].view(-1, kv.shape[-1]),
@@ -1730,6 +1745,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                     kv_scale.view(-1, kv_scale.shape[-1]))
         else:
+            assert attn_metadata.decode is not None
             if kv is not None:
                 torch_npu.npu_scatter_nd_update_(
                     kv_cache[1].view(-1, kv.shape[-1]),
@@ -1741,11 +1757,13 @@ class AscendDSAImpl(DSAAttentionImpl):
                     kv_scale.view(-1, kv_scale.shape[-1]))
 
         if with_prefill:
+            assert attn_metadata.prefill is not None
             qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
             indexer_metadata = attn_metadata.prefill.qli_metadata
         else:
+            assert attn_metadata.decode is not None
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table

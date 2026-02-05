@@ -11,7 +11,7 @@ AutoConfig.register("deepseek_v4", DeepseekV4Config)
 
 import vllm  # noqa: E402
 from vllm.transformers_utils.config import _CONFIG_REGISTRY  # noqa: E402
-from vllm.transformers_utils.configs import _CLASS_TO_MODULE, __all__, __getattr__  # noqa: E402
+from vllm.transformers_utils.configs import _CLASS_TO_MODULE, __all__  # noqa: E402
 from vllm.transformers_utils.config import _maybe_update_auto_config_kwargs, _maybe_remap_hf_config_attrs  # noqa: E402
 from pathlib import Path  # noqa: E402
 from vllm.transformers_utils.config_parser_base import ConfigParserBase  # noqa: E402
