@@ -39,7 +39,6 @@ CASE_DS_ACLGRAPH = LLMTestCase(
         ' a man who has been in the public eye for decades. He has been a senator, a governor, and a businessman. He has also been married to the',
         ' Paris, which is also the largest city in the country. The city is located on the River Seine and is known for its beautiful architecture, museums, and art',
         ' here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is'
-        ' here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is'
     ],
 )
 
