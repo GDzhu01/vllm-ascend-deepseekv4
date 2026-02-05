@@ -497,7 +497,6 @@ class KVCacheRecvingThread(threading.Thread):
             self.proc_not_transfer_request[request_id] = False
 
     def _transfer_kv_cache_groups(self, req_meta: dict[str, Any]):
-        # TODO(zxr): check this function
         request_id = req_meta["request_id"]
         remote_block_ids = req_meta["remote_block_ids"]
         remote_state_id = req_meta["remote_state_id"]
@@ -507,13 +506,6 @@ class KVCacheRecvingThread(threading.Thread):
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
 
-        # TODO(zxr): add check for layer group block ids
-        # assert len(set(self.layer_group_spec_idx)) == len(local_block_ids), f"{len(set(self.layer_group_spec_idx))=} is not equal to {len(local_block_ids)=}"
-
-        # len_local_block_ids = [len(group_block_ids) for group_block_ids in local_block_ids]
-        # len_remote_block_ids = [len(group_block_ids) for group_block_ids in remote_block_ids]
-        # for local_len, remote_len in zip(len_local_block_ids, len_remote_block_ids):
-        #     assert local_len == remote_len, "local and remote block_ids_num is not equal."
         
         # Check if we have the remote metadata cached.
         if remote_engine_id not in self.kv_caches_base_addr or \
