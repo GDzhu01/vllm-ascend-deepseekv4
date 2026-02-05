@@ -206,6 +206,7 @@ class KVCacheSendingLayerThread(threading.Thread):
         dst_list: list[str] = []
         length_list: list[int] = []
 
+        layer_idx = send_task.layer_idx
         layer_name = send_task.layer_name
         remote_block_ids = req_meta.remote_block_ids
         remote_state_id = req_meta.remote_state_id
@@ -215,19 +216,16 @@ class KVCacheSendingLayerThread(threading.Thread):
         local_kv_base_addr = self.kv_caches_base_addr
 
         if self.pd_head_ratio == 1:
-            state_addr_start_idx = self.state_addr_start_idx[
-                layer_name]  # type: ignore
-            if (remote_kv_base_addrs is not None and state_addr_start_idx
-                    == len(local_kv_base_addr[layer_name])
-                    and local_kv_base_addr[layer_name]):
+            state_addr_start_idx = self.state_addr_start_idx[layer_idx]
+            if state_addr_start_idx == len(
+                    local_kv_base_addr[layer_name]
+                ) and local_kv_base_addr[layer_name]:
                 # layer with only kv caches, no state cache
                 layer_local_kv_base_addr = local_kv_base_addr[layer_name]
                 layer_remote_kv_base_addr = remote_kv_base_addrs[layer_name]
                 kv_block_len = self.block_len[layer_name]
                 layer_local_state_base_addr = []
-            elif (remote_kv_base_addrs is not None
-                  and state_addr_start_idx == 0
-                  and local_kv_base_addr[layer_name]):
+            elif state_addr_start_idx == 0 and local_kv_base_addr[layer_name]:
                 # layer with only state cache, no kv cache
                 layer_local_state_base_addr = local_kv_base_addr[layer_name]
                 layer_remote_state_base_addr = remote_kv_base_addrs[layer_name]
