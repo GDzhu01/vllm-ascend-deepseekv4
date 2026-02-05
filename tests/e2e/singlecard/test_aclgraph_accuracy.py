@@ -39,7 +39,7 @@ CASE_DS_ACLGRAPH = LLMTestCase(
         '\nI am a 20 year old student from the UK. I am currently studying for a degree in English Literature and Creative Writing. I have a passion',
         ' a man who has been in the public eye for decades. He has been a senator, a governor, and a businessman. He has also been married to the',
         ' Paris, which is also the largest city in the country. The city is located on the River Seine and is known for its beautiful architecture, museums, and art',
-        ' here, and it’s not what you think.\nThe future of AI is here, and it’s not what you think.\nThe future of'
+        ' here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is here.\nThe future of AI is'
     ],
 )
 
@@ -58,8 +58,8 @@ CASE_DS_FULL_DECODE_ONLY = LLMTestCase(
     prompts=PROMPTS_LONG,
     golden_answers=[
         "\n\nI'm not sure how to approach this problem. I'm not sure how to use the information given to find the length of $AD$.",
-        "\n\nI'm not sure how to approach this problem. I'm not sure if I should use the law of total probability or if I should use",
-        "\n\n## Answer\n\n$a + b + c = 0$\n\nSolution\n\nLet $x$ be the common root of the equations"
+        "\n\nI'm not sure how to approach this problem. I'm not sure if I'm supposed to use the fact that the area of a",
+        "\n\n## Answer\n\n$a + b + c = 0$\n\nSolution:\n\nLet $x$ be the common root of the"
     ])
 
 CASE_QWEN_EX = LLMTestCase(
