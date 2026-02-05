@@ -504,6 +504,10 @@ class AscendLinearMethod(LinearMethodBase):
             set_weight_attrs(param, {"output_dim": 0})
             layer.register_parameter(pergroup_name, param)
             set_weight_attrs(param, extra_weight_attrs)
+            set_weight_attrs(param, {
+                    "packed_dim": 0,
+                    "packed_factor": 128
+                })
             if "weight_scale_second" in pergroup_name or "weight_offset_second" in pergroup_name \
                 or is_mx_quant_type(self.quant_method):
                 setattr(param, "input_dim", 1)
@@ -615,6 +619,10 @@ class AscendFusedMoEMethod(FusedMoEMethodBase):
             param = torch.nn.Parameter(param_value, requires_grad=False)
             layer.register_parameter(param_key, param)
             set_weight_attrs(param, extra_weight_attrs)
+            set_weight_attrs(param, {
+                    "packed_dim": 0,
+                    "packed_factor": 128
+                })
             if any(fields in param_key for fields in per_group_param):
                 setattr(param, "quant_method",
                         FusedMoeWeightScaleSupported.GROUP.value)

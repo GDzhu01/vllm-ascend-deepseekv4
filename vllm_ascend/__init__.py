@@ -14,6 +14,7 @@
 # limitations under the License.
 # This file is a part of the vllm-ascend project.
 #
+import custom_ops
 
 def register():
     """Register the NPU platform."""

@@ -80,6 +80,7 @@ from vllm.model_executor.models.utils import (
 )
 
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
+from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.ascend_config import get_ascend_config
@@ -367,14 +368,14 @@ class DeepseekV4MoE(nn.Module):
         # See DeepseekV2DecoderLayer for more details.
         if hidden_states.dtype != torch.float16:
             if not self.is_rocm_aiter_moe_enabled:
-                if self.shared_experts is not None:
-                    assert shared_output is not None
-                    final_hidden_states = muls_add_triton(final_hidden_states, shared_output, self.routed_scaling_factor)
-                else:
-                    final_hidden_states *= self.routed_scaling_factor
+                final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = muls_add_triton(shared_output, final_hidden_states, 1.0 / self.routed_scaling_factor)
+            shared_output *= 1.0 / self.routed_scaling_factor
+
+        if self.shared_experts is not None:
+            assert shared_output is not None
+            final_hidden_states += shared_output
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
@@ -474,11 +475,11 @@ class Compressor(nn.Module):
 
         self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32))
         self.wkv = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wkv",
             return_bias=False,)
         self.wgate = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wgate",
             return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
@@ -588,7 +589,7 @@ class DeepseekV4Attention(nn.Module):
             self.n_heads * self.head_dim // self.n_groups,
             self.n_groups * config.o_lora_rank,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wo_a",
             return_bias=False,
         )        
@@ -741,14 +742,27 @@ class DeepseekV2DecoderLayer(nn.Module):
         
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_pre(
-            x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps)
-        return y
+        # y = torch.ops.custom.npu_hc_pre(
+        #     # x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps)
+        #     x, hc_fn, hc_scale, hc_base)  # TODO 需要添加传参
+        # return y
+        shape, dtype = x.size(), x.dtype
+        x = x.flatten(1).float() #(b,s,c*h)
+        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
+        mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt #(b,s, c*h)@(c*h, (2+c)*c) = (b,s,(2+c)*c)
+        pre, post, comb = hc_split_sinkhorn_ref(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
+        #pre=(b,s,c)   post=(b,s,c)  comb=(b,s,c,c)
+        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1) #(b,s,c,1)*(b,s,c,h)=(b,s,c,h) sum后(b,s,h)
+        return y.to(dtype), post, comb
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_post(
-            x.unsqueeze(dim=0), residual.unsqueeze(dim=0), post.unsqueeze(dim=0), comb.unsqueeze(dim=0))
-        return y.squeeze(dim=0)
+        # y = torch.ops.custom.npu_hc_post(
+        #     x.unsqueeze(dim=0), residual.unsqueeze(dim=0), post.unsqueeze(dim=0), comb.unsqueeze(dim=0))
+        # return y.squeeze(dim=0)
+        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=1)
+        #y = (b,s,c,1)*(b,s,1,h) + torch.sum((b,s,c,c,1)*(b,s,c,1,h), dim=2)
+        #y = (b,s,c,h) + (bs,s,c,h)=(b,s,c,h)
+        return y.type_as(x)
     
     def forward(
         self,
@@ -1085,6 +1099,13 @@ class AscendDeepseekV4ForCausalLM(
                 name = name.replace('.w2.','.down_proj.')
             if '.w3.' in name:
                 name = name.replace('.w3.','.up_proj.')
+                
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
+            
+            # TODO 需要支持MTP
+            # if ".mtp" in name:
+            #     continue
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')

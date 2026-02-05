@@ -122,6 +122,41 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
 
     return out
 
+def generate_cache_and_block_table_and_slot_mapping(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 128):
+    # 1. Validation
+    if x.shape[0] != length_list.sum():
+        raise ValueError(
+            f"Input dimension 0 ({x.shape[0]}) does not match sum of length_list ({length_list.sum()})"
+        )
+        
+    block_num_list = []
+    for length in length_list.tolist():
+        block_num_list.append((length + block_size - 1) // block_size)
+        
+    cache = torch.zeros((sum(block_num_list) + 1, block_size, x.shape[-2], 640), dtype=torch.float8_e4m3fn).to(x.device)
+    block_table = torch.zeros((len(block_num_list), max(block_num_list)), dtype=torch.int32, device=x.device)
+    
+    # build blocktable
+    num_blocks = 0
+    for i, block_num in enumerate(block_num_list):
+        block_table[i, :block_num] = torch.arange(num_blocks, num_blocks + block_num) + 1  # 不用第一个block
+        num_blocks += block_num
+        
+    block_num_list_cumsum = torch.Tensor(block_num_list).to(torch.int32).cumsum(-1).tolist()
+    
+    # build slot_mapping
+    slot_mapping_list = []
+    for i, length in enumerate(length_list):
+        if i == 0:
+            slot_mapping_list.extend([j for j in range(0, length)])
+        else:
+            slot_mapping_list.extend([j for j in range(block_num_list_cumsum[i - 1] * block_size, block_num_list_cumsum[i - 1] * block_size + length)])
+    slot_mapping = torch.Tensor(slot_mapping_list).to(torch.int32).to(x.device)
+    slot_mapping += 128  # 不用第一个block
+            
+    return cache, block_table, slot_mapping
+
+
 
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
@@ -139,6 +174,14 @@ class AscendDSABackend(AttentionBackend):
 
     @staticmethod
     def get_kv_cache_shape(num_blocks: int, block_size: int, num_kv_heads: int,
+                           head_size: int) -> tuple[int, ...]:
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            return num_blocks, block_size, num_kv_heads, 640
+        else:
+            return num_blocks, block_size, num_kv_heads, head_size
+        
+    @staticmethod
+    def get_indexer_kcache_shape(num_blocks: int, block_size: int, num_kv_heads: int,
                            head_size: int) -> tuple[int, ...]:
         return num_blocks, block_size, num_kv_heads, head_size
 
@@ -376,12 +419,13 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 AscendDSAMetadataBuilder.hadamard = torch.tensor(hadamard(dim_padded, dtype=float), dtype=torch.float, device=self.device).to(torch.bfloat16)     
         self.start_pos_prefill = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
         self.start_pos_decode = torch.zeros(scheduler_config.max_num_seqs, dtype=torch.int32, device=self.device)
-        if self.compressor_ratio == 1:
-            self.decode_sas_c1_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
-        elif self.compressor_ratio == 4:
-            self.decode_sas_c4_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
-        else:
-            self.decode_sas_c128_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
+        if AscendDSAMetadataBuilder.decode_sas_c1_metadata is None:
+            AscendDSAMetadataBuilder.decode_sas_c1_metadata = torch.zeros(2048, dtype=torch.int32, device=self.device)
+        if AscendDSAMetadataBuilder.decode_sas_c4_metadata is None:
+            AscendDSAMetadataBuilder.decode_sas_c4_metadata = torch.zeros(2048, dtype=torch.int32, device=self.device)
+        if AscendDSAMetadataBuilder.decode_sas_c128_metadata is None:
+            AscendDSAMetadataBuilder.decode_sas_c128_metadata = torch.zeros(2048, dtype=torch.int32, device=self.device)
+
         self.decode_qli_metadata = torch.zeros(1024, dtype=torch.int32, device=self.device)
         self.cu_seqlens_ori_kv = torch.tensor([], device=self.device)
         self.cu_seqlens_cmp_kv = torch.tensor([], device=self.device)
@@ -671,7 +715,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         
         
         
-        sas_c1_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+        sas_c1_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -693,7 +738,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             device=str(self.seqused_q.device)
         )
         
-        sas_c4_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+        sas_c4_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -705,11 +751,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            cmp_topk=index_topk,
-            # topk=index_topk,
-            cmp_ratio=4,
-            ori_mask_mode=4,
-            cmp_mask_mode=3,
+            cmp_topk=index_topk, #
+            cmp_ratio=4, #
+            ori_mask_mode=4, # 4:sliding window
+            cmp_mask_mode=3, # 3:causal
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -719,7 +764,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             device=str(self.seqused_q.device)
         )
         
-        sas_c128_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+        sas_c128_metadata = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+            kv_quant_mode = 1,
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -744,7 +790,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         )
         
         
-        qli_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+        qli_metadata = torch.ops.custom.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=prefill_query_start_loc[1:].clone(),
             actual_seq_lengths_key=self.seq_lens[reqs_start:].clone(),
             num_heads_q=self.model_config.hf_config.index_n_heads, # 64
@@ -872,80 +918,70 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
         if self.compressor_ratio == 1:
-            self.decode_sas_c1_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            AscendDSAMetadataBuilder.decode_sas_c1_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                kv_quant_mode = 1,
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
-                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-                seqused_q = self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(self.seq_lens[:self.num_decodes]),
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
+                ori_mask_mode=4, # 4:sliding window
+                cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.model_config.hf_config.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=False,
-                device=str(self.seqused_q.device)
+                has_cmp_kv=False
             )
         elif self.compressor_ratio == 4:
-            self.decode_sas_c4_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            AscendDSAMetadataBuilder.decode_sas_c4_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                kv_quant_mode = 1,
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
-                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-                seqused_q = self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(self.seq_lens[:self.num_decodes]),
-                cmp_topk=index_topk,
-                # topk=index_topk,
-                cmp_ratio=4,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
+                cmp_topk=index_topk, #
+                cmp_ratio=4, #
+                ori_mask_mode=4, # 4:sliding window
+                cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.model_config.hf_config.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=True,
-                device=str(self.seqused_q.device)
+                has_cmp_kv=True
             )
         else:
-            self.decode_sas_c128_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            AscendDSAMetadataBuilder.decode_sas_c128_metadata[:2048] = torch_npu.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                kv_quant_mode = 1,
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
-                cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-                cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-                seqused_q = self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(self.seq_lens[:self.num_decodes]),
-                cmp_ratio=128,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
+                cmp_ratio=128, #
+                ori_mask_mode=4, # 4:sliding window
+                cmp_mask_mode=3, # 3:causal
                 ori_win_left=self.model_config.hf_config.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=True,
-                device=str(self.seqused_q.device)
+                has_cmp_kv=True
             )
-          
-        self.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
+        
+        self.decode_qli_metadata[:1024] = torch.ops.custom.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=query_start_loc[1:].clone(),
             actual_seq_lengths_key=self.seq_lens[:self.num_decodes].clone(),
             num_heads_q=self.model_config.hf_config.index_n_heads, # 64
@@ -965,6 +1001,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cmp_ratio = 4,
             device=str(self.seqused_q.device)
         )
+        
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
             block_table=self.block_table[:block_table_size, ...],
@@ -1197,22 +1234,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         sin = attn_metadata.sin[layer_name]
         num_tokens = o_proj_input.shape[0]
 
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            o_proj_input.unsqueeze(1), cos, -sin,
-            rotary_mode="interleave",
-            partial_slice=[self.nope_head_dim, self.head_dim],
-        )
+        o_nope, o_pe = o_proj_input.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        o_pe = self.rope_single(o_pe, cos, sin, True)
+        o = torch.cat([o_nope, o_pe], dim=-1)
 
         # o
-        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if olora_tp_enable():
-            o_proj_input = self.wo_a(o_proj_input)
-        else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-            o_proj_input = torch_npu.npu_transpose_batchmatmul(o_proj_input, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
-            o_proj_input = o_proj_input.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o_proj_input)
+        o = o.view(num_tokens, self.n_local_groups, -1)
+        wo_a = self.wo_a.weight.transpose(1, 2).view(self.n_local_groups, self.o_lora_rank, -1)
+        o = torch.einsum("tgd,grd->tgr", o, wo_a)
+        o = o.reshape(num_tokens, -1)
+        output[...] = self.wo_b(o)
 
         return output_padded
 
@@ -1241,29 +1272,27 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q = triton_q_rms(q, self.eps)
-
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1), cos, sin,
-            rotary_mode="interleave",
-            partial_slice=[self.nope_head_dim, self.head_dim],
-        )
+        # q = triton_q_rms(q, self.eps)
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q_nope, q_pe = q.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
         kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
 
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            kv.unsqueeze(1), cos, sin,
-            rotary_mode="interleave",
-            partial_slice=[self.nope_head_dim, self.head_dim],
-        )
+        kv_nope, kv_pe = kv.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        kv_pe = self.rope_single(kv_pe, cos, sin)
+        kv = torch.cat([kv_nope, kv_pe], dim=-1)
 
         # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
-            kv_state[0].view(-1, kv.shape[-1]),
-            attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
-            kv
+        torch.ops.custom.kv_compress_epilog(
+            kv_state[0].view(-1, kv_state[0].shape[-1]),
+            kv.view(-1, kv.shape[-1]),
+            attn_metadata.prefill.swa_slot_mapping[:kv.shape[0]],
+            quant_group_size=64,
+            quant_mode=2
         )
         compress_cos = attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = attn_metadata.prefill.compress_sin[layer_name]
@@ -1286,7 +1315,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
+            compressed_kv = torch.ops.custom.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1305,48 +1334,65 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio = self.compress_ratio,
                 coff = coff,
                 norm_eps = self.compressor_norm_eps,
-                rotary_mode = 2,
-                enable_grad=False
+                rotary_mode = 2
             )
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
+            # elif self.compressor.rotate:
+            #     compressed_kv = rotate_activation(compressed_kv, attn_metadata)
 
-            # kv_compress_epilog
-            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, compressed_kv.shape[-1]),
-                            compressed_kv_slot_mapping.unsqueeze(-1),
-                            compressed_kv.view(-1, compressed_kv.shape[-1]))
+            torch.ops.custom.kv_compress_epilog(
+                kv_cache[0].view(-1, kv_cache[0].shape[-1]),
+                compressed_kv.reshape(-1, compressed_kv.shape[-1]),
+                compressed_kv_slot_mapping[:compressed_kv.numel() // compressed_kv.shape[-1]],
+                quant_group_size=64,
+                quant_mode=2
+            )
 
-        sliding_window_kv_padded = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
+        cache, block_table, slot_mapping = generate_cache_and_block_table_and_slot_mapping(kv, actual_seq_lengths_key, block_size=128)
+        torch.ops.custom.kv_compress_epilog(
+            cache,
+            kv.reshape(-1, kv.shape[-1]),
+            slot_mapping[:kv.shape[0]],
+            quant_group_size=64,
+            quant_mode=2
+        )
+
         if self.compress_ratio == 1:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
-                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
+                ori_kv=cache,
+                ori_block_table=block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c1_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 ori_mask_mode=4,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]   
+            )
         elif self.compress_ratio == 4:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
+                ori_kv=cache,
                 cmp_kv=kv_cache[0],
-                cmp_sparse_indices=compress_topk_idxs,
-                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
+                cmp_sparse_indices=compress_topk_idxs, # B T D 
+                ori_block_table=block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c4_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
@@ -1355,18 +1401,21 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]
+            )
         else:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
+                ori_kv=cache,
                 cmp_kv=kv_cache[0],
-                ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
+                ori_block_table=block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c128_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
@@ -1375,8 +1424,13 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]
+            )
         return attn_output
+    
+    def _partial_rope(self, x, cos, sin):
+        x_nope, x_pe = x.split([self.nope_head_dim, self.rope_head_dim], dim=-1)
+        x_pe = self.rope_single(x_pe, cos, sin)
+        return torch.cat([x_nope, x_pe], dim=-1)
 
     def _forward_decode(
         self,
@@ -1401,63 +1455,36 @@ class AscendDSAImpl(DSAAttentionImpl):
         wait_hidden_state_cal_event = torch.npu.current_stream().record_event() \
             if self.multistream_dsa_preprocess else None
 
-        # q
-        if (not isinstance(self.wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
-                isinstance(self.wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod):
-                q_a = self.wq_a(hidden_states)
-                qr, qr_pertoken_scale = torch.ops._C_ascend.npu_rms_norm_dynamic_quant(
-                    q_a, 
-                    self.q_norm.weight,
-                    epsilon=self.eps
-                )
-                q = torch_npu.npu_quant_matmul(
-                    qr,
-                    self.wq_b.weight,
-                    self.wq_b.weight_scale,
-                    pertoken_scale=qr_pertoken_scale,
-                    bias=self.wq_b.bias,
-                    output_dtype=hidden_states.dtype,
-                ).unflatten(-1, (self.n_local_heads, self.head_dim))
-        else:
-            qr = q = self.q_norm(self.wq_a(hidden_states))
-            q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
-            qr_pertoken_scale = None
-            
-        q = triton_q_rms(q, self.eps)
+        # win kv & tok_dis
+        kv = self.wkv(hidden_states)
+        before_norm_event = torch.npu.current_stream().record_event() \
+            if self.multistream_dsa_preprocess else None
+        kv = self.kv_norm(kv)
+        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
+        kv = self._partial_rope(kv, cos, sin)
 
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1), cos, sin,
-            rotary_mode="interleave",
-            partial_slice=[self.nope_head_dim, self.head_dim],
+        # swa exec kv
+        torch.ops.custom.kv_compress_epilog(
+            kv_state[0].view(-1, kv_state[0].shape[-1]),
+            kv.view(-1, kv.shape[-1]),
+            attn_metadata.decode.swa_slot_mapping[:kv.shape[0]],
+            quant_group_size=64,
+            quant_mode=2
         )
-
+        
+        # q
         with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
-            if wait_hidden_state_cal_event:
-                torch.npu.current_stream().wait_event(wait_hidden_state_cal_event)
+            if before_norm_event:
+                torch.npu.current_stream().wait_event(before_norm_event)
 
-            # win kv & tok_dis
-            kv = self.wkv(hidden_states)
-            kv = self.kv_norm(kv)
-            kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-
-            torch.ops._C_ascend.inplace_partial_rotary_mul(
-                kv.unsqueeze(1), cos, sin,
-                rotary_mode="interleave",
-                partial_slice=[self.nope_head_dim, self.head_dim],
-            )
-
-            # swa exec kv
-            torch_npu.npu_scatter_nd_update_(
-                kv_state[0].view(-1, kv.shape[-1]),
-                attn_metadata.decode.swa_slot_mapping.unsqueeze(-1),
-                kv
-            )
-
-            wait_attention_cal_event = torch.npu.current_stream().record_event() \
-                if self.multistream_dsa_preprocess else None
-
-        if wait_attention_cal_event:
-                torch.npu.current_stream().wait_event(wait_attention_cal_event)
+            qr = q = self.wq_a(hidden_states) # bs
+        if self.multistream_dsa_preprocess:
+            torch.npu.current_stream().wait_stream(
+                attention_calculation_stream())
+        q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
+        # q = triton_q_rms(q, self.eps)
+        q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+        q = self._partial_rope(q, cos, sin)
 
         if self.compress_ratio > 1:
             compress_cos = attn_metadata.decode.compress_cos[layer_name]
@@ -1475,13 +1502,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     compressed_sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
                                                     actual_seq_lengths_key=actual_seq_lengths_key,
-                                                    with_prefill=False,
-                                                    qr_pertoken_scale=qr_pertoken_scale)
+                                                    with_prefill=False)
 
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
+            compressed_kv = torch.ops.custom.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1500,16 +1526,20 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio = self.compress_ratio,
                 coff = coff,
                 norm_eps = self.compressor_norm_eps,
-                rotary_mode = 2,
-                enable_grad=False
+                rotary_mode = 2
             )
-            # kv_compress_epilog
-            torch_npu.npu_scatter_nd_update_(
-                            kv_cache[0].view(-1, compressed_kv.shape[-1]),
-                            compressed_kv_slot_mapping.unsqueeze(-1),
-                            compressed_kv.view(-1, compressed_kv.shape[-1]))
+
+            if len(compressed_kv_slot_mapping.tolist()):
+                torch.ops.custom.kv_compress_epilog(
+                    kv_cache[0].view(-1, kv_cache[0].shape[-1]),
+                    compressed_kv.view(-1, compressed_kv.shape[-1]),
+                    compressed_kv_slot_mapping[:compressed_kv.shape[0]],
+                    quant_group_size=64,
+                    quant_mode=2
+                )
+
         if self.compress_ratio == 1:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 ori_block_table=attn_metadata.decode.state_block_table,
@@ -1517,15 +1547,18 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c1_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 ori_mask_mode=4,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]
+            )
         elif self.compress_ratio == 4:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
@@ -1536,6 +1569,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c4_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
@@ -1544,9 +1580,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]
+            )
         else:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+            attn_output, _ = torch.ops.custom.npu_kv_quant_sparse_attn_sharedkv(
                 q,
                 ori_kv=kv_state[0].unsqueeze(2),
                 cmp_kv=kv_cache[0],
@@ -1556,6 +1592,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.decode.sas_c128_metadata,
+                kv_quant_mode=1,
+                tile_size=64,
+                rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
@@ -1564,7 +1603,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND"
-            )[0]
+            )
         return attn_output 
 
     def indexer_select_qli(
@@ -1581,29 +1620,27 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query: torch.Tensor,
         actual_seq_lengths_key: torch.Tensor,
         with_prefill: bool = False,
-        qr_pertoken_scale: torch.Tensor = None,
+        # qr_pertoken_scale: torch.Tensor = None,
     ):
         (_, _, _, c4_indexer_kv_state, c4_indexer_score_state) = kv_state
-        if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
-            isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
-            qr_pertoken_scale is not None:
-            q = torch_npu.npu_quant_matmul(
-                    qr,
-                    self.inderxer_wq_b.weight,
-                    self.inderxer_wq_b.weight_scale,
-                    pertoken_scale=qr_pertoken_scale,
-                    bias=self.inderxer_wq_b.bias,
-                    output_dtype=x.dtype,
-                )
-        else:
-            q = self.inderxer_wq_b(qr)
+        # if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
+        #     isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
+        #     qr_pertoken_scale is not None:
+        #     q = torch_npu.npu_quant_matmul(
+        #             qr,
+        #             self.inderxer_wq_b.weight,
+        #             self.inderxer_wq_b.weight_scale,
+        #             pertoken_scale=qr_pertoken_scale,
+        #             bias=self.inderxer_wq_b.bias,
+        #             output_dtype=x.dtype,
+        #         )
+        # else:
+        q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
 
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1), cos, sin,
-            rotary_mode="interleave",
-            partial_slice=[self.indexcom_head_dim-self.rope_head_dim, self.indexcom_head_dim],
-        )
+        q_nope, q_pe = q.split([self.indexcom_head_dim-self.rope_head_dim, self.rope_head_dim], dim=-1)
+        q_pe = self.rope_single(q_pe, cos, sin)
+        q = torch.cat([q_nope, q_pe], dim=-1)
 
         q = rotate_activation(q, attn_metadata)
         coff = 2 if self.compressor_overlap else 1
@@ -1615,7 +1652,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table = attn_metadata.decode.state_block_table
             score_block_table = attn_metadata.decode.state_block_table
 
-        kv,_,_,_,_ = torch.ops._C_ascend.compressor(
+        kv = torch.ops.custom.compressor(
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
@@ -1634,8 +1671,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio = self.compress_ratio,
             coff = coff,
             norm_eps = self.compressor_norm_eps,
-            rotary_mode = 2,
-            enable_grad=False
+            rotary_mode = 2
         )
 
         if kv.numel() == 0:
@@ -1649,9 +1685,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
 
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
-        if kv is not None:
-            kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
-            kv_scale = kv_scale.unsqueeze(-1)
+        # if kv is not None:
+        #     kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
+
+        #     kv_scale = kv_scale.unsqueeze(-1)
 
         if soc_version not in {AscendDeviceType.A5}:
             q_scale = q_scale.to(torch.float16)
@@ -1661,43 +1698,71 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if with_prefill:
             if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
-                            kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
-                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.prefill.slot_mapping.unsqueeze(-1),
-                            kv_scale.view(-1, kv_scale.shape[-1]))
+                torch.ops.custom.indexer_compress_epilog(
+                    kv_cache[1].view(-1, kv.shape[-1]),
+                    kv_cache[2].view(-1, kv_cache[2].shape[-1]),
+                    kv, 
+                    attn_metadata.prefill.slot_mapping, 
+                    quant_mode=1, 
+                    round_scale=True
+                )
         else:
-            if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
-                            kv_cache[1].view(-1, kv.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
-                            kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
-                            kv_cache[2].view(-1, kv_scale.shape[-1]), attn_metadata.decode.slot_mapping.unsqueeze(-1),
-                            kv_scale.view(-1, kv_scale.shape[-1]))
-
+            if kv is not None and len(attn_metadata.decode.slot_mapping.tolist()):
+                torch.ops.custom.indexer_compress_epilog(
+                    kv_cache[1].view(-1, kv.shape[-1]),
+                    kv_cache[2].view(-1, kv_cache[2].shape[-1]),
+                    kv, 
+                    attn_metadata.decode.slot_mapping, 
+                    quant_mode=1, 
+                    round_scale=True
+                )
 
         if with_prefill:
             qlens = attn_metadata.prefill.query_start_loc[1:]
             kvlens = attn_metadata.prefill.seq_lens
             block_table = attn_metadata.prefill.block_table
+            max_seqlen_q = attn_metadata.prefill.max_query_len
+            max_seqlen_kv = attn_metadata.prefill.max_seq_lens
             indexer_metadata = attn_metadata.prefill.qli_metadata
         else:
             qlens = attn_metadata.decode.query_start_loc[1:]
             kvlens = attn_metadata.decode.seq_lens
             block_table = attn_metadata.decode.block_table
+            max_seqlen_q = attn_metadata.decode.max_seqlen_q
+            max_seqlen_kv = attn_metadata.decode.max_seqlen_kv
             indexer_metadata = attn_metadata.decode.qli_metadata
+        
+        # TODO delete in future
+        metadata = torch.ops.custom.npu_quant_lightning_indexer_metadata(
+            num_heads_q = 64,
+            num_heads_k = 1,
+            head_dim=128,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            actual_seq_lengths_query=qlens.clone(), 
+            actual_seq_lengths_key=kvlens.clone(),
+            batch_size=len(kvlens),
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_kv,
+            layout_query="TND", 
+            layout_key="PA_BSND",
+            sparse_count=512,
+            sparse_mode=3,
+            pre_tokens=(1<<63)-1,
+            next_tokens=(1<<63)-1,
+            cmp_ratio=4
+        )
 
-        topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
+        topk_idxs, _ = torch.ops.custom.npu_quant_lightning_indexer(
             query=q,
             key=kv_cache[1],
-            weights=weights.to(torch.float16),
+            weights=weights.to(torch.float),
             query_dequant_scale=q_scale,
             key_dequant_scale=kv_cache[2],
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,
-            metadata=indexer_metadata,
+            metadata=metadata,
             query_quant_mode=0,
             key_quant_mode=0,
             layout_query="TND",

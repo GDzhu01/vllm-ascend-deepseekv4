@@ -144,25 +144,27 @@ class MoECommMethod(ABC):
             with_quant=use_int8_w8a8 or use_int4_w4a8,
             dynamic_eplb=dynamic_eplb,
             pertoken_scale=pertoken_scale)
-
-        mlp_output = unified_apply_mlp(
-            hidden_states=dispatch_results.hidden_states,
-            w1=w1,
-            w1_scale=w1_scale,
-            w2=w2,
-            w2_scale=w2_scale,
-            group_list=dispatch_results.group_list,
-            dynamic_scale=dispatch_results.dynamic_scale,
-            group_list_type=dispatch_results.group_list_type,
-            w1_scale_bias=w1_scale_bias,
-            w2_scale_bias=w2_scale_bias,
-            w1_offset=w1_offset,
-            w2_offset=w2_offset,
-            topk_scales=dispatch_results.topk_scales,
-            with_quant=use_int8_w8a8 or use_int4_w4a8 or use_int4_w4a16,
-            fusion=use_int8_w8a8,
-            need_trans=need_trans,
-            dynamic_eplb=dynamic_eplb)
+        if dispatch_results.hidden_states.numel() == 0:
+            mlp_output = dispatch_results.hidden_states
+        else:
+            mlp_output = unified_apply_mlp(
+                hidden_states=dispatch_results.hidden_states,
+                w1=w1,
+                w1_scale=w1_scale,
+                w2=w2,
+                w2_scale=w2_scale,
+                group_list=dispatch_results.group_list,
+                dynamic_scale=dispatch_results.dynamic_scale,
+                group_list_type=dispatch_results.group_list_type,
+                w1_scale_bias=w1_scale_bias,
+                w2_scale_bias=w2_scale_bias,
+                w1_offset=w1_offset,
+                w2_offset=w2_offset,
+                topk_scales=dispatch_results.topk_scales,
+                with_quant=use_int8_w8a8 or use_int4_w4a8 or use_int4_w4a16,
+                fusion=use_int8_w8a8,
+                need_trans=need_trans,
+                dynamic_eplb=dynamic_eplb)
 
         before_combine_evt = torch.npu.current_stream().record_event()
         combine_results = self.token_dispatcher.token_combine(
