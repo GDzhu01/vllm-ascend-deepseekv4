@@ -382,6 +382,7 @@ class NPUPlatform(Platform):
                 vllm_config.scheduler_config.enable_chunked_prefill = False
             vllm_config.cache_config.enable_prefix_caching = False
 
+
     @classmethod
     def import_kernels(cls) -> None:
         # Directly importing vllm_ascend_C prevents ASCEND_RT_VISIBLE_DEVICES
