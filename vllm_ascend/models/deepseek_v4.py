@@ -28,6 +28,7 @@ import math
 import typing
 from collections.abc import Callable, Iterable
 from itertools import islice
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -650,6 +651,9 @@ class DeepseekV4Attention(nn.Module):
             beta_slow=config.rope_parameters['beta_slow'],
             rope_groups=rope_groups)
 
+        self.compressor: Optional[Compressor] = None
+        self.indexer: Optional[Indexer] = None
+
         if self.compress_ratio > 1:
             self.compressor = Compressor(
                 vllm_config,
@@ -669,11 +673,6 @@ class DeepseekV4Attention(nn.Module):
                     cache_config=cache_config,
                     prefix=f"{prefix}.indexer",
                 )
-            else:
-                self.indexer = None
-        else:
-            self.compressor = None
-            self.indexer = None
 
         dsa_modules = DSAModules(
             wq_a=self.wq_a,

@@ -643,7 +643,7 @@ class KVCacheRecvingThread(threading.Thread):
         num_cache_per_layer = len(list(
             self.kv_caches.values())[0])  # Number of KV caches per layer
         local_kv_caches_base_addrs = \
-            self.kv_caches_base_addr[self.local_engine_id][self.local_handshake_port][first_layer_index*num_cache_per_layer : end_layer_index*num_cache_per_layer]
+            self.kv_caches_base_addr[self.local_engine_id][self.local_handshake_port][first_layer_index*num_cache_per_layer : end_layer_index*num_cache_per_layer]  # type: ignore
         logger.debug(
             f"transfer kv cache first_layer_index:{first_layer_index} , end_layer_index:{end_layer_index}"
         )
@@ -657,11 +657,11 @@ class KVCacheRecvingThread(threading.Thread):
         for k, (src_layer_base_addr, dst_layer_base_addr) in enumerate(
                 zip(local_kv_caches_base_addrs, remote_kv_caches_base_addrs)):
             if self.use_mla:
-                block_len = (self.block_len[k % 2])
+                block_len = (self.block_len[k % 2])  # type: ignore
             elif self.use_sparse:
-                block_len = (self.block_len[k % 3])
+                block_len = (self.block_len[k % 3])  # type: ignore
             else:
-                block_len = (self.block_len[0])
+                block_len = (self.block_len[0])  # type: ignore
             inner_block_len = block_len // tp_num_need_pulls
             for remote_block_id, local_block_id in zip(
                     grouped_remote_block_ids, grouped_local_block_ids):

@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Optional, Tuple, Type, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Tuple, Type, TypeVar
 
 import torch
 import torch.nn.functional as F
@@ -33,10 +33,12 @@ from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
-if HAS_TRITON:
     from vllm_ascend.ops.triton.rms_norm import triton_q_rms
+
+if HAS_TRITON:
+    from vllm_ascend.ops.triton.rms_norm import triton_q_rms  # noqa: F811
 else:
-    triton_q_rms = None
+    triton_q_rms = None  # type: ignore
 
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
@@ -292,12 +294,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     aclgraph_support: ClassVar[AttentionCGSupport] = \
         AttentionCGSupport.UNIFORM_BATCH
     hadamard = None
-    start_pos_prefill: Optional[torch.Tensor] = None
-    start_pos_decode: Optional[torch.Tensor] = None
-    decode_sas_c1_metadata: Optional[torch.Tensor] = None
-    decode_sas_c4_metadata: Optional[torch.Tensor] = None
-    decode_sas_c128_metadata: Optional[torch.Tensor] = None
-    decode_qli_metadata: Optional[torch.Tensor] = None
+    start_pos_prefill: torch.Tensor
+    start_pos_decode: torch.Tensor
+    decode_sas_c1_metadata: torch.Tensor
+    decode_sas_c4_metadata: torch.Tensor
+    decode_sas_c128_metadata: torch.Tensor
+    decode_qli_metadata: torch.Tensor
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
@@ -1083,13 +1085,25 @@ class AscendDSAImpl(DSAAttentionImpl):
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
     """
+    # Type annotations for attributes assigned from kwargs
+    wq_a: Any
+    wq_b: Any
+    wkv: Any
+    q_norm: Any
+    kv_norm: Any
+    wo_a: Any
+    wo_b: Any
+    eps: float
+    attn_sink: Any
+    indexer: Any
+    compressor: Any
 
     def __init__(
         self,
+        dim: int,
         n_heads: int,
         scale: float,
         n_local_heads: int,
-        q_lora_rank: int,
         o_lora_rank: int,
         head_dim: int,
         rope_head_dim: int | None,
@@ -1098,6 +1112,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         n_local_groups: int,
         window_size: int,
         compress_ratio: int,
+        q_lora_rank: int = 0,
         **kwargs,
     ):
         self.num_heads = n_heads
@@ -1192,7 +1207,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             x = x_rot.reshape(1, num_tokens, -1, rotary_dim)
         return x
 
-    def forward(
+    def forward(  # type: ignore[override]
         self,
         layer_name,
         hidden_states: torch.Tensor,  # query in unified attn
@@ -1313,6 +1328,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
+        assert self.rope_head_dim is not None
         kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
@@ -1501,6 +1517,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # win kv & tok_dis
             kv = self.wkv(hidden_states)
             kv = self.kv_norm(kv)
+            assert self.rope_head_dim is not None
             kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
             torch.ops._C_ascend.inplace_partial_rotary_mul(

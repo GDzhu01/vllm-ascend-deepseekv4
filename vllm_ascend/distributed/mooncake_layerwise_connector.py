@@ -1011,7 +1011,6 @@ class MooncakeLayerwiseConnectorWorker:
 
         self.num_blocks = self.kv_cache_config.num_blocks
         self.block_len: dict[str, list[int]] = {}
-        self.kv_caches_base_addr: dict[str, list[int]] = {}
         self.state_addr_start_idx: dict[str, int] = {}
         ptrs: list[int] = []
         lengths: list[int] = []
