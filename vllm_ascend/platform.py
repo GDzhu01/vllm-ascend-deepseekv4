@@ -382,6 +382,10 @@ class NPUPlatform(Platform):
                 vllm_config.scheduler_config.enable_chunked_prefill = False
             vllm_config.cache_config.enable_prefix_caching = False
 
+            if vllm_config.speculative_config and vllm_config.kv_transfer_config and \
+               vllm_config.speculative_config.method == "mtp":
+                import vllm_ascend.patch.worker.patch_model_runner  # noqa
+
     @classmethod
     def import_kernels(cls) -> None:
         # Directly importing vllm_ascend_C prevents ASCEND_RT_VISIBLE_DEVICES
