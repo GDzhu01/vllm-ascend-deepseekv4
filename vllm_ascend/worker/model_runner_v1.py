@@ -402,20 +402,22 @@ class NPUModelRunner(GPUModelRunner):
              cdiv(self.model_config.max_model_len, self.block_size)),
             dtype=torch.int32,
         )
-        kv_cache_spec = AttentionSpec(
-            block_size=self.block_size,
-            num_kv_heads=1,
-            head_size=512,
-            dtype=torch.bfloat16,
-        )
-        self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
-            kv_cache_spec,
-            list(self.runner_only_attn_layers),
-            self.vllm_config,
-            self.device,
-            AscendDSAMetadata,
-            supports_dcp_with_varlen=False,
-        )
+
+        if self.use_compress:
+            kv_cache_spec = AttentionSpec(
+                block_size=self.block_size,
+                num_kv_heads=1,
+                head_size=512,
+                dtype=torch.bfloat16,
+            )
+            self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
+                kv_cache_spec,
+                list(self.runner_only_attn_layers),
+                self.vllm_config,
+                self.device,
+                AscendDSAMetadata,
+                supports_dcp_with_varlen=False,
+            )
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
