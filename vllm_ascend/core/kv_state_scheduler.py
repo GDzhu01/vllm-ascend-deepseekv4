@@ -758,7 +758,7 @@ class KVStateScheduler(Scheduler):
         self.finished_recving_kv_req_ids.remove(request.request_id)
         return True
 
-        def update_from_output(
+    def update_from_output(
         self,
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
