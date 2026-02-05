@@ -644,7 +644,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                 device=self.block_table.device)
         num_prefill = prefill_seq_lens.shape[0]
         prefill_swa_block_table_shape = (num_prefill,
-                                         self.vllm_config.model_config.max_model_len // 128)
+                                         cdiv(self.vllm_config.model_config.max_model_len, 128))
         prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                          dtype=self.block_table.dtype,
                                          device=self.block_table.device)
