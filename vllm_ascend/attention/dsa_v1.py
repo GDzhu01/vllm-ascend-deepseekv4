@@ -20,15 +20,11 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.abstract import DSAAttentionImpl
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
-from vllm_ascend.attention.utils import AscendCommonAttentionMetadata,split_decodes_and_prefills
-from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
-from vllm_ascend.ops.triton.rms_norm import triton_q_rms
-from vllm_ascend.worker.npu_input_batch import NPUInputBatch
-from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream, olora_tp_enable
-from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
-from vllm_ascend.quantization.w8a8_dynamic import AscendW8A8DynamicLinearMethod
+from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
+                                         split_decodes_and_prefills)
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
+from vllm_ascend.ops.triton.rms_norm import triton_q_rms
 from vllm_ascend.quantization.w8a8_dynamic import AscendW8A8DynamicLinearMethod
 from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream,
                                get_ascend_device_type, npu_stream_switch,
@@ -643,7 +639,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_input_positions = input_positions[tokens_start:]
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
 
-        def _get_padded_compressed_position(prefill_input_positions, compress_ratio):
+        def _get_padded_compressed_position(prefill_input_positions,
+                                            compress_ratio):
             if compress_ratio == 1:
                 return prefill_input_positions
             mask = ((prefill_input_positions + 1) % compress_ratio) == 0
@@ -671,15 +668,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # tmp swa_block
         prefill_seq_lens = self.seq_lens[reqs_start:]
 
-        prefill_swa_block = (prefill_seq_lens + self.block_size - 1) // self.block_size
+        prefill_swa_block = (prefill_seq_lens + self.block_size -
+                             1) // self.block_size
         cumsum_prefill_swa_block = prefill_swa_block.cumsum(dim=0)
         prefill_swa_block_ids = torch.arange(1,
                                              cumsum_prefill_swa_block[-1] + 1,
                                              dtype=self.block_table.dtype,
                                              device=self.block_table.device)
         num_prefill = prefill_seq_lens.shape[0]
-        prefill_swa_block_table_shape = (num_prefill,
-                                         cdiv(self.vllm_config.model_config.max_model_len, self.block_size))
+        prefill_swa_block_table_shape = (
+            num_prefill,
+            cdiv(self.vllm_config.model_config.max_model_len, self.block_size))
         prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                               dtype=self.block_table.dtype,
                                               device=self.block_table.device)
@@ -724,7 +723,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = self.model_config.hf_config.index_topk
-        
+
         if self.enable_kv_tnd:
             cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
             cu_c128_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 128)
@@ -745,7 +744,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
             cmp_ratio=1,
-            ori_mask_mode=4, # 4:sliding window
+            ori_mask_mode=4,  # 4:sliding window
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
@@ -892,7 +891,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         decode_input_positions = input_positions_cpu
 
-        def _get_padded_compressed_position(decode_input_positions, compress_ratio, device):
+        def _get_padded_compressed_position(decode_input_positions,
+                                            compress_ratio, device):
             if compress_ratio == 1:
                 return decode_input_positions
             mask = ((decode_input_positions + 1) % compress_ratio) == 0

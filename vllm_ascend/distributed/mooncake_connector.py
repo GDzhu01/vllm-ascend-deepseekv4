@@ -6,7 +6,6 @@ import math
 import os
 import queue
 import random
-import re
 import struct
 import threading
 import time

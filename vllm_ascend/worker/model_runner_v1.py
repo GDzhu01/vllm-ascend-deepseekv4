@@ -2461,6 +2461,7 @@ class NPUModelRunner(GPUModelRunner):
                         self.drafter.model, "compute_logits"):
                     return self.drafter.model.compute_logits(
                         hidden_states[dummy_indices])
+
             with set_ascend_forward_context(
                     attn_metadata,
                     self.vllm_config,
@@ -3426,7 +3427,8 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            nope_dim=hf_config.head_dim -
+                            hf_config.rope_head_dim,
                             nope_dytpe=torch.float8_e4m3fn,
                             rope_dim=hf_config.rope_head_dim,
                             rope_dytpe=torch.bfloat16,
@@ -3444,13 +3446,14 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            nope_dim=hf_config.head_dim -
+                            hf_config.rope_head_dim,
                             rope_dim=hf_config.rope_head_dim,
                             scale_dim=0,
                             dtype=torch.bfloat16,
                             compress_ratio=4,
                             indexer_head_size=hf_config.index_head_dim,
-                            indexer_dtype=torch.int8, 
+                            indexer_dtype=torch.int8,
                             indexer_scale_dim=1,
                             indexer_scale_dtype=torch.float16,
                         )
@@ -3460,7 +3463,8 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            nope_dim=hf_config.head_dim -
+                            hf_config.rope_head_dim,
                             nope_dytpe=torch.float8_e4m3fn,
                             rope_dim=hf_config.rope_head_dim,
                             rope_dytpe=torch.bfloat16,
@@ -3474,7 +3478,8 @@ class NPUModelRunner(GPUModelRunner):
                             block_size=block_size,
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            nope_dim=hf_config.head_dim -
+                            hf_config.rope_head_dim,
                             rope_dim=hf_config.rope_head_dim,
                             scale_dim=0,
                             dtype=torch.bfloat16,

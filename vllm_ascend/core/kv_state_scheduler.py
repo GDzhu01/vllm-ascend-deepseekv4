@@ -33,12 +33,10 @@ from vllm.v1.core.sched.output import NewRequestData, SchedulerOutput
 from vllm.v1.core.sched.request_queue import (SchedulingPolicy,
                                               create_request_queue)
 from vllm.v1.core.sched.scheduler import Scheduler
-from vllm.v1.core.sched.async_scheduler import AsyncScheduler
-from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs
+from vllm.v1.engine import EngineCoreEventType, EngineCoreOutputs
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.utils import record_function_or_nullcontext
-from vllm.v1.sample.rejection_sampler import PLACEHOLDER_TOKEN_ID
 
 from vllm_ascend.core.kv_state_manager import KVStateManager
 
@@ -102,21 +100,20 @@ class KVStateScheduler(Scheduler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.kv_state_manager = KVStateManager(
-            max_num_seqs=self.max_num_running_reqs,
-        ) if 1 else None
+            max_num_seqs=self.max_num_running_reqs, ) if 1 else None
         self.is_kv_consumer = self.vllm_config.kv_transfer_config and \
                                   self.vllm_config.kv_transfer_config.is_kv_consumer
         self.is_mtp_kv_consumer = self.vllm_config.speculative_config and \
                                   self.vllm_config.kv_transfer_config and \
                                   self.vllm_config.kv_transfer_config.is_kv_consumer
-        self.request_first_token: dict[int, dict[str, int]] = {} # [client_index, [request_id, token_id]]
+        self.request_first_token: dict[int, dict[str, int]] = {
+        }  # [client_index, [request_id, token_id]]
 
     def add_request(self, request: Request) -> None:
         # Fill in placeholder tokens to enable full graph compatibility. Without
         # placeholders, graph matching may fail, forcing eager mode execution.
         if self.is_mtp_kv_consumer:
-            request.spec_token_ids = [0
-                                      ] * self.num_spec_tokens
+            request.spec_token_ids = [0] * self.num_spec_tokens
         self.waiting.add_request(request)
         self.requests[request.request_id] = request
         if self.log_stats:
@@ -684,9 +681,12 @@ class KVStateScheduler(Scheduler):
             self.kv_state_manager.free(request)
         del self.requests[request.request_id]
         if self.is_kv_consumer:
-            if request.client_index in self.request_first_token.keys() and request.request_id in self.request_first_token[request.client_index].keys():
-                self.request_first_token[request.client_index].pop(request.request_id)
-        
+            if request.client_index in self.request_first_token.keys(
+            ) and request.request_id in self.request_first_token[
+                    request.client_index].keys():
+                self.request_first_token[request.client_index].pop(
+                    request.request_id)
+
     def _update_waiting_for_remote_kv(self, request: Request) -> bool:
         """
         KV Connector: check if the request_id is finished_recving.
@@ -732,7 +732,8 @@ class KVStateScheduler(Scheduler):
             request.num_prompt_tokens = len(request.prompt_token_ids)
             if request.client_index not in self.request_first_token.keys():
                 self.request_first_token[request.client_index] = {}
-            self.request_first_token[request.client_index][request.request_id] = new_token_id
+            self.request_first_token[request.client_index][
+                request.request_id] = new_token_id
 
         # Return that we are ready.
         self.finished_recving_kv_req_ids.remove(request.request_id)
@@ -743,16 +744,22 @@ class KVStateScheduler(Scheduler):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
-        engine_core_outputs = super().update_from_output(scheduler_output, model_runner_output)
+        engine_core_outputs = super().update_from_output(
+            scheduler_output, model_runner_output)
         if self.is_kv_consumer:
-            for client_index, client_engine_core_outputs in engine_core_outputs.items():
+            for client_index, client_engine_core_outputs in engine_core_outputs.items(
+            ):
                 if client_index in self.request_first_token.keys():
                     for engine_core_output in client_engine_core_outputs.outputs:
-                        if engine_core_output.request_id in self.request_first_token[client_index].keys():
-                            engine_core_output.new_token_ids.insert(0, self.request_first_token[client_index][engine_core_output.request_id])
-                            self.request_first_token[client_index].pop(engine_core_output.request_id)
+                        if engine_core_output.request_id in self.request_first_token[
+                                client_index].keys():
+                            engine_core_output.new_token_ids.insert(
+                                0, self.request_first_token[client_index][
+                                    engine_core_output.request_id])
+                            self.request_first_token[client_index].pop(
+                                engine_core_output.request_id)
         return engine_core_outputs
-    
+
 
 class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
 
@@ -786,15 +793,11 @@ class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
         for req_id in scheduler_output.num_scheduled_tokens:
             request = self.requests[req_id]
             pending_structured_output_tokens |= (
-                request.use_structured_output and request.num_output_placeholders > 0
-            )
+                request.use_structured_output
+                and request.num_output_placeholders > 0)
             cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
-            if (
-                request.num_computed_tokens
-                == request.num_tokens
-                + request.num_output_placeholders
-                + cur_num_spec_tokens
-            ):
+            if (request.num_computed_tokens == request.num_tokens +
+                    request.num_output_placeholders + cur_num_spec_tokens):
                 # The request will generate a new token plus num_spec_tokens
                 # in this scheduling step.
                 request.num_output_placeholders += 1 + cur_num_spec_tokens
@@ -803,20 +806,25 @@ class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
                 request.spec_token_ids = [0] * self.num_spec_tokens
 
         scheduler_output.pending_structured_output_tokens = (
-            pending_structured_output_tokens
-        )
+            pending_structured_output_tokens)
 
     def update_from_output(
         self,
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
-        engine_core_outputs = AsyncScheduler.update_from_output(self, scheduler_output, model_runner_output)
+        engine_core_outputs = AsyncScheduler.update_from_output(
+            self, scheduler_output, model_runner_output)
         if self.is_kv_consumer:
-            for client_index, client_engine_core_outputs in engine_core_outputs.items():
+            for client_index, client_engine_core_outputs in engine_core_outputs.items(
+            ):
                 for engine_core_output in client_engine_core_outputs.outputs:
                     if client_index in self.request_first_token.keys():
-                        if engine_core_output.request_id in self.request_first_token[client_index].keys():
-                            engine_core_output.new_token_ids.insert(0, self.request_first_token[client_index][engine_core_output.request_id])
-                            self.request_first_token[client_index].pop(engine_core_output.request_id)
+                        if engine_core_output.request_id in self.request_first_token[
+                                client_index].keys():
+                            engine_core_output.new_token_ids.insert(
+                                0, self.request_first_token[client_index][
+                                    engine_core_output.request_id])
+                            self.request_first_token[client_index].pop(
+                                engine_core_output.request_id)
         return engine_core_outputs
