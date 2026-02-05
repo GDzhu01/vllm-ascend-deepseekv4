@@ -33,7 +33,6 @@ from vllm.v1.core.sched.output import NewRequestData, SchedulerOutput
 from vllm.v1.core.sched.request_queue import (SchedulingPolicy,
                                               create_request_queue)
 from vllm.v1.core.sched.scheduler import Scheduler
-from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.utils import record_function_or_nullcontext
@@ -100,8 +99,7 @@ class KVStateScheduler(Scheduler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.kv_state_manager = KVStateManager(
-            max_num_seqs=self.max_num_running_reqs,
-        ) if 1 else None
+            max_num_seqs=self.max_num_running_reqs, ) if 1 else None
         self.is_mtp_kv_consumer = self.vllm_config.speculative_config and \
                                   self.vllm_config.kv_transfer_config and \
                                   self.vllm_config.kv_transfer_config.is_kv_consumer
@@ -677,7 +675,7 @@ class KVStateScheduler(Scheduler):
         if self.kv_state_manager is not None:
             self.kv_state_manager.free(request)
         del self.requests[request.request_id]
-        
+
     def _update_waiting_for_remote_kv(self, request: Request) -> bool:
         """
         KV Connector: check if the request_id is finished_recving.
@@ -719,7 +717,7 @@ class KVStateScheduler(Scheduler):
         # Return that we are ready.
         self.finished_recving_kv_req_ids.remove(request.request_id)
         return True
-    
+
 
 class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
 
@@ -766,5 +764,4 @@ class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
                 request.spec_token_ids = [0] * self.num_spec_tokens
 
         scheduler_output.pending_structured_output_tokens = (
-            pending_structured_output_tokens
-        )
+            pending_structured_output_tokens)
