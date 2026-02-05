@@ -832,6 +832,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 return decode_input_positions
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
             input_positions = decode_input_positions[mask]
+            input_positions = (input_positions + 1) - compress_ratio
             target_shape = (min(self.num_decode_tokens,
                                 self.num_decode_tokens // compress_ratio + self.num_decodes),)
             pad_right = target_shape[0] - input_positions.shape[0]
