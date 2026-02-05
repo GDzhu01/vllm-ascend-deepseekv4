@@ -1771,8 +1771,10 @@ class MooncakeConnectorWorker:
                         self.kv_recv_thread.add_request(
                             request_id=req_id,
                             local_block_ids=local_block_ids_list[pcp_dcp_rank],
+                            local_state_id=meta.local_state_id,
                             remote_block_ids=remote_block_ids_list[
                                 pcp_dcp_rank],
+                            remote_state_id=meta.remote_state_id,
                             remote_engine_id=remote_engine_id,
                             remote_host=remote_host,
                             remote_handshake_port=remote_handshake_port_list[

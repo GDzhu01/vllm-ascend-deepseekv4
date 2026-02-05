@@ -294,12 +294,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     aclgraph_support: ClassVar[AttentionCGSupport] = \
         AttentionCGSupport.UNIFORM_BATCH
     hadamard = None
-    start_pos_prefill: torch.Tensor
-    start_pos_decode: torch.Tensor
-    decode_sas_c1_metadata: torch.Tensor
-    decode_sas_c4_metadata: torch.Tensor
-    decode_sas_c128_metadata: torch.Tensor
-    decode_qli_metadata: torch.Tensor
+    start_pos_prefill: Optional[torch.Tensor] = None
+    start_pos_decode: Optional[torch.Tensor] = None
+    decode_sas_c1_metadata: Optional[torch.Tensor] = None
+    decode_sas_c4_metadata: Optional[torch.Tensor] = None
+    decode_sas_c128_metadata: Optional[torch.Tensor] = None
+    decode_qli_metadata: Optional[torch.Tensor] = None
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class

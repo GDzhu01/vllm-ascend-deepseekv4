@@ -24,6 +24,7 @@ class DSAAttentionImpl(AttentionImpl[T], Generic[T]):
         n_heads: int,
         scale: float,
         n_local_heads: int,
+        q_lora_rank: int,
         o_lora_rank: int,
         head_dim: int,
         rope_head_dim: int | None,
