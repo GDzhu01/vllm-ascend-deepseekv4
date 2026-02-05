@@ -19,8 +19,10 @@ from typing import Callable, Optional
 import torch
 import torch.nn.functional as F
 from vllm_ascend.utils import get_weight_prefetch_method
+from vllm.distributed import get_tp_group
 from vllm.forward_context import get_forward_context
 from vllm_ascend.ascend_forward_context import MoECommType
+from vllm_ascend.distributed.utils import split_tensor_along_first_dim
 
 def select_experts(hidden_states: torch.Tensor,
                    router_logits: torch.Tensor,
@@ -260,6 +262,14 @@ def _select_experts_with_fusion_ops(
                 input_ids = prepare_finalize.all_gather_input_id_with_dp_group(input_ids)
             else:
                 input_ids = forward_context.moe_comm_method.pad_and_split_input_ids(input_ids)
+
+            if forward_context.sp_enabled:
+                # Process for Flash Comm V1
+                tp_size = get_tp_group().world_size
+                tp_rank = get_tp_group().rank_in_group
+                splitted_input = split_tensor_along_first_dim(
+                    input_ids, num_partitions=tp_size)
+                input_ids = splitted_input[tp_rank].contiguous()
         else:
             input_ids = None
             tid2eid_ones = None
