@@ -786,7 +786,7 @@ class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
         # Clear the finished request IDs.
         # NOTE: We shouldn't do self.finished_req_ids.clear() here because
         # it will also affect the scheduler output.
-        self.finished_req_ids = set()
+        self.finished_req_ids: set[str] = set()
 
         pending_structured_output_tokens = False
         spec_decode_tokens = scheduler_output.scheduled_spec_decode_tokens

@@ -451,11 +451,7 @@ class KVCacheRecvingThread(threading.Thread):
         try:
             logger.debug(
                 f"Starting to transfer KV cache for request {request_id}.")
-            if set(self.layer_group_spec_idx.values()
-                   ) == 1 and not self.use_compress:
-                self._transfer_kv_cache(req_meta)
-            else:
-                self._transfer_kv_cache_groups(req_meta)
+            self._transfer_kv_cache_groups(req_meta)
             logger.debug(
                 f"Finished transferring KV cache for request {request_id}.")
         except Exception as e:
@@ -588,115 +584,6 @@ class KVCacheRecvingThread(threading.Thread):
             request_id, req_transfer_elapsed, get_ip(), self.tp_rank,
             session_id)
         return total_length, c4_length, c128_length, state_length, req_transfer_elapsed
-
-    def _transfer_kv_cache(self, req_meta: dict[str, Any]):
-        """Handle a KV cache transfer request."""
-        request_id = req_meta["request_id"]
-        remote_block_ids = req_meta["remote_block_ids"]
-        local_block_ids = req_meta["local_block_ids"]
-        remote_engine_id = req_meta["remote_engine_id"]
-        remote_host = req_meta["remote_host"]
-        remote_handshake_port = req_meta["remote_handshake_port"]
-        offset = req_meta["offset"]
-        tp_num_need_pulls = req_meta["tp_num_need_pulls"]
-
-        # Full prefix cache hit: do not need to read remote blocks, just notify
-        # P worker that we have the blocks we need.
-        num_local_blocks = len(local_block_ids)
-        if num_local_blocks == 0:
-            return
-
-        num_remote_blocks = len(remote_block_ids)
-        assert num_local_blocks <= num_remote_blocks
-        if num_local_blocks < num_remote_blocks:
-            remote_block_ids = remote_block_ids[-num_local_blocks:]
-
-        # Check if we have the remote metadata cached.
-        if remote_engine_id not in self.kv_caches_base_addr or \
-            remote_handshake_port not in self.kv_caches_base_addr[remote_engine_id]:
-            self._get_remote_metadata(remote_host, remote_handshake_port)
-
-        if tp_num_need_pulls == 1:
-            grouped_remote_block_ids, grouped_local_block_ids = \
-                    group_concurrent_contiguous(remote_block_ids, local_block_ids)
-        else:
-            remote_block_ids = list(map(lambda x: [x], remote_block_ids))
-            local_block_ids = list(map(lambda x: [x], local_block_ids))
-            grouped_remote_block_ids, grouped_local_block_ids = remote_block_ids, local_block_ids
-        num_transfer_groups = len(grouped_remote_block_ids)
-        # tp_num_need_pulls: number of KV caches each Decode node needs to pull from each PP stage
-        # Due to GQA, different KV heads are distributed across different ranks, so there are offsets
-        # indicating which KV head to pull
-        global_offset = offset  # Global offset of request across all ranks
-        prefill_pp_rank = offset // tp_num_need_pulls  # PP rank where current request resides
-        inner_offset = offset % tp_num_need_pulls  # Offset within each PP stage
-
-        remote_kv_caches_base_addrs = \
-            self.kv_caches_base_addr[remote_engine_id][remote_handshake_port]
-        first_layer_index, end_layer_index = self.pp_layer_indices[
-            prefill_pp_rank]
-        # support MTP layer kv transfer
-        if self.vllm_config.speculative_config is not None:
-            # all MTP layer use the same kv cache layer, so only need to transfer once
-            if prefill_pp_rank == self._prefill_pp_size - 1:
-                end_layer_index = end_layer_index + 1
-        num_cache_per_layer = len(list(
-            self.kv_caches.values())[0])  # Number of KV caches per layer
-        local_kv_caches_base_addrs = \
-            self.kv_caches_base_addr[self.local_engine_id][self.local_handshake_port][first_layer_index*num_cache_per_layer : end_layer_index*num_cache_per_layer]
-        logger.debug(
-            f"transfer kv cache first_layer_index:{first_layer_index} , end_layer_index:{end_layer_index}"
-        )
-        remote_transfer_port = self.remote_te_port[remote_engine_id][
-            remote_handshake_port]
-        num_blocks = len(local_block_ids)
-        session_id = f"{remote_host}:{remote_transfer_port}"
-
-        req_start_time = time.perf_counter()
-        src_list, dst_list, length_list = [], [], []
-        for k, (src_layer_base_addr, dst_layer_base_addr) in enumerate(
-                zip(local_kv_caches_base_addrs, remote_kv_caches_base_addrs)):
-            if self.use_mla:
-                block_len = (self.block_len[k % 2])
-            elif self.use_sparse:
-                block_len = (self.block_len[k % 3])
-            else:
-                block_len = (self.block_len[0])
-            inner_block_len = block_len // tp_num_need_pulls
-            for remote_block_id, local_block_id in zip(
-                    grouped_remote_block_ids, grouped_local_block_ids):
-                src = src_layer_base_addr + local_block_id[
-                    0] * block_len + inner_offset * inner_block_len
-                dst = dst_layer_base_addr + remote_block_id[0] * inner_block_len
-                length = inner_block_len * len(local_block_id)
-                src_list.append(src)
-                dst_list.append(dst)
-                length_list.append(length)
-
-        ret = self.engine.batch_transfer_sync_read(session_id, src_list,
-                                                   dst_list, length_list)
-        if ret < 0:
-            logger.error("Mooncake transfer failed for request %s",
-                         req_meta["request_id"])
-            raise RuntimeError(f"Mooncake transfer failed, ret: {ret}")
-
-        req_end_time = time.perf_counter()
-        req_transfer_elapsed = (req_end_time - req_start_time) * 1000
-        logger.info(
-            "KV cache transfer for request %s took %.2f ms (%d groups,"
-            " %d blocks). local_ip %s local_device_id %s remote_session_id %s",
-            request_id, req_transfer_elapsed, num_transfer_groups, num_blocks,
-            get_ip(), self.tp_rank, session_id)
-
-        # Determine if the current position is the offset position at the end of
-        # the KV transmission.
-        is_kv_transfer_end = (
-            global_offset == tp_num_need_pulls * self._prefill_pp_size - 1)
-        need_cat_cache = tp_num_need_pulls > 1 and is_kv_transfer_end
-        need_nz_cache = get_ascend_config().enable_kv_nz and is_kv_transfer_end
-        if need_nz_cache or need_cat_cache:
-            self.reformat_kv_cache(grouped_local_block_ids, tp_num_need_pulls,
-                                   need_cat_cache, need_nz_cache)
 
     def reformat_kv_cache(self,
                           block_ids: list[list[int]],
@@ -1779,8 +1666,10 @@ class MooncakeConnectorWorker:
                         self.kv_recv_thread.add_request(
                             request_id=req_id,
                             local_block_ids=local_block_ids_list[pcp_dcp_rank],
+                            local_state_id=meta.local_state_id,
                             remote_block_ids=remote_block_ids_list[
                                 pcp_dcp_rank],
+                            remote_state_id=meta.remote_state_id,
                             remote_engine_id=remote_engine_id,
                             remote_host=remote_host,
                             remote_handshake_port=remote_handshake_port_list[

@@ -951,8 +951,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
-        assert self.decode_sas_c1_metadata is not None
         if self.compressor_ratio == 1:
+            assert self.decode_sas_c1_metadata is not None
             self.decode_sas_c1_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
@@ -976,6 +976,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 has_cmp_kv=False,
                 device=str(self.seqused_q.device))
         elif self.compressor_ratio == 4:
+            assert self.decode_sas_c4_metadata is not None
             self.decode_sas_c4_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
@@ -1001,6 +1002,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 has_cmp_kv=True,
                 device=str(self.seqused_q.device))
         else:
+            assert self.decode_sas_c128_metadata is not None
             self.decode_sas_c128_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
