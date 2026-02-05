@@ -16,8 +16,6 @@
 #
 
 import pytest
-import os
-os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 from tests.e2e.singlecard.utils import (PROMPTS_LONG, PROMPTS_SHORT,
                                         LLMTestCase, gen_and_valid)
 
