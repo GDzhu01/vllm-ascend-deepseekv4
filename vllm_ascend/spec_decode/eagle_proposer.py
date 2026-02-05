@@ -362,7 +362,7 @@ class EagleProposer(VllmEagleProposer):
                 num_computed_tokens_cpu=num_computed_tokens_cpu,
                 actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
                 block_table_tensor=self.runner.input_batch.block_table[0].
-                get_device_tensor(num_reqs),
+                get_device_tensor(),
                 # This is used to hold a position.
                 slot_mapping=self.runner.input_batch.block_table[0].
                 slot_mapping.gpu,

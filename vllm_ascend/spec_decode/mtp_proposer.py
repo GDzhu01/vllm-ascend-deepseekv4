@@ -43,7 +43,9 @@ class MtpProposer(EagleProposer):
             num_tokens_across_dp,
             with_prefill,
             _,
-        ) = self.runner._sync_metadata_across_dp(num_tokens, with_prefill)
+        ) = self.runner._sync_metadata_across_dp(num_tokens,
+                                                 with_prefill,
+                                                 is_draft_model=True)
         if not self.use_cuda_graph:
             # there is synchronization between mtp steps when enabling aclgraph,
             # disable aclgraph when use async scheduling to avoid the
@@ -70,7 +72,7 @@ class MtpProposer(EagleProposer):
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
                     block_table_tensor=self.runner.input_batch.block_table[0].
-                    get_device_tensor(num_reqs),
+                    get_device_tensor(),
                     slot_mapping=self.runner.input_batch.block_table[0].
                     slot_mapping.gpu,
                     positions=self.runner.positions.gpu,
@@ -82,7 +84,7 @@ class MtpProposer(EagleProposer):
                     common_attn_metadata.prefill_context_parallel_metadata = \
                         self.runner.pcp_manager.long_seq_metadata
                     common_attn_metadata.block_table_tensor = \
-                        self.runner.input_batch.block_table[0].get_device_tensor(num_reqs * self.decode_threshold)
+                        self.runner.input_batch.block_table[0].get_device_tensor()
 
                 builder = self.runner.attn_groups[0][0].get_metadata_builder()
                 # `AscendAttentionState.SpecDecoding` is only designed for mla, `AscendAttentionState.ChunkedPrefill` is used in self-attention.
@@ -264,7 +266,8 @@ class MtpProposer(EagleProposer):
         # eager/acl piecewise mode need to update num_tokens_across_dp
         (num_input_tokens, num_tokens_across_dp, with_prefill,
          _) = self.runner._sync_metadata_across_dp(num_input_tokens,
-                                                   self.runner.with_prefill)
+                                                   self.runner.with_prefill,
+                                                   is_draft_model=True)
 
         # Enable shared_expert_dp and MTP FULL graph may cause accuracy issues.
         if scheduler_output and not self.enable_shared_expert_dp:
@@ -298,7 +301,11 @@ class MtpProposer(EagleProposer):
         # builder padding some elements.
         common_attn_metadata.graph_pad_size = graph_pad_size
         common_attn_metadata.num_input_tokens = num_input_tokens
-        builder = self.runner.attn_groups[0][0].get_metadata_builder()
+
+        if self.use_compress:
+            builder = self.runner.swa_metadata_builder
+        else:
+            builder = self.runner.attn_groups[0][0].get_metadata_builder()
         attn_metadata_mtp = builder.build(0, common_attn_metadata,
                                           self.runner.get_model())
         attn_metadata = {}
