@@ -1157,6 +1157,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             # Profiling run.
             return output.fill_(0)
         output_padded = output
+        # Process for Flash Comm V1
+        hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+            hidden_states, need_gather_q_kv)
         has_prefill = attn_metadata.num_prefills > 0
         has_decode = attn_metadata.num_decodes > 0
         decode_tokens = attn_metadata.num_decode_tokens
