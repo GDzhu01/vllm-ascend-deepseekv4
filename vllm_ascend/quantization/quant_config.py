@@ -59,8 +59,7 @@ class AscendQuantConfig(QuantizationConfig):
     def __init__(self, quant_config: Dict[str, Any]):
         super().__init__()
         self.quant_description = quant_config
-        model_config = get_current_vllm_config().model_config
-        if model_config and model_config.hf_text_config.model_type == "deepseek_v4":
+        if "hc_head_fn" in quant_config.keys():
             # TODO
             extra_quant_dict = {}
             for name in self.quant_description.keys():
