@@ -70,7 +70,6 @@ bool SparseAttnSharedkvMetadataCpuKernel::Prepare(
     GetAttrValueOpt(ctx, "has_ori_kv", hasOriKv_);
     GetAttrValueOpt(ctx, "has_cmp_kv", hasCmpKv_);
 
-    coreNum_ = aicCoreNum_;
     sparseMode_ = oriMaskMode_;
     preToken_ = (winLeft_ > -1) ? winLeft_ : INT64_MAX;
     nextToken_ = 0;
