@@ -519,7 +519,7 @@ class KVCacheRecvingThread(threading.Thread):
         num_cache_per_layer = len(list(
             self.kv_caches.values())[0])  # Number of KV caches per layer
         local_kv_caches_base_addrs = \
-            self.kv_caches_base_addr[self.local_engine_id][self.local_handshake_port][first_layer_index*num_cache_per_layer : end_layer_index*num_cache_per_layer]  # type: ignore
+            self.kv_caches_base_addr[self.local_engine_id][self.local_handshake_port][first_layer_index*num_cache_per_layer : end_layer_index*num_cache_per_layer]
         logger.debug(
             f"transfer kv cache first_layer_index:{first_layer_index} , end_layer_index:{end_layer_index}"
         )
@@ -533,11 +533,11 @@ class KVCacheRecvingThread(threading.Thread):
         for k, (src_layer_base_addr, dst_layer_base_addr) in enumerate(
                 zip(local_kv_caches_base_addrs, remote_kv_caches_base_addrs)):
             if self.use_mla:
-                block_len = (self.block_len[k % 2])  # type: ignore
+                block_len = (self.block_len[k % 2])
             elif self.use_sparse:
-                block_len = (self.block_len[k % 3])  # type: ignore
+                block_len = (self.block_len[k % 3])
             else:
-                block_len = (self.block_len[0])  # type: ignore
+                block_len = (self.block_len[0])
             inner_block_len = block_len // tp_num_need_pulls
             for remote_block_id, local_block_id in zip(
                     grouped_remote_block_ids, grouped_local_block_ids):
@@ -1588,10 +1588,8 @@ class MooncakeConnectorWorker:
                         self.kv_recv_thread.add_request(
                             request_id=req_id,
                             local_block_ids=local_block_ids_list[pcp_dcp_rank],
-                            local_state_id=meta.local_state_id,
                             remote_block_ids=remote_block_ids_list[
                                 pcp_dcp_rank],
-                            remote_state_id=meta.remote_state_id,
                             remote_engine_id=remote_engine_id,
                             remote_host=remote_host,
                             remote_handshake_port=remote_handshake_port_list[
