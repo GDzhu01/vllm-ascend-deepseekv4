@@ -17,11 +17,13 @@
 
 from vllm.distributed.kv_transfer.kv_connector.factory import \
     KVConnectorFactory
+from vllm_ascend import envs
 
 
 def register_connector():
+    connector_path = "vllm_ascend.distributed.mooncake_state_connector" if envs.USE_MULTI_BLOCK_POOL else "vllm_ascend.distributed.mooncake_connector"
     KVConnectorFactory.register_connector(
-        "MooncakeConnectorV1", "vllm_ascend.distributed.mooncake_connector",
+        "MooncakeConnectorV1", connector_path,
         "MooncakeConnector")
 
     KVConnectorFactory.register_connector(
