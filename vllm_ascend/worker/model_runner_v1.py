@@ -810,7 +810,7 @@ class NPUModelRunner(GPUModelRunner):
         self.seq_lens.copy_to_gpu()
 
         self.seq_lens.gpu[num_reqs:].fill_(0)
-
+        # self.input_ids.cpu[self.input_ids.cpu == -1] = 0
         # Copy the tensors to the NPU.
         self._prepare_input_ids(scheduler_output, total_num_scheduled_tokens,
                                 cu_num_tokens)
@@ -2461,7 +2461,6 @@ class NPUModelRunner(GPUModelRunner):
                         self.drafter.model, "compute_logits"):
                     return self.drafter.model.compute_logits(
                         hidden_states[dummy_indices])
-
             with set_ascend_forward_context(
                     attn_metadata,
                     self.vllm_config,
@@ -2977,10 +2976,9 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-
-        # TODO(cmq): modify 6 to num_layers
-        c4_layers = list(range(0, 43, 2))
-        c128_layers = list(range(1, 44, 2))
+        num_hidden_layers = self.model_config.hf_config.num_hidden_layers
+        c4_layers = list(range(0, num_hidden_layers, 2))
+        c128_layers = list(range(1, num_hidden_layers, 2))
 
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
@@ -3419,24 +3417,24 @@ class NPUModelRunner(GPUModelRunner):
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype)
             elif isinstance(attn_module, DSAAttention):
+                hf_config = self.model_config.hf_config
                 if layer_id in [0, 1] or "mtp" in layer_name:
                     self.runner_only_attn_layers.add(layer_name)
                 elif layer_id % 2 == 0:
                     if get_ascend_device_type() == AscendDeviceType.A5:
-                        # TODO(cmq): get the dim info from model config
                         kv_cache_spec[layer_name] = Compress4AttentionSpec(
                             block_size=block_size,
                             num_kv_heads=1,
-                            head_size=512,
-                            nope_dim=448,
+                            head_size=hf_config.head_dim,
+                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
                             nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=64,
+                            rope_dim=hf_config.rope_head_dim,
                             rope_dytpe=torch.bfloat16,
                             scale_dim=7,
                             scale_dytpe=torch.float8_e4m3fn,
                             dtype=torch.float8_e4m3fn,
                             compress_ratio=4,
-                            indexer_head_size=128,
+                            indexer_head_size=hf_config.index_head_dim,
                             indexer_dtype=torch.float8_e4m3fn,
                             indexer_scale_dim=1,
                             indexer_scale_dtype=torch.float32,
@@ -3445,28 +3443,26 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_spec[layer_name] = Compress4AttentionSpec(
                             block_size=block_size,
                             num_kv_heads=1,
-                            head_size=512,
-                            nope_dim=448,
-                            rope_dim=64,
+                            head_size=hf_config.head_dim,
+                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            rope_dim=hf_config.rope_head_dim,
                             scale_dim=0,
                             dtype=torch.bfloat16,
                             compress_ratio=4,
-                            indexer_head_size=128,
-                            # TOOOOOOOOOOOOOOOOOOOOOOOOODO
-                            indexer_dtype=torch.int8,
+                            indexer_head_size=hf_config.index_head_dim,
+                            indexer_dtype=torch.int8, 
                             indexer_scale_dim=1,
                             indexer_scale_dtype=torch.float16,
                         )
                 elif layer_id % 2 != 0:
                     if get_ascend_device_type() == AscendDeviceType.A5:
-                        # TODO(cmq): get the dim info from model config
                         kv_cache_spec[layer_name] = Compress128AttentionSpec(
                             block_size=block_size,
                             num_kv_heads=1,
-                            head_size=512,
-                            nope_dim=448,
+                            head_size=hf_config.head_dim,
+                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
                             nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=64,
+                            rope_dim=hf_config.rope_head_dim,
                             rope_dytpe=torch.bfloat16,
                             scale_dim=7,
                             scale_dytpe=torch.float8_e4m3fn,
@@ -3477,9 +3473,9 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_spec[layer_name] = Compress128AttentionSpec(
                             block_size=block_size,
                             num_kv_heads=1,
-                            head_size=512,
-                            nope_dim=448,
-                            rope_dim=64,
+                            head_size=hf_config.head_dim,
+                            nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
+                            rope_dim=hf_config.rope_head_dim,
                             scale_dim=0,
                             dtype=torch.bfloat16,
                             compress_ratio=128,

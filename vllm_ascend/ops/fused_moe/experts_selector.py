@@ -274,24 +274,25 @@ def _select_experts_with_fusion_ops(
                 splitted_input = split_tensor_along_first_dim(
                     input_ids, num_partitions=tp_size)
                 input_ids = splitted_input[tp_rank].contiguous()
+            input_ids = torch.where(input_ids == -1, 0 ,input_ids)
         else:
             input_ids = None
             tid2eid_ones = None
         topk_weights, topk_ids, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
-            x=router_logits,
-            k=top_k,
-            bias=e_score_correction_bias,
-            input_ids=input_ids,
-            tid2eid=tid2eid_ones,
-            k_group=topk_group,
-            group_count=num_expert_group,
-            routed_scaling_factor=routed_scaling_factor,
-            eps=float(1e-20),
-            group_select_mode=1,
-            renorm=0,
-            norm_type=2,
-            out_flag=False)
-
+            x=router_logits,                        # 输入张量
+            k=top_k,                        # 选取的专家数量
+            bias=e_score_correction_bias,                # 偏置张量（可选）
+            input_ids=input_ids,      # 输入词表（可选）
+            tid2eid=tid2eid_ones,          # 词表到专家id的映射关系表（可选）
+            k_group=topk_group,           # 选取的组数量（可选）
+            group_count=num_expert_group,   # 总组数（可选）
+            routed_scaling_factor=routed_scaling_factor,  # 路由缩放因子（可选）
+            eps=float(1e-20),                  # 数值稳定性参数（可选）
+            group_select_mode=1,  # 组选择模式（可选）
+            renorm=0,            # 重归一化标志（可选）
+            norm_type=2,       # 归一化类型（可选）
+            out_flag=False          # 是否输出归一化结果（可选）
+        )
         return topk_weights, topk_ids
 
     elif scoring_func == "softmax":

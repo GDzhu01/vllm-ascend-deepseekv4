@@ -9,7 +9,6 @@ from vllm.v1.kv_cache_interface import AttentionSpec
 
 @dataclass(frozen=True)
 class CompressAttentionSpec(AttentionSpec):
-    # TODO(cmq): adapt the logic of quantization
     nope_dim: int
     rope_dim: int
     scale_dim: int
@@ -52,17 +51,16 @@ def pad_to_128(x: int):
 
 @dataclass(frozen=True)
 class Compress4AttentionSpec(CompressAttentionSpec):
-    # TODO(cmq): adapt the logic of quantization
     indexer_scale_dim: int = 0
     indexer_head_size: int = 0
     indexer_dtype: torch.dtype = torch.float16
     indexer_scale_dtype: torch.dtype = torch.bfloat16
     # indexer attn
-    #   value head_dim = 128  A3: int8 A5: fp8
-    #   scale head_dim = 1 A3: fp16 A5: fp32
+    #   value head_dim = 128    A3: int8 A5: fp8
+    #   scale head_dim = 1      A3: fp16 A5: fp32
 
     # c4
-    #   nope+rope+scale head_dim = 448    +    64  +  7
+    #   nope+rope+scale head_dim =  448    +    64  +  7
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
     #   pad to 128 to make sure the performance is ok
