@@ -26,7 +26,6 @@ from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata,split_decodes_and_prefills
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.ops.triton.rms_norm import triton_q_rms
-from vllm_ascend.ops.triton.rope import triton_apply_rope_partial_in_place
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream, olora_tp_enable
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, npu_stream_switch, attention_calculation_stream
@@ -614,7 +613,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
 
         def _get_padded_compressed_position(prefill_input_positions, compress_ratio):
-            # TODO(lxs): refactor me to get_compressed_pos_and_indices
             if compress_ratio == 1:
                 return prefill_input_positions
             mask = ((prefill_input_positions + 1) % compress_ratio) == 0
@@ -636,15 +634,15 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         # tmp swa_block
         prefill_seq_lens = self.seq_lens[reqs_start:]
-        # TODO(cmq): refactor this magic number
-        prefill_swa_block = (prefill_seq_lens + 128 - 1) // 128
+
+        prefill_swa_block = (prefill_seq_lens + self.block_size - 1) // self.block_size
         cumsum_prefill_swa_block = prefill_swa_block.cumsum(dim=0)
         prefill_swa_block_ids = torch.arange(1, cumsum_prefill_swa_block[-1] + 1,
                                 dtype=self.block_table.dtype,
                                 device=self.block_table.device)
         num_prefill = prefill_seq_lens.shape[0]
         prefill_swa_block_table_shape = (num_prefill,
-                                         cdiv(self.vllm_config.model_config.max_model_len, 128))
+                                         cdiv(self.vllm_config.model_config.max_model_len, self.block_size))
         prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                          dtype=self.block_table.dtype,
                                          device=self.block_table.device)
@@ -656,7 +654,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
 
-        # TODO: zyl refactor this for asc scheduling.
         decode_input_positions = input_positions[:tokens_start]
         def _get_compressed_decode_token_start_and_end(decode_input_positions, compress_ratio):
             # TODO(cmq): decode_input_positions is a device tensor, 
@@ -677,7 +674,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
-        index_topk = 512
+        index_topk = self.model_config.hf_config.index_topk
         
         if self.enable_kv_tnd:
             cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
@@ -845,7 +842,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         decode_input_positions = input_positions_cpu
 
         def _get_padded_compressed_position(decode_input_positions, compress_ratio, device):
-            # TODO(lxs): refactor me to get_compressed_pos_and_indices
             if compress_ratio == 1:
                 return decode_input_positions
             mask = ((decode_input_positions + 1) % compress_ratio) == 0

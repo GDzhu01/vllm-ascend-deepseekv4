@@ -61,11 +61,11 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype,
     global _cos
     global _sin
 
-    # if _cos_mla is not None or \
-    #     _sin_mla is not None or \
-    #     _cos is not None or \
-    #     _sin is not None:
-    #     return
+    if _cos_mla is not None or \
+        _sin_mla is not None or \
+        _cos is not None or \
+        _sin is not None:
+        return
 
     model_config = vllm_config.model_config
     max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
