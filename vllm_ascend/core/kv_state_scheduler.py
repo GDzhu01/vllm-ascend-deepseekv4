@@ -108,7 +108,7 @@ class KVStateScheduler(Scheduler):
         # Fill in placeholder tokens to enable full graph compatibility. Without
         # placeholders, graph matching may fail, forcing eager mode execution.
         if self.is_mtp_kv_consumer:
-            request.spec_token_ids = [PLACEHOLDER_TOKEN_ID
+            request.spec_token_ids = [0
                                       ] * self.num_spec_tokens
         self.waiting.add_request(request)
         self.requests[request.request_id] = request
@@ -673,7 +673,6 @@ class KVStateScheduler(Scheduler):
             finished_req_ids=self.finished_req_ids,
             free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
         )
-
         # NOTE(Kuntai): this function is designed for multiple purposes:
         # 1. Plan the KV cache store
         # 2. Wrap up all the KV cache load / save ops into an opaque object
@@ -748,3 +747,50 @@ class AsyncKVStateScheduler(AsyncScheduler, KVStateScheduler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def _update_after_schedule(
+        self,
+        scheduler_output: SchedulerOutput,
+    ) -> None:
+        num_scheduled_tokens = scheduler_output.num_scheduled_tokens
+        for req_id, num_scheduled_token in num_scheduled_tokens.items():
+            request = self.requests[req_id]
+            request.num_computed_tokens += num_scheduled_token
+
+            # NOTE: _free_encoder_inputs relies on num_computed_tokens, which
+            # may be updated again in _update_from_output for speculative
+            # decoding. However, it is safe to call the method here because
+            # encoder inputs are always part of the prompt, not the output,
+            # and thus are unaffected by speculative decoding.
+            if request.has_encoder_inputs:
+                self._free_encoder_inputs(request)
+
+        # Clear the finished request IDs.
+        # NOTE: We shouldn't do self.finished_req_ids.clear() here because
+        # it will also affect the scheduler output.
+        self.finished_req_ids = set()
+
+        pending_structured_output_tokens = False
+        spec_decode_tokens = scheduler_output.scheduled_spec_decode_tokens
+        for req_id in scheduler_output.num_scheduled_tokens:
+            request = self.requests[req_id]
+            pending_structured_output_tokens |= (
+                request.use_structured_output and request.num_output_placeholders > 0
+            )
+            cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
+            if (
+                request.num_computed_tokens
+                == request.num_tokens
+                + request.num_output_placeholders
+                + cur_num_spec_tokens
+            ):
+                # The request will generate a new token plus num_spec_tokens
+                # in this scheduling step.
+                request.num_output_placeholders += 1 + cur_num_spec_tokens
+                # Add placeholders for the new tokens in spec_token_ids.
+                # We will update the actual spec token ids in the worker process.
+                request.spec_token_ids = [0] * self.num_spec_tokens
+
+        scheduler_output.pending_structured_output_tokens = (
+            pending_structured_output_tokens
+        )

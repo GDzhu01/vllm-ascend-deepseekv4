@@ -791,7 +791,7 @@ class NPUModelRunner(GPUModelRunner):
         self.seq_lens.copy_to_gpu()
 
         self.seq_lens.gpu[num_reqs:].fill_(0)
-
+        # self.input_ids.cpu[self.input_ids.cpu == -1] = 0
         # Copy the tensors to the NPU.
         self._prepare_input_ids(scheduler_output, total_num_scheduled_tokens,
                                 cu_num_tokens)
@@ -2403,7 +2403,6 @@ class NPUModelRunner(GPUModelRunner):
                         self.drafter.model, "compute_logits"):
                     return self.drafter.model.compute_logits(
                         hidden_states[dummy_indices])
-
             with set_ascend_forward_context(
                     attn_metadata,
                     self.vllm_config,

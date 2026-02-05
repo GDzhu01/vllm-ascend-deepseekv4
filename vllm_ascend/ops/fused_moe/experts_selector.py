@@ -270,6 +270,7 @@ def _select_experts_with_fusion_ops(
                 splitted_input = split_tensor_along_first_dim(
                     input_ids, num_partitions=tp_size)
                 input_ids = splitted_input[tp_rank].contiguous()
+            input_ids = torch.where(input_ids == -1, 0 ,input_ids)
         else:
             input_ids = None
             tid2eid_ones = None
@@ -288,7 +289,6 @@ def _select_experts_with_fusion_ops(
             norm_type=2,       # 归一化类型（可选）
             out_flag=False          # 是否输出归一化结果（可选）
         )
-
         return topk_weights, topk_ids
 
         scores = F.softplus(router_logits).sqrt()
