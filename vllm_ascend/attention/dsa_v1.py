@@ -714,6 +714,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+            seqused_q=self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
@@ -724,18 +727,23 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=False)
+            has_cmp_kv=False,
+            device=str(self.seqused_q.device))
 
         sas_c4_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+            seqused_q=self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
             batch_size=len(self.seq_lens[reqs_start:]),
-            topk=index_topk,
+            cmp_topk=index_topk,
+            # topk=index_topk,
             cmp_ratio=4,
             ori_mask_mode=4,
             cmp_mask_mode=3,
@@ -744,13 +752,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True)
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device))
 
         sas_c128_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+            seqused_q=self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
             max_seqlen_kv=self.seq_lens[reqs_start:].max(),
@@ -763,79 +775,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             layout_q="TND",
             layout_kv="PA_ND",
             has_ori_kv=True,
-            has_cmp_kv=True)
-
-        # NOTE: don' remove please
-        # sas_c1_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=prefill_query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[reqs_start:],
-        #     max_seqlen_q=seq_lens_q.max().item(),
-        #     max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
-        #     batch_size=len(self.seq_lens[reqs_start:]),
-        #     ori_mask_mode=4,
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=False,
-        #     device=str(self.seqused_q.device)
-        # )
-
-        # sas_c4_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=prefill_query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[reqs_start:],
-        #     max_seqlen_q=seq_lens_q.max().item(),
-        #     max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
-        #     batch_size=len(self.seq_lens[reqs_start:]),
-        #     cmp_topk=index_topk, #
-        #     cmp_ratio=4, #
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=True,
-        #     device=str(self.seqused_q.device)
-        # )
-
-        # sas_c128_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=prefill_query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[reqs_start:],
-        #     max_seqlen_q=seq_lens_q.max().item(),
-        #     max_seqlen_kv=self.seq_lens[reqs_start:].max().item(),
-        #     batch_size=len(self.seq_lens[reqs_start:]),
-        #     cmp_ratio=128,
-        #     ori_mask_mode=4,
-        #     cmp_mask_mode=3,
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=True,
-        #     device=str(self.seqused_q.device)
-        # )
+            has_cmp_kv=True,
+            device=str(self.seqused_q.device))
 
         qli_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=prefill_query_start_loc[1:].clone(),
@@ -973,8 +914,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.start_pos_decode[:self.
                               num_decodes] = self.seq_lens[:self.
                                                            num_decodes] - seq_lens_q
+
+        state_block = common_attn_metadata.state_block_table[:self.num_decodes]
         if num_reqs_actual is not None and num_reqs_actual < self.num_decodes:
             self.start_pos_decode[num_reqs_actual:].fill_(0)
+            self.block_table[num_reqs_actual:self.num_decodes, ...].fill_(0)
+            state_block[num_reqs_actual:self.num_decodes, ...].fill_(0)
 
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
@@ -985,6 +930,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
+                cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                seqused_q=self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -996,18 +944,23 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=False)
+                has_cmp_kv=False,
+                device=str(self.seqused_q.device))
         elif self.compressor_ratio == 4:
             self.decode_sas_c4_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
+                cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                seqused_q=self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
                 batch_size=len(self.seq_lens[:self.num_decodes]),
-                topk=index_topk,
+                cmp_topk=index_topk,
+                # topk=index_topk,
                 cmp_ratio=4,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
@@ -1016,13 +969,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=True)
+                has_cmp_kv=True,
+                device=str(self.seqused_q.device))
         else:
             self.decode_sas_c128_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
                 num_heads_kv=1,
                 head_dim=self.model_config.get_head_size(),
                 cu_seqlens_q=query_start_loc,
+                cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                seqused_q=self.seqused_q,
                 seqused_kv=self.seq_lens[:self.num_decodes],
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
@@ -1035,79 +992,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 layout_q="TND",
                 layout_kv="PA_ND",
                 has_ori_kv=True,
-                has_cmp_kv=True)
-        # NOTE: don' remove please
-        # AscendDSAMetadataBuilder.decode_sas_c1_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[:self.num_decodes],
-        #     max_seqlen_q=max_seqlen_q,
-        #     max_seqlen_kv=max_seqlen_kv,
-        #     batch_size=len(self.seq_lens[:self.num_decodes]),
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=False,
-        #     device=str(self.seqused_q.device)
-        # )
-
-        # AscendDSAMetadataBuilder.decode_sas_c4_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[:self.num_decodes],
-        #     max_seqlen_q=max_seqlen_q,
-        #     max_seqlen_kv=max_seqlen_kv,
-        #     batch_size=len(self.seq_lens[:self.num_decodes]),
-        #     cmp_topk=index_topk, #
-        #     cmp_ratio=4, #
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=True,
-        #     device=str(self.seqused_q.device)
-        # )
-
-        # AscendDSAMetadataBuilder.decode_sas_c128_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-        #     num_heads_q=n_local_heads,
-        #     num_heads_kv=1,
-        #     head_dim=self.model_config.get_head_size(),
-        #     cu_seqlens_q=query_start_loc,
-        #     cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-        #     cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
-        #     seqused_q = self.seqused_q,
-        #     seqused_kv=self.seq_lens[:self.num_decodes],
-        #     max_seqlen_q=max_seqlen_q,
-        #     max_seqlen_kv=max_seqlen_kv,
-        #     batch_size=len(self.seq_lens[:self.num_decodes]),
-        #     cmp_ratio=128, #
-        #     ori_mask_mode=4, # 4:sliding window
-        #     cmp_mask_mode=3, # 3:causal
-        #     ori_win_left=self.model_config.hf_config.window_size - 1,
-        #     ori_win_right=0,
-        #     layout_q="TND",
-        #     layout_kv="PA_ND",
-        #     has_ori_kv=True,
-        #     has_cmp_kv=True,
-        #     device=str(self.seqused_q.device)
-        # )
+                has_cmp_kv=True,
+                device=str(self.seqused_q.device))
 
         self.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=query_start_loc[1:].clone(),
@@ -1143,8 +1029,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
             query_start_loc=query_start_loc,
             query_start_loc_cpu=query_start_loc_cpu,
-            state_block_table=common_attn_metadata.
-            state_block_table[:self.num_decodes],
+            state_block_table=state_block,
             sin=sin[:self.num_decode_tokens, ...],
             cos=cos[:self.num_decode_tokens, ...],
             compress_sin=compress_sin,
@@ -1674,7 +1559,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 norm_eps=self.compressor_norm_eps,
                 rotary_mode=2,
                 enable_grad=False)
-
             # kv_compress_epilog
             torch_npu.npu_scatter_nd_update_(
                 kv_cache[0].view(-1, compressed_kv.shape[-1]),

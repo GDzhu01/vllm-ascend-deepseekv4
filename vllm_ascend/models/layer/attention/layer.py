@@ -9,7 +9,6 @@ import torch.nn as nn
 import vllm.envs as envs
 from vllm.attention.backends.abstract import AttentionBackend
 from vllm.attention.layer import _init_kv_cache_quant
-from vllm.attention.selector import get_attn_backend
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.config.vllm import VllmConfig
 from vllm.logger import init_logger
@@ -21,6 +20,7 @@ from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 
 from vllm_ascend.attention.abstract import DSAAttentionImpl
+from vllm_ascend.patch.platform.patch_selector import get_attn_backend
 
 logger = init_logger(__name__)
 

@@ -68,10 +68,10 @@ class MooncakeAgentMetadata(msgspec.Struct, omit_defaults=True, dict=True):
 @dataclass
 class ReqMeta:
     local_block_ids: list
-    local_state_id: int
+    local_state_id: Optional[int]
     num_external_tokens: int
     remote_block_ids: list
-    remote_state_id: int
+    remote_state_id: Optional[int]
     remote_host: str
     remote_port: int
     remote_engine_id: str
@@ -315,7 +315,7 @@ class KVCacheRecvingThread(threading.Thread):
                  vllm_config: VllmConfig,
                  use_mla: bool,
                  use_sparse: bool,
-                 is_dsv4: bool,
+                 use_compress: bool,
                  kv_caches: dict[str, Any],
                  prefill_pp_layer_partition: Optional[str] = None):
         super().__init__(daemon=True, name="KVCacheRecvingThread")
@@ -345,7 +345,7 @@ class KVCacheRecvingThread(threading.Thread):
         # TODO(jianzs): find a better way to detect MLA.
         self.use_mla = use_mla
         self.use_sparse = use_sparse
-        self.is_dsv4 = is_dsv4
+        self.use_compress = use_compress
 
         self.request_queue: queue.Queue[Any] = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=32)
@@ -377,9 +377,9 @@ class KVCacheRecvingThread(threading.Thread):
                 self.k_head_dim = self.model_config.hf_text_config.kv_lora_rank
                 self.v_head_dim = self.model_config.hf_text_config.qk_rope_head_dim
                 self.num_kv_heads = 1
-            elif self.is_dsv4:
-                self.k_head_dim = self.model_config.hf_text_config.head_dim
-                self.v_head_dim = self.model_config.hf_text_config.head_dim
+            elif self.use_compress:
+                self.k_head_dim = 1
+                self.v_head_dim = 1
                 self.num_kv_heads = 1
             else:
                 self.k_head_dim = self.model_config.hf_text_config.head_dim
@@ -392,9 +392,9 @@ class KVCacheRecvingThread(threading.Thread):
     def add_request(self,
                     request_id: str,
                     local_block_ids: list,
-                    local_state_id: int,
+                    local_state_id: Optional[int],
                     remote_block_ids: list,
-                    remote_state_id: int,
+                    remote_state_id: Optional[int],
                     remote_engine_id: str,
                     remote_host: str,
                     remote_handshake_port: int,
@@ -451,7 +451,8 @@ class KVCacheRecvingThread(threading.Thread):
         try:
             logger.debug(
                 f"Starting to transfer KV cache for request {request_id}.")
-            if set(self.layer_group_spec_idx.values()) == 1:
+            if set(self.layer_group_spec_idx.values()
+                   ) == 1 and not self.use_compress:
                 self._transfer_kv_cache(req_meta)
             else:
                 self._transfer_kv_cache_groups(req_meta)
@@ -494,7 +495,6 @@ class KVCacheRecvingThread(threading.Thread):
             self.proc_not_transfer_request[request_id] = False
 
     def _transfer_kv_cache_groups(self, req_meta: dict[str, Any]):
-        # TODO(zxr): check this function
         request_id = req_meta["request_id"]
         remote_block_ids = req_meta["remote_block_ids"]
         remote_state_id = req_meta["remote_state_id"]
@@ -503,14 +503,6 @@ class KVCacheRecvingThread(threading.Thread):
         remote_engine_id = req_meta["remote_engine_id"]
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
-
-        # TODO(zxr): add check for layer group block ids
-        # assert len(set(self.layer_group_spec_idx)) == len(local_block_ids), f"{len(set(self.layer_group_spec_idx))=} is not equal to {len(local_block_ids)=}"
-
-        # len_local_block_ids = [len(group_block_ids) for group_block_ids in local_block_ids]
-        # len_remote_block_ids = [len(group_block_ids) for group_block_ids in remote_block_ids]
-        # for local_len, remote_len in zip(len_local_block_ids, len_remote_block_ids):
-        #     assert local_len == remote_len, "local and remote block_ids_num is not equal."
 
         # Check if we have the remote metadata cached.
         if remote_engine_id not in self.kv_caches_base_addr or \
@@ -549,7 +541,7 @@ class KVCacheRecvingThread(threading.Thread):
                     dst = dst_layer_base_addr + remote_block_id[0] * block_len[
                         k]
                     length = block_len[k] * len(local_block_id)
-                    if self.is_dsv4:
+                    if self.use_compress:
                         if layer_group_idx == c4_group_id:
                             c4_length += length
                         elif layer_group_idx == c128_group_id:
@@ -558,8 +550,7 @@ class KVCacheRecvingThread(threading.Thread):
                     dst_list.append(dst)
                     length_list.append(length)
         # transfer state caches
-        # TODO(zxr): use a more robust method to inplace self.is_dsv4
-        if self.is_dsv4:
+        if self.use_compress:
             local_state_caches_base_addrs = \
                 self.state_caches_base_addr[self.local_engine_id][self.local_handshake_port]
             remote_state_caches_base_addrs = \
@@ -915,7 +906,7 @@ class MooncakeConnectorMetadata(KVConnectorMetadata):
         self,
         request_id: str,
         local_block_ids: list,
-        local_state_id: int,
+        local_state_id: Optional[int],
         num_external_tokens: int,
         kv_transfer_params: dict[str, Any],
     ):
@@ -924,7 +915,7 @@ class MooncakeConnectorMetadata(KVConnectorMetadata):
             local_state_id=local_state_id,
             num_external_tokens=num_external_tokens,
             remote_block_ids=kv_transfer_params["remote_block_ids"],
-            remote_state_id=kv_transfer_params["remote_state_id"],
+            remote_state_id=kv_transfer_params.get("remote_state_id", None),
             remote_engine_id=kv_transfer_params["remote_engine_id"],
             remote_host=kv_transfer_params["remote_host"],
             remote_port=kv_transfer_params["remote_port"],
@@ -1058,6 +1049,8 @@ class MooncakeConnectorScheduler:
         self.ascend_config = get_ascend_config()
         self.block_size = vllm_config.cache_config.block_size
         self.num_kv_cache_groups = len(self.kv_cache_config.kv_cache_groups)
+        self.use_compress = hasattr(vllm_config.model_config.hf_config,
+                                    "compress_ratios")
         self.engine_id = engine_id
         self.local_ip = get_ip()
         logger.info("Initializing Mooncake Scheduler %s", engine_id)
@@ -1185,13 +1178,22 @@ class MooncakeConnectorScheduler:
             # For the case where there are no remote blocks to pull
             # (block_ids is empty), we don't need to schedule
             # an async read on the worker side.
-            meta.add_new_req(
-                request_id=req_id,
-                local_block_ids=block_ids,
-                local_state_id=req.state_id,
-                num_external_tokens=num_external_tokens,
-                kv_transfer_params=req.kv_transfer_params,
-            )
+            if self.use_compress:
+                meta.add_new_req(
+                    request_id=req_id,
+                    local_block_ids=block_ids,
+                    local_state_id=req.state_id,
+                    num_external_tokens=num_external_tokens,
+                    kv_transfer_params=req.kv_transfer_params,
+                )
+            else:
+                meta.add_new_req(
+                    request_id=req_id,
+                    local_block_ids=block_ids,
+                    local_state_id=None,
+                    num_external_tokens=num_external_tokens,
+                    kv_transfer_params=req.kv_transfer_params,
+                )
 
         # Clear the list once workers start the transfers
         self._reqs_need_recv.clear()
@@ -1237,11 +1239,12 @@ class MooncakeConnectorScheduler:
         num_prompt_blocks = math.ceil(
             len(request.prompt_token_ids) / self.block_size)
 
+        state_id = request.state_id if self.use_compress else None
         return delay_free_blocks, dict(
             do_remote_prefill=True,
             do_remote_decode=False,
             remote_block_ids=computed_block_ids,
-            remote_state_id=request.state_id,
+            remote_state_id=state_id,
             remote_engine_id=self.engine_id,
             remote_host=self.side_channel_host,
             remote_port=self.side_channel_port,
@@ -1284,6 +1287,8 @@ class MooncakeConnectorWorker:
         self.vllm_config = vllm_config
         self.kv_cache_config = kv_cache_config
         self.num_kv_cache_groups = len(self.kv_cache_config.kv_cache_groups)
+        self.use_compress = hasattr(vllm_config.model_config.hf_config,
+                                    "compress_ratios")
         self.ascend_config = get_ascend_config()
         self.engine_id = engine_id
         self.tp_rank = get_tensor_model_parallel_rank()
@@ -1338,8 +1343,7 @@ class MooncakeConnectorWorker:
 
         # kv_transfer variables
         self.block_size = vllm_config.cache_config.block_size
-        if self.vllm_config.model_config.is_deepseek_mla or hasattr(
-                vllm_config.model_config.hf_config, "compress_ratios"):
+        if self.vllm_config.model_config.is_deepseek_mla or self.use_compress:
             self.tp_num_need_pulls = 1
         else:
             num_d_block_heads = max(1,
@@ -1394,10 +1398,9 @@ class MooncakeConnectorWorker:
         _, first_kv_cache_tuple = next(iter(kv_caches.items()))
         self.use_mla = first_kv_cache_tuple[0].size(
             -1) != first_kv_cache_tuple[1].size(-1) and len(
-                first_kv_cache_tuple) == 2 and state_caches is None
+                first_kv_cache_tuple) == 2 and not self.use_compress
         self.use_sparse = len(
-            first_kv_cache_tuple) == 3 and state_caches is None
-        self.is_dsv4 = state_caches is not None
+            first_kv_cache_tuple) == 3 and not self.use_compress
 
         self.num_blocks = self.kv_cache_config.num_blocks
         self.block_len: dict[str, list[int]] = {}
@@ -1407,7 +1410,7 @@ class MooncakeConnectorWorker:
 
         ptrs = []
         lengths = []
-        if self.is_dsv4:
+        if self.use_compress:
             compress_ratios = self.vllm_config.model_config.hf_config.compress_ratios
         for layer_name, kv_cache_tuple in kv_caches.items():
             self.block_len[layer_name] = []
@@ -1417,7 +1420,7 @@ class MooncakeConnectorWorker:
             for single_kv_cache in kv_cache_tuple:
                 block_start_rank = 1
                 num_blocks = self.num_blocks
-                if self.is_dsv4:
+                if self.use_compress:
                     layer_idx = self.get_layer_idx(layer_name)
                     num_blocks = num_blocks // compress_ratios[layer_idx]
                 block_shape = single_kv_cache.shape[block_start_rank:]
@@ -1431,8 +1434,7 @@ class MooncakeConnectorWorker:
                 logger.info("layer: %s, num_blocks: %s, block_shape: %s",
                             layer_name, num_blocks, block_shape)
 
-        if self.is_dsv4:
-            _, first_state_cache_tuple = next(iter(state_caches.items()))
+        if self.use_compress:
             max_num_seqs = self.vllm_config.scheduler_config.max_num_seqs
             for layer_name, state_cache_tuple in state_caches.items():
                 if isinstance(state_cache_tuple, (list, tuple)) is False:
@@ -1492,7 +1494,8 @@ class MooncakeConnectorWorker:
                 self.kv_caches_base_addr, self.block_len,
                 self.state_caches_base_addr, self.state_len,
                 self.layer_group_spec_idx, ready_event, self.vllm_config,
-                self.use_mla, self.use_sparse, self.is_dsv4, self.kv_caches)
+                self.use_mla, self.use_sparse, self.use_compress,
+                self.kv_caches)
             self.kv_recv_thread.start()
 
         start_wait_time = time.time()

@@ -33,7 +33,6 @@ import torch.distributed as dist
 import torch.nn as nn
 from vllm.attention.backends.abstract import AttentionBackend, AttentionType
 from vllm.attention.layer import Attention, MLAAttention
-from vllm.attention.selector import get_attn_backend
 from vllm.config import (CompilationMode, CUDAGraphMode, VllmConfig,
                          get_layers_from_vllm_config)
 from vllm.distributed import (get_tensor_model_parallel_world_size,
@@ -107,6 +106,7 @@ from vllm_ascend.eplb.eplb_updator import EplbUpdator
 from vllm_ascend.eplb.utils import model_register
 from vllm_ascend.models.layer.attention.layer import DSAAttention
 from vllm_ascend.ops.rotary_embedding import set_cos_and_sin, update_cos_sin
+from vllm_ascend.patch.platform.patch_selector import get_attn_backend
 from vllm_ascend.patch.worker.patch_module import patch_torch_npu_argsort
 from vllm_ascend.sample.sampler import AscendSampler
 from vllm_ascend.spec_decode import get_spec_decode_method
@@ -401,6 +401,20 @@ class NPUModelRunner(GPUModelRunner):
             (self.max_num_reqs,
              cdiv(self.model_config.max_model_len, self.block_size)),
             dtype=torch.int32,
+        )
+        kv_cache_spec = AttentionSpec(
+            block_size=self.block_size,
+            num_kv_heads=1,
+            head_size=512,
+            dtype=torch.bfloat16,
+        )
+        self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
+            kv_cache_spec,
+            list(self.runner_only_attn_layers),
+            self.vllm_config,
+            self.device,
+            AscendDSAMetadata,
+            supports_dcp_with_varlen=False,
         )
 
     def _init_device_properties(self) -> None:
@@ -1027,7 +1041,7 @@ class NPUModelRunner(GPUModelRunner):
                     sum(self.pcp_manager.num_pcp_pads_cpu[:num_reqs]))
 
                 blk_table = self.input_batch.block_table[kv_cache_group_id]
-                blk_table_tensor = blk_table.get_device_tensor(num_reqs)
+                blk_table_tensor = blk_table.get_device_tensor()
                 slot_mapping = blk_table.slot_mapping.gpu[:
                                                           maybe_pcp_full_tokens]
                 if self.pcp_size == 1:
@@ -1095,6 +1109,10 @@ class NPUModelRunner(GPUModelRunner):
                         self.query_start_loc.copy_to_gpu(num_reqs_padded + 1)
                         self.seq_lens.np[num_reqs:].fill(0)
                         self.seq_lens.copy_to_gpu(num_reqs_padded)
+                        self.swa_slot_mapping.np[
+                            total_num_scheduled_tokens:num_input_tokens +
+                            1].fill(-1)
+                        self.swa_slot_mapping.copy_to_gpu(num_input_tokens + 1)
 
                     # So we are trying to simulate the behavior of GPUModelRunner's
                     # prepare_inputs for uniform decode mode by padding query_start_loc
@@ -1113,7 +1131,7 @@ class NPUModelRunner(GPUModelRunner):
                     num_input_tokens=num_input_tokens,
                     actual_seq_lengths_q=self.actual_seq_lengths_q,
                     # TODO: change this to the right block table for linear attn
-                    block_table_tensor=blk_table_tensor,
+                    block_table_tensor=blk_table_tensor[:num_reqs],
                     slot_mapping=slot_mapping,
                     state_ids=state_ids,
                     swa_slot_mapping=self.swa_slot_mapping.
@@ -1232,22 +1250,8 @@ class NPUModelRunner(GPUModelRunner):
 
         # ------------- make swa metadata -----------------
         if self.use_compress:
-            kv_cache_spec = AttentionSpec(
-                block_size=self.block_size,
-                num_kv_heads=1,
-                head_size=512,
-                dtype=torch.bfloat16,
-            )
-            swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                kv_cache_spec,
-                list(self.runner_only_attn_layers),
-                self.vllm_config,
-                self.device,
-                AscendDSAMetadata,
-                supports_dcp_with_varlen=False,
-            )
             common_prefix_len = 0
-            swa_attn_metadata = swa_metadata_builder.build(
+            swa_attn_metadata = self.swa_metadata_builder.build(
                 common_prefix_len=common_prefix_len,
                 common_attn_metadata=common_attn_metadata)
             for layer_name in self.runner_only_attn_layers:
@@ -2134,7 +2138,7 @@ class NPUModelRunner(GPUModelRunner):
             for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
                 blk_table = self.input_batch.block_table[kv_cache_group_id]
-                block_table_tensor = blk_table.get_device_tensor(num_reqs)
+                block_table_tensor = blk_table.get_device_tensor()
                 slot_mapping = blk_table.slot_mapping.gpu[:num_tokens]
 
                 long_seq_metadata = None if self.pcp_size * self.dcp_size == 1 else self.pcp_manager.generate_pcp_metadata(
@@ -2225,21 +2229,7 @@ class NPUModelRunner(GPUModelRunner):
 
                 # ------------- make swa metadata -----------------
             if self.use_compress:
-                kv_cache_spec = AttentionSpec(
-                    block_size=self.block_size,
-                    num_kv_heads=1,
-                    head_size=512,
-                    dtype=torch.bfloat16,
-                )
-                swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                    kv_cache_spec,
-                    list(self.runner_only_attn_layers),
-                    self.vllm_config,
-                    self.device,
-                    AscendDSAMetadata,
-                    supports_dcp_with_varlen=False,
-                )
-                swa_attn_metadata = swa_metadata_builder.build_for_graph_capture(
+                swa_attn_metadata = self.swa_metadata_builder.build_for_graph_capture(
                     common_attn_metadata, attn_state)
                 for layer_name in self.runner_only_attn_layers:
                     attn_metadata[layer_name] = swa_attn_metadata
