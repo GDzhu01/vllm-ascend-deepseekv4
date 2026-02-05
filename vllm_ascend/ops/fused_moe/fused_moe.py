@@ -172,12 +172,10 @@ class AscendFusedMoE(FusedMoE):
     gate_stream: Optional[torch.npu.Stream] = None
 
     def __init__(self, *args, **kwargs):
-        use_hash = getattr(kwargs, "use_hash", None)
-        tid2eid = getattr(kwargs, 'tid2eid', None)
-        if use_hash is not None:
-            kwargs.pop('hash')
-        if tid2eid is not None:
-            kwargs.pop('tid2eid')
+        use_hash = kwargs.pop('hash') if hasattr(  # noqa: F841
+            kwargs, 'hash') else None
+        tid2eid = kwargs.pop('tid2eid') if hasattr(kwargs, 'tid2eid') else None
+
         super().__init__(*args, **kwargs)
 
         num_experts = kwargs["num_experts"]
