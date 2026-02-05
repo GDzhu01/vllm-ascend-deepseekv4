@@ -707,7 +707,7 @@ void SparseAttnSharedkvMetadataCpuKernel::AssignBlocksToCore(const SplitContext 
 {
     const CostInfo &costInfo = splitContext.costInfo;
     
-    int64_t avgCost = assignContext.unassignedCost / (coreNum_ - assignContext.curCoreIdx);
+    int64_t avgCost = assignContext.unassignedCost / (aicCoreNum_ - assignContext.curCoreIdx);
     assignContext.coreCache = {};
     if (!supportFd) {
         assignContext.coreCache.costLimit = std::max(avgCost, costInfo.maxS1GCost);
@@ -745,7 +745,7 @@ void SparseAttnSharedkvMetadataCpuKernel::CalcSplitPlan(int64_t costLimit, const
 {
     const CostInfo &costInfo = splitContext.costInfo;
 
-    if (coreNum_ == 0U) {
+    if (aicCoreNum_ == 0U) {
         return;
     }
     result.maxCost = 0U;
@@ -761,7 +761,7 @@ void SparseAttnSharedkvMetadataCpuKernel::CalcSplitPlan(int64_t costLimit, const
     CalcS1GCache(assignContext.curS1GIdx, splitContext, assignContext.batchCache, assignContext.s1GCache);
     assignContext.curS2Idx = assignContext.s1GCache.s2Start;
 
-    for (uint32_t i = 0; i < coreNum_; ++i) {
+    for (uint32_t i = 0; i < aicCoreNum_; ++i) {
         if (result.maxCost > costLimit) {
             return;
         }

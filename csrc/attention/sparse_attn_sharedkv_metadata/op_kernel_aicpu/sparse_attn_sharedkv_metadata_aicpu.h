@@ -315,7 +315,7 @@ private:
     uint32_t aivCoreNum_ = 48U;
 
     // attr
-    uint32_t coreNum_ = 24U; // new
+    // uint32_t coreNum_ = 24U; // new
     std::string socVersion_ = "ascend910B";
     int64_t preToken_ = 0; // new
     int64_t nextToken_ = 0; // new
