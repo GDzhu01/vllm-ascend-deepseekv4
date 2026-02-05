@@ -206,7 +206,6 @@ class KVCacheSendingLayerThread(threading.Thread):
         dst_list: list[str] = []
         length_list: list[int] = []
 
-        layer_idx = send_task.layer_idx
         layer_name = send_task.layer_name
         remote_block_ids = req_meta.remote_block_ids
         remote_state_id = req_meta.remote_state_id
@@ -214,9 +213,9 @@ class KVCacheSendingLayerThread(threading.Thread):
         local_block_ids = req_meta.local_block_ids
         local_state_id = req_meta.local_state_id
         local_kv_base_addr = self.kv_caches_base_addr
-
+        assert remote_kv_base_addrs is not None
         if self.pd_head_ratio == 1:
-            state_addr_start_idx = self.state_addr_start_idx[layer_idx]
+            state_addr_start_idx = self.state_addr_start_idx[layer_name]
             if state_addr_start_idx == len(
                     local_kv_base_addr[layer_name]
             ) and local_kv_base_addr[layer_name]:

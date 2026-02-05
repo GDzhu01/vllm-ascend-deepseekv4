@@ -713,6 +713,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             compressed_tokens_start:compressed_tokens_end +
             compressed_tokens_start]
 
+        assert self.start_pos_prefill is not None
         self.start_pos_prefill.fill_(0)
         seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
         self.start_pos_prefill[:num_prefill] = self.seq_lens[
@@ -932,6 +933,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         max_seqlen_kv = torch.max(
             common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
         max_seqlen_q = torch.max(query_start_loc_cpu).item()
+
+        assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         self.start_pos_decode[:self.
@@ -947,6 +950,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
+        assert self.decode_sas_c1_metadata is not None
         if self.compressor_ratio == 1:
             self.decode_sas_c1_metadata[:1024] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                 num_heads_q=n_local_heads,
@@ -1018,6 +1022,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 has_cmp_kv=True,
                 device=str(self.seqused_q.device))
 
+        assert self.decode_qli_metadata is not None
         self.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=query_start_loc[1:].clone(),
             actual_seq_lengths_key=self.seq_lens[:self.num_decodes].clone(),
