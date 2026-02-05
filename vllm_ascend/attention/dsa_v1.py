@@ -196,6 +196,8 @@ class AscendDSAPrefillMetadata:
     sas_c4_metadata: torch.Tensor = None
     sas_c128_metadata: torch.Tensor = None
     qli_metadata: torch.Tensor = None
+    cu_c4_cmp_seqlen_list: torch.Tensor = None
+    cu_c128_cmp_seqlen_list: torch.Tensor = None
 
 @dataclass
 class AscendDSADecodeMetadata:
@@ -386,6 +388,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.cu_seqlens_ori_kv = torch.tensor([], device=self.device)
         self.cu_seqlens_cmp_kv = torch.tensor([], device=self.device)
         self.seqused_q = torch.tensor([], device=self.device)
+        ascend_config = get_ascend_config()
+        self.enable_kv_tnd = ascend_config.enable_kv_tnd
 
 
     @classmethod
@@ -621,6 +625,12 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             pad_right = target_shape[0] - input_positions.shape[0]
             pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
             return pad_positions
+        
+        def _get_cmp_seq_lens(prefill_seq_lens, compress_ratio):
+            _cmp_seq_lens = prefill_seq_lens // compress_ratio
+            return torch.concat(
+                (torch.tensor([0], device=_cmp_seq_lens.device), 
+                torch.cumsum(_cmp_seq_lens, -1)), dim=-1)
 
         compress_cos, compress_sin = get_cos_and_sin_dsa(_get_padded_compressed_position(prefill_input_positions, self.compressor_ratio))
 
@@ -669,15 +679,20 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = 512
         
-        
-        
+        if self.enable_kv_tnd:
+            cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
+            cu_c128_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 128)
+        else:
+            cu_c4_cmp_seqlen_list = None
+            cu_c128_cmp_seqlen_list = None
+
         sas_c1_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
-            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            cu_seqlens_ori_kv = prefill_query_start_loc,
+            cu_seqlens_cmp_kv = None,
             seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
@@ -687,7 +702,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
-            layout_kv="PA_ND",
+            layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
             has_ori_kv=True,
             has_cmp_kv=False,
             device=str(self.seqused_q.device)
@@ -698,8 +713,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
-            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            cu_seqlens_ori_kv = prefill_query_start_loc,
+            cu_seqlens_cmp_kv = cu_c4_cmp_seqlen_list,
             seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
@@ -713,7 +728,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
-            layout_kv="PA_ND",
+            layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
             has_ori_kv=True,
             has_cmp_kv=True,
             device=str(self.seqused_q.device)
@@ -724,8 +739,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
             cu_seqlens_q=prefill_query_start_loc,
-            cu_seqlens_ori_kv = self.cu_seqlens_ori_kv,
-            cu_seqlens_cmp_kv = self.cu_seqlens_cmp_kv,
+            cu_seqlens_ori_kv = prefill_query_start_loc,
+            cu_seqlens_cmp_kv = cu_c128_cmp_seqlen_list,
             seqused_q = self.seqused_q,
             seqused_kv=self.seq_lens[reqs_start:],
             max_seqlen_q=seq_lens_q.max(),
@@ -737,7 +752,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             ori_win_left=self.model_config.hf_config.window_size - 1,
             ori_win_right=0,
             layout_q="TND",
-            layout_kv="PA_ND",
+            layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
             has_ori_kv=True,
             has_cmp_kv=True,
             device=str(self.seqused_q.device)
@@ -790,7 +805,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             sas_c1_metadata=sas_c1_metadata,
             sas_c4_metadata=sas_c4_metadata,
             sas_c128_metadata=sas_c128_metadata,
-            qli_metadata=qli_metadata
+            qli_metadata=qli_metadata,
+            cu_c4_cmp_seqlen_list=cu_c4_cmp_seqlen_list,
+            cu_c128_cmp_seqlen_list=cu_c128_cmp_seqlen_list
         )
 
     def build_decode_metadata(
@@ -1086,6 +1103,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         ascend_config = get_ascend_config()
         self.multistream_dsa_preprocess = ascend_config.multistream_dsa_preprocess
+        self.enable_kv_tnd = ascend_config.enable_kv_tnd
 
         self.vllm_config = get_current_vllm_config()
 
@@ -1322,13 +1340,18 @@ class AscendDSAImpl(DSAAttentionImpl):
                             compressed_kv_slot_mapping.unsqueeze(-1),
                             compressed_kv.view(-1, compressed_kv.shape[-1]))
 
-        sliding_window_kv_padded = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
+        if self.enable_kv_tnd:
+            sliding_window_kv = kv
+        else:
+            sliding_window_kv = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
+
         if self.compress_ratio == 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
+                ori_kv=sliding_window_kv,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv=actual_seq_lengths_query,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c1_metadata,
@@ -1337,17 +1360,19 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
-                layout_kv="PA_ND"
+                layout_kv="TND" if self.enable_kv_tnd else "PA_ND"
             )[0]   
         elif self.compress_ratio == 4:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
-                cmp_kv=kv_cache[0],
+                ori_kv=sliding_window_kv,
+                cmp_kv=compressed_kv.unsqueeze(1) if self.enable_kv_tnd else kv_cache[0],
                 cmp_sparse_indices=compress_topk_idxs,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv=actual_seq_lengths_query,
+                cu_seqlens_cmp_kv=attn_metadata.prefill.cu_c4_cmp_seqlen_list,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c4_metadata,
@@ -1358,16 +1383,18 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
-                layout_kv="PA_ND"
+                layout_kv="TND" if self.enable_kv_tnd else "PA_ND"
             )[0]
         else:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
-                ori_kv=sliding_window_kv_padded,
-                cmp_kv=kv_cache[0],
+                ori_kv=sliding_window_kv,
+                cmp_kv=compressed_kv.unsqueeze(1) if self.enable_kv_tnd else kv_cache[0],
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
+                cu_seqlens_ori_kv=actual_seq_lengths_query,
+                cu_seqlens_cmp_kv=attn_metadata.prefill.cu_c128_cmp_seqlen_list,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c128_metadata,
@@ -1378,7 +1405,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
                 layout_q="TND",
-                layout_kv="PA_ND"
+                layout_kv="TND" if self.enable_kv_tnd else "PA_ND"
             )[0]
         return attn_output
 

@@ -152,6 +152,7 @@ class AscendConfig:
                 raise NotImplementedError(
                     "enable_kv_nz is only supported in pd scenario and can "
                     "only be used in D node.")
+        self.enable_kv_tnd = additional_config.get("enable_kv_tnd", False)
 
     def refresh_eplb_config(self, config):
         self.expert_map_path = config.get("expert_map_path", None)
