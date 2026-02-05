@@ -1,5 +1,5 @@
 import math
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -70,7 +70,7 @@ def get_cos_and_sin_dsa(positions: Union[torch.Tensor, Dict[str,
     else:
         pos_map = positions
 
-    batch_result = {}
+    batch_result: dict[Any, Any] = {}
 
     for config_key, registered_groups in _ROPE_STATE.registry_summary.items():
 

@@ -57,17 +57,17 @@ class MooncakeAgentMetadata(msgspec.Struct, omit_defaults=True, dict=True):
 class ReqMeta:
     local_block_ids: list[int]
     local_state_id: int = -1
-    token_ids: Optional[list[int]]
+    token_ids: Optional[list[int]] = None
     # Not None if layer-wise is disabled
-    remote_block_ids: list[int]
+    remote_block_ids: list[int] = field(default_factory=list)
     remote_state_id: int = -1
-    remote_engine_id: Optional[str]
-    remote_host: Optional[str]
-    remote_port: Optional[int]
-    remote_te_rpc_port: Optional[int]
-    remote_kv_caches_base_addr: Optional[dict[str, list[int]]]
-    metaserver: Optional[str]
-    chunk_finish: Optional[bool]
+    remote_engine_id: Optional[str] = None
+    remote_host: Optional[str] = None
+    remote_port: Optional[int] = None
+    remote_te_rpc_port: Optional[int] = None
+    remote_kv_caches_base_addr: Optional[dict[str, list[int]]] = None
+    metaserver: Optional[str] = None
+    chunk_finish: Optional[bool] = None
 
 
 @dataclass
@@ -216,16 +216,19 @@ class KVCacheSendingLayerThread(threading.Thread):
         local_kv_base_addr = self.kv_caches_base_addr
 
         if self.pd_head_ratio == 1:
-            state_addr_start_idx = self.state_addr_start_idx[layer_idx]
-            if state_addr_start_idx == len(
-                    local_kv_base_addr[layer_name]
-            ) and local_kv_base_addr[layer_name]:
+            state_addr_start_idx = self.state_addr_start_idx[
+                layer_name]  # type: ignore
+            if (remote_kv_base_addrs is not None and state_addr_start_idx
+                    == len(local_kv_base_addr[layer_name])
+                    and local_kv_base_addr[layer_name]):
                 # layer with only kv caches, no state cache
                 layer_local_kv_base_addr = local_kv_base_addr[layer_name]
                 layer_remote_kv_base_addr = remote_kv_base_addrs[layer_name]
                 kv_block_len = self.block_len[layer_name]
                 layer_local_state_base_addr = []
-            elif state_addr_start_idx == 0 and local_kv_base_addr[layer_name]:
+            elif (remote_kv_base_addrs is not None
+                  and state_addr_start_idx == 0
+                  and local_kv_base_addr[layer_name]):
                 # layer with only state cache, no kv cache
                 layer_local_state_base_addr = local_kv_base_addr[layer_name]
                 layer_remote_state_base_addr = remote_kv_base_addrs[layer_name]
@@ -233,6 +236,7 @@ class KVCacheSendingLayerThread(threading.Thread):
                 layer_local_kv_base_addr = []
             else:
                 # layer with both kv cache and state cache
+                assert remote_kv_base_addrs is not None
                 layer_local_kv_base_addr = local_kv_base_addr[
                     layer_name][:state_addr_start_idx]
                 layer_remote_kv_base_addr = remote_kv_base_addrs[
@@ -289,6 +293,7 @@ class KVCacheSendingLayerThread(threading.Thread):
                 self.v_buffer.data_ptr()
             ]
 
+            assert remote_kv_base_addrs is not None
             layer_remote_kv_base_addr = remote_kv_base_addrs[layer_name]
 
             src_list, dst_list, length_list = [], [], []
