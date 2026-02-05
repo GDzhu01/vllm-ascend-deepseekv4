@@ -1008,6 +1008,7 @@ class NPUModelRunner(GPUModelRunner):
         # Prepare the attention metadata for each KV cache group and make layers
         # in the same group share the same metadata.
         if self.use_compress:
+            assert num_scheduled_tokens_compressed_list is not None
             total_num_scheduled_tokens_compressed_list = [
                 sum(num_scheduled_tokens_compressed)
                 for num_scheduled_tokens_compressed in

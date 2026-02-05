@@ -114,16 +114,16 @@ def get_cos_and_sin_dsa(positions: Union[torch.Tensor, Dict[str,
 class ComplexExpRotaryEmbedding(nn.Module):
 
     def __init__(
-            self,
-            vllm_config: VllmConfig,
-            layername: str,
-            head_size: int,
-            rotary_dim: int,
-            max_position_embeddings: int,
-            base: int,
-            scaling_factor: float,
-            rope_groups: List[str] = ("default", ),
-            **extra_kwargs,
+        self,
+        vllm_config: VllmConfig,
+        layername: str,
+        head_size: int,
+        rotary_dim: int,
+        max_position_embeddings: int,
+        base: int,
+        scaling_factor: float,
+        rope_groups: List[str] = ["default"],
+        **extra_kwargs,
     ) -> None:
         super().__init__()
         self.layername = layername

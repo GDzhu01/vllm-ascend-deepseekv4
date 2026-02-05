@@ -1073,6 +1073,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 "Currently we only support building dummy metadata for DecodeOnly and SpecDecoding state"
             )
 
+        assert attn_metadata is not None
         attn_metadata.attn_state = attn_state
         return attn_metadata
 

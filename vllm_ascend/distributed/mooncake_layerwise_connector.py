@@ -206,7 +206,6 @@ class KVCacheSendingLayerThread(threading.Thread):
         dst_list: list[str] = []
         length_list: list[int] = []
 
-        layer_idx = send_task.layer_idx
         layer_name = send_task.layer_name
         remote_block_ids = req_meta.remote_block_ids
         remote_state_id = req_meta.remote_state_id
@@ -1013,15 +1012,15 @@ class MooncakeLayerwiseConnectorWorker:
         self.is_dsv4 = state_caches is not None
 
         self.num_blocks = self.kv_cache_config.num_blocks
-        self.block_len = dict[str, list[int]]()
-        self.kv_caches_base_addr = dict[str, list[int]]()
-        self.state_addr_start_idx = dict[str, int]()
-        ptrs = []
-        lengths = []
+        self.block_len: dict[str, list[int]] = {}
+        self.kv_caches_base_addr: dict[str, list[int]] = {}
+        self.state_addr_start_idx: dict[str, int] = {}
+        ptrs: list[int] = []
+        lengths: list[int] = []
 
         for layer_name, kv_cache_tuple in kv_caches.items():
             self.block_len[layer_name] = []
-            self.remote_kv_caches_base_addr[layer_name] = []
+            self.remote_kv_caches_base_addr[layer_name] = {}
             self.state_addr_start_idx[layer_name] = len(kv_cache_tuple)
             for single_kv_cache in kv_cache_tuple:
                 block_start_rank = 1
