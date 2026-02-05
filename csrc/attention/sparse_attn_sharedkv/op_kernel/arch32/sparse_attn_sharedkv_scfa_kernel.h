@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -706,6 +706,8 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::ProcessBalance()
 
             uint32_t oriS2Size = tempLoopInfo.oriMaskRight - tempLoopInfo.oriMaskLeft + 1;
             uint32_t oriSplitNum = 0;
+            uint32_t cmpSplitNum = 0;
+            uint32_t cmpS2Size = 0;
             bool isEnd = (bN2LoopIdx + 1 == constInfo.bN2End) && (gS1LoopIdx + 1 == gS1LoopEnd);
 
             if (tempLoopInfo.curActSeqLenIsZero) {
@@ -717,10 +719,10 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::ProcessBalance()
                 }
             } else {
                 oriSplitNum = CeilDiv(oriS2Size, constInfo.s2BaseSize);
+                cmpS2Size = tempLoopInfo.actCmpS2Size;
+                cmpSplitNum = CeilDiv(cmpS2Size, constInfo.s2BaseSize);
             }
             
-            uint32_t cmpS2Size = tempLoopInfo.actCmpS2Size;
-            uint32_t cmpSplitNum = CeilDiv(cmpS2Size, constInfo.s2BaseSize);
             uint32_t s2SplitNum = oriSplitNum + cmpSplitNum;
             constexpr uint32_t V0_SPLIT = 32; // align to 32
             uint32_t v0OriSize = CeilDiv(oriS2Size * cmpS2Size, oriS2Size + cmpS2Size);

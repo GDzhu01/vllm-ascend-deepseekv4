@@ -1,13 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the
- * "License"). Please refer to the License for details. You may not use this
- * file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
- * "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
- * FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
- * for the full text of the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -47,8 +45,8 @@ enum class SparseMode : uint8_t {
 };
 
 enum class ValidSocVersion {
-    ASCEND910B = 0,
-    ASCEND910D,
+    ASCEND910 = 0,
+    ASCEND950,
     RESERVED_VERSION = 99999
 };
 
@@ -233,6 +231,12 @@ public:
 private:
     bool Prepare(CpuKernelContext &ctx);
     bool ParamsCheck();
+    void GetQueryBatchSize(uint32_t &bSize);
+    void GetKvBatchSize(uint32_t &bSize);
+    bool CheckSingleParam();
+    bool CheckExistence();
+    bool CheckConsistency();
+    bool CheckFeature();
     bool ParamsInit();
     bool BalanceSchedule(SplitResult &splitRes);
     bool GenMetaData(SplitResult &splitRes);
@@ -302,7 +306,7 @@ private:
     uint32_t headDim_ = 0;
     uint32_t oriTopK_ = 0;
     uint32_t cmpTopK_ = 0;
-    uint32_t cmpRatio_ = -1;
+    int32_t cmpRatio_ = -1;
     uint32_t oriMaskMode_ = 4;
     uint32_t cmpMaskMode_ = 3;
     int64_t winLeft_ = 127;
@@ -315,7 +319,6 @@ private:
     uint32_t aivCoreNum_ = 48U;
 
     // attr
-    // uint32_t coreNum_ = 24U; // new
     std::string socVersion_ = "ascend910B";
     int64_t preToken_ = 0; // new
     int64_t nextToken_ = 0; // new

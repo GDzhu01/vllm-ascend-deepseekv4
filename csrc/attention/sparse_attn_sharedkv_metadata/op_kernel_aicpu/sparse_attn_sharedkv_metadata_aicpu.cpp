@@ -1,7 +1,7 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
  * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
@@ -70,30 +70,193 @@ bool SparseAttnSharedkvMetadataCpuKernel::Prepare(
     GetAttrValueOpt(ctx, "has_ori_kv", hasOriKv_);
     GetAttrValueOpt(ctx, "has_cmp_kv", hasCmpKv_);
 
+  return (ParamsCheck() && ParamsInit());
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::CheckSingleParam() {
+    // 1. 基础输出校验
+    KERNEL_CHECK_NULLPTR(metaData_, false, "metadata is null");
+    auto metaShape = metaData_->GetTensorShape();
+    KERNEL_CHECK_NULLPTR(metaShape, false, "shape of metadata is null");
+    KERNEL_CHECK_NULLPTR(metaData_->GetData(), false, "data of metadata is null");
+    // 2. 核心数校验
+    if (aicCoreNum_ == 0 || aivCoreNum_ == 0 || (aivCoreNum_ % aicCoreNum_ != 0)) {
+        KERNEL_LOG_ERROR("Core num invalid: aic:%u, aiv:%u", aicCoreNum_, aivCoreNum_);
+        return false;
+    }
+    // 3. Layout 字符串校验
+    if (layoutQuery_ != "TND" && layoutQuery_ != "BSND") {
+        KERNEL_LOG_ERROR("For query, layout must be TND or BSND!");
+        return false;
+    }
+    if (layoutKv_ != "TND" && layoutKv_ != "BSND" && layoutKv_ != "PA_ND") {
+        KERNEL_LOG_ERROR("For key and value, layout must be TND, BSND or PA_ND!");
+        return false;
+    }
+    // 4. 数值与模式校验
+    if (layoutQuery_ == "BSND" && batchSize_ < 1) {
+        KERNEL_LOG_ERROR("For query, when layout is BSND, batchSize_ should not be 0!");
+        return false;
+    }
+    if (oriMaskMode_ != static_cast<uint32_t>(SparseMode::BAND)) {
+        KERNEL_LOG_ERROR("oriMaskMode_ should be 4, but got %u", oriMaskMode_);
+        return false;
+    }
+    if (cmpMaskMode_ != static_cast<uint32_t>(SparseMode::RIGHT_DOWN_CAUSAL)) {
+        KERNEL_LOG_ERROR("cmpMaskMode_ should be 3, but got %u", cmpMaskMode_);
+        return false;
+    }
+    return true;
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::CheckExistence() {
+    auto isInvalid = [](Tensor* t) { return t == nullptr || t->GetData() == nullptr; };
+    // 1. Query 存在性逻辑
+    if (layoutQuery_ == "TND") {
+        if (isInvalid(actSeqLenQ_) && isInvalid(seqUsedQ_)) {
+            KERNEL_LOG_ERROR("For query TND, actSeqLenQ or seqUsedQ must be provided!");
+            return false;
+        }
+    } else if (layoutQuery_ == "BSND") {
+        if (querySeqSize_ == 0 && isInvalid(seqUsedQ_)) {
+            KERNEL_LOG_ERROR("For query BSND, querySeqSize or seqUsedQ must be provided!");
+            return false;
+        }
+    }
+    // 2. KV 存在性逻辑
+    if (layoutKv_ == "TND") {
+        if (isInvalid(actSeqLenOriKv_) && isInvalid(seqUsedKv_)) {
+            KERNEL_LOG_ERROR("For KV TND, actSeqLenOriKv or seqUsedKv must be provided!");
+            return false;
+        }
+    } else if (layoutKv_ == "PA_ND") {
+        if (isInvalid(seqUsedKv_)) {
+            KERNEL_LOG_ERROR("For KV PA_ND, seqUsedKv must be provided!");
+            return false;
+        }
+    } else if (layoutKv_ == "BSND") {
+        if (kvSeqSize_ == 0 && isInvalid(seqUsedKv_)) {
+            KERNEL_LOG_ERROR("For KV BSND, KvSeqSize or seqUsedKv must be provided!");
+            return false;
+        }
+    }
+    return true;
+}
+
+void SparseAttnSharedkvMetadataCpuKernel::GetQueryBatchSize(uint32_t &bSize)
+{
+    // 1. 如果seqUsedQ_ 传了，使用seqUsedQ_获取BatchSize
+    if (seqUsedQ_ != nullptr && seqUsedQ_->GetData() != nullptr) {
+        if (seqUsedQ_->GetTensorShape() != nullptr) {
+            bSize = seqUsedQ_->GetTensorShape()->GetDimSize(0);
+            return;
+        }
+    }
+    // 2. seqUsedQ_ 没传，判断 Layout
+    if (layoutQuery_ == "TND") {
+        // 如果是 TND，尝试使用 actSeqLenQ_获取BatchSize
+        if (actSeqLenQ_ != nullptr && actSeqLenQ_->GetData() != nullptr) {
+            if (actSeqLenQ_->GetTensorShape() != nullptr) {
+                bSize = actSeqLenQ_->GetTensorShape()->GetDimSize(0) - 1U;
+                return;
+            }
+        }
+    }
+    // 3. 如果不是 TND，或者 actSeqLenQ_ 为空，使用batchSize_
+    bSize = batchSize_;
+}
+
+void SparseAttnSharedkvMetadataCpuKernel::GetKvBatchSize(uint32_t &bSize)
+{
+    // 1. 如果 seqUsedKv_ 传了，直接使用
+    if (seqUsedKv_ != nullptr && seqUsedKv_->GetData() != nullptr) {
+        if (seqUsedKv_->GetTensorShape() != nullptr) {
+            bSize = seqUsedKv_->GetTensorShape()->GetDimSize(0);
+            return;
+        }
+    }
+    // 2. seqUsedKv_ 没传，判断 Layout
+    if (layoutKv_ == "TND") {
+        // 如果是 TND，尝试使用 actSeqLenOriKv_
+        if (actSeqLenOriKv_ != nullptr && actSeqLenOriKv_->GetData() != nullptr) {
+            if (actSeqLenOriKv_->GetTensorShape() != nullptr) {
+                bSize = actSeqLenOriKv_->GetTensorShape()->GetDimSize(0) - 1U;
+                return;
+            }
+        }
+    }
+    // 3. 如果不是 TND，或者 actSeqLenOriKv_ 为空，使用 kvSeqSize_
+    bSize = batchSize_;
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::CheckConsistency() {
+    uint32_t queryBatchSize = 0;
+    uint32_t kvBatchSize = 0;
+    GetQueryBatchSize(queryBatchSize);
+    GetKvBatchSize(kvBatchSize);
+    if (layoutQuery_ == "TND") {
+        if (queryBatchSize != kvBatchSize) {
+            KERNEL_LOG_ERROR("For TND, the dim of q tensor should consist with kv tensor");
+            return false;
+        }
+    }
+    if (layoutQuery_ == "BSND") {
+        if (batchSize_ != queryBatchSize || queryBatchSize != kvBatchSize || batchSize_ != kvBatchSize) {
+            KERNEL_LOG_ERROR("For BSND, batch_size should consist with the dim of q tensor or kv tensor");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::CheckFeature() {
+    // 压缩率校验
+    if (hasCmpKv_) {
+        if (cmpRatio_ <= 1) {
+            KERNEL_LOG_ERROR("When cmp_kv is enabled, cmpRatio_ must be assigned!");
+            return false;
+        }
+        // 校验 2 的幂次方: 1, 2, 4, ..., 128
+        bool isPowTwo = (cmpRatio_ > 0) && ((cmpRatio_ & (cmpRatio_ - 1)) == 0);
+        if (cmpRatio_ < 1 || cmpRatio_ > 128 || !isPowTwo) {
+            KERNEL_LOG_ERROR("Compression ratio %u invalid! Must be 4 or 128!", cmpRatio_);
+            return false;
+        }
+    } else if (cmpRatio_ > 1) {
+        KERNEL_LOG_ERROR("When cmp_kv is not enabled, cmpRatio_ should be -1!");
+        return false;
+    }
+    return true;
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::ParamsCheck() {
+    return (CheckSingleParam() && CheckExistence() && CheckConsistency() && CheckFeature());
+}
+
+ValidSocVersion SparseAttnSharedkvMetadataCpuKernel::ProcessSocVersion() {
+    const std::string ascend950 = "Ascend910_95";
+    if (socVersion_.find(ascend950) != std::string::npos) {
+        return ValidSocVersion::ASCEND950;
+    } else {
+        return ValidSocVersion::ASCEND910;
+    }
+    return ValidSocVersion::RESERVED_VERSION;
+}
+
+bool SparseAttnSharedkvMetadataCpuKernel::ParamsInit()
+{
+    if (layoutKv_ == "TND") {
+        if (seqUsedQ_ != nullptr && seqUsedQ_->GetData() != nullptr) {
+            batchSize_ = static_cast<uint32_t>(seqUsedQ_->GetTensorShape()->GetDimSize(0));
+        } else {
+            batchSize_ = static_cast<uint32_t>(actSeqLenQ_->GetTensorShape()->GetDimSize(0) - 1U);
+        }
+    }
     sparseMode_ = oriMaskMode_;
     preToken_ = (winLeft_ > -1) ? winLeft_ : INT64_MAX;
     nextToken_ = 0;
     attentionMode_ = 1;
     isS1G_ = (layoutQuery_ == "BSND" || layoutQuery_ == "BSH" || layoutQuery_ == "TND");
-
-  return (ParamsCheck() && ParamsInit());
-}
-
-bool SparseAttnSharedkvMetadataCpuKernel::ParamsCheck() {
-    return true;
-}
-
-ValidSocVersion SparseAttnSharedkvMetadataCpuKernel::ProcessSocVersion() {
-    const std::string ascend910D = "Ascend910_95";
-    if (socVersion_.find(ascend910D) != std::string::npos) {
-        return ValidSocVersion::ASCEND910D;
-    } else {
-        return ValidSocVersion::ASCEND910B;
-    }
-    return ValidSocVersion::RESERVED_VERSION;
-}
-
-bool SparseAttnSharedkvMetadataCpuKernel::ParamsInit() {
     groupSize_ = queryHeadNum_ / kvHeadNum_;
     if (cmpRatio_ > 1) {
         if (cmpTopK_ > 0) {
@@ -103,7 +266,7 @@ bool SparseAttnSharedkvMetadataCpuKernel::ParamsInit() {
         }
     }
     ValidSocVersion validSocVersion = ProcessSocVersion();
-    if (validSocVersion == ValidSocVersion::ASCEND910B) {
+    if (validSocVersion == ValidSocVersion::ASCEND910) {
         uint32_t MBaseBlockLen = 128U;
         uint32_t s1BlockLen = MBaseBlockLen / groupSize_;
         if (isSCFA) {
@@ -112,7 +275,7 @@ bool SparseAttnSharedkvMetadataCpuKernel::ParamsInit() {
         mBaseSize_ = groupSize_ * s1BlockLen;
         s2BaseSize_ = 512U;
         gS1BaseSizeOfFd_ = 8U;
-    } else if (validSocVersion == ValidSocVersion::ASCEND910D){
+    } else if (validSocVersion == ValidSocVersion::ASCEND950){
         mBaseSize_ = 64U;
         s2BaseSize_ = 128U;
         gS1BaseSizeOfFd_ = 8U;
