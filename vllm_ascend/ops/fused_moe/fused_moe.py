@@ -42,14 +42,14 @@ from vllm_ascend.ops.fused_moe.experts_selector import (select_experts,
 from vllm_ascend.ops.fused_moe.moe_comm_method import (AllGatherCommImpl,
                                                        FusedExpertsResult,
                                                        setup_moe_comm_method)
-from vllm_ascend.ops.fused_moe.prepare_finalize import QuantType
 from vllm_ascend.quantization.w4a8_dynamic import \
     AscendW4A8DynamicFusedMoEMethod
 from vllm_ascend.quantization.w8a8_dynamic import \
     AscendW8A8DynamicFusedMoEMethod
-from vllm_ascend.utils import (AscendDeviceType, enable_sp,
-                               get_ascend_device_type, maybe_trans_nz,
-                               npu_stream_switch, shared_expert_dp_enabled,
+from vllm_ascend.utils import (AscendDeviceType, QuantType, enable_sp,
+                               get_ascend_device_type, is_w8a8_dynamic,
+                               maybe_trans_nz, npu_stream_switch,
+                               shared_expert_dp_enabled,
                                shared_experts_calculation_stream,
                                vllm_version_is)
 
@@ -266,6 +266,7 @@ class AscendFusedMoE(FusedMoE):
 
         setup_moe_comm_method(self.moe_config)
         self.quant_type = self._get_quant_type()
+        is_w8a8_dynamic(self.quant_type)
 
     def _get_quant_type(self) -> QuantType:
         quant_method = self.quant_method

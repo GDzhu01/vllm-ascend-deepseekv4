@@ -138,9 +138,12 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
             prefill_context_parallel_metadata,
             max_seq_len=self.max_seq_len,
             state_ids=self.state_ids,
-            swa_slot_mapping=self.swa_slot_mapping,
-            swa_block_table=self.swa_block_table,
-            state_block_table=self.state_block_table)
+            swa_slot_mapping=self.swa_slot_mapping[:num_actual_tokens]
+            if self.swa_slot_mapping is not None else None,
+            swa_block_table=self.swa_block_table[:num_actual_reqs]
+            if self.swa_block_table is not None else None,
+            state_block_table=self.state_block_table[:num_actual_reqs]
+            if self.state_block_table is not None else None)
 
 
 def filter_chunked_req_indices(

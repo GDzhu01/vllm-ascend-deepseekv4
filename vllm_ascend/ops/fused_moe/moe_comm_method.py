@@ -28,10 +28,11 @@ from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.ops.fused_moe.moe_mlp import unified_apply_mlp
 from vllm_ascend.ops.fused_moe.prepare_finalize import (
     PrepareAndFinalize, PrepareAndFinalizeWithAll2All,
-    PrepareAndFinalizeWithAllGather, PrepareAndFinalizeWithMC2, QuantType)
+    PrepareAndFinalizeWithAllGather, PrepareAndFinalizeWithMC2)
 from vllm_ascend.ops.fused_moe.token_dispatcher import (
     MoETokenDispatcher, TokenDispatcherWithAll2AllV,
     TokenDispatcherWithAllGather, TokenDispatcherWithMC2)
+from vllm_ascend.utils import QuantType
 
 _MoECommMethods: Dict[Optional[MoECommType], MoECommMethod] = {}
 
@@ -267,6 +268,9 @@ class FusedMC2CommImpl(MoECommMethod):
     This implementation uses the MC2 communication method, which is optimized for
     Communication and Computation parallelism on Ascend devices.
     """
+
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
 
     def _get_token_dispatcher(self):
         return TokenDispatcherWithMC2()
