@@ -1229,11 +1229,16 @@ class MooncakeConnectorScheduler:
             len(request.prompt_token_ids) / self.block_size)
 
         state_id = request.state_id if self.use_compress else None
+        new_token_id = None
+        if self.use_compress:
+            assert len(request.output_token_ids) == 1, "Prefill request generate more than one new tokens."
+            new_token_id = request.output_token_ids[0]
         return delay_free_blocks, dict(
             do_remote_prefill=True,
             do_remote_decode=False,
             remote_block_ids=computed_block_ids,
             remote_state_id=state_id,
+            new_token_id=new_token_id,
             remote_engine_id=self.engine_id,
             remote_host=self.side_channel_host,
             remote_port=self.side_channel_port,
