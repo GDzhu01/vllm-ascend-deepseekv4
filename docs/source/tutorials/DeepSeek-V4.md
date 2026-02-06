@@ -162,6 +162,8 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
 ```
 
+::::
+
 ::::{tab-item} A3 series
 :sync: A3
 
@@ -198,6 +200,8 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --speculative-config '{"num_speculative_tokens": 1, "method": "deepseek_mtp"}' \
 --additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
 ```
+::::
+:::::
 
 ### Prefill-Decode Disaggregation
 
