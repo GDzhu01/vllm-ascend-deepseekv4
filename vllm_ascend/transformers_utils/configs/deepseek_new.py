@@ -3,7 +3,7 @@
 from transformers import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 
-class DeepseekV4Config(PretrainedConfig):
+class DeepseekNewConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`DeepseekV3Model`]. It is used to instantiate an DeepSeek
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -101,16 +101,16 @@ class DeepseekV4Config(PretrainedConfig):
             The dropout ratio for the attention probabilities.
 
     ```python
-    >>> from transformers import DeepseekV3Model, DeepseekV4Config
+    >>> from transformers import DeepseekV3Model, DeepseekNewConfig
 
     >>> # Initializing a Deepseek-V3 style configuration
-    >>> configuration = DeepseekV4Config()
+    >>> configuration = DeepseekNewConfig()
 
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
 
-    model_type = "deepseek_v4"
+    model_type = "deepseek_new"
     keys_to_ignore_at_inference = ["past_key_values"]
     base_model_tp_plan = {  # TODO: only replicate attention layers when > first_k_dense_replace
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",

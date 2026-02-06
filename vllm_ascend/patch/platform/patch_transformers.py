@@ -3,8 +3,8 @@ import sys
 import importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from transformers import AutoConfig
-from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
-AutoConfig.register("deepseek_v4", DeepseekV4Config)
+from vllm_ascend.transformers_utils.configs.deepseek_new import DeepseekNewConfig
+AutoConfig.register("deepseek_new", DeepseekNewConfig)
 
 import vllm
 from vllm.transformers_utils.config import _CONFIG_REGISTRY
@@ -24,9 +24,9 @@ else:
 
 
 def __getattr__(name: str):
-    if "DeepseekV4Config" not in _CLASS_TO_MODULE:
+    if "DeepseekNewConfig" not in _CLASS_TO_MODULE:
         _CLASS_TO_MODULE.update({
-            "DeepseekV4Config": "vllm_ascend.transformers_utils.configs.deepseek_v4",
+            "DeepseekNewConfig": "vllm_ascend.transformers_utils.configs.deepseek_new",
         })
     if name in _CLASS_TO_MODULE:
         module_name = _CLASS_TO_MODULE[name]
@@ -37,8 +37,8 @@ def __getattr__(name: str):
 
 
 def __dir__():
-    if "DeepseekV4Config" not in __all__:
-        __all__.append("DeepseekV4Config")
+    if "DeepseekNewConfig" not in __all__:
+        __all__.append("DeepseekNewConfig")
     return sorted(list(__all__))
 
 
@@ -71,8 +71,8 @@ class HFConfigParser(ConfigParserBase):
         if (hf_overrides := kwargs.pop("hf_overrides", None)) is not None:
             model_type = hf_overrides.get("model_type", model_type)
         
-        if  "deepseek_v4" not in _CONFIG_REGISTRY:
-            _CONFIG_REGISTRY.update(deepseek_v4="DeepseekV4Config")
+        if  "deepseek_new" not in _CONFIG_REGISTRY:
+            _CONFIG_REGISTRY.update(deepseek_new="DeepseekNewConfig")
 
         if model_type in _CONFIG_REGISTRY:
             config_class = _CONFIG_REGISTRY[model_type]

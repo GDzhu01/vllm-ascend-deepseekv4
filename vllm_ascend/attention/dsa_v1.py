@@ -366,7 +366,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         if AscendDSAMetadataBuilder.hadamard is None:
             hf_config = self.model_config.hf_config
-            if hf_config.model_type == 'deepseek_v4':
+            if hf_config.model_type == 'deepseek_new':
                 indexer_head_dim = hf_config.index_head_dim
                 try:
                     from scipy.linalg import hadamard
