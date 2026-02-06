@@ -34,7 +34,7 @@ import torch
 import torch_npu
 from torch import nn
 from transformers import DeepseekV2Config, DeepseekV3Config
-from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
+from vllm_ascend.transformers_utils.configs.deepseek_new import DeepseekNewConfig
 
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
@@ -222,10 +222,10 @@ class DeepseekV2MLP(nn.Module):
         return x
 
 
-class DeepseekV4MoE(nn.Module):
+class DeepseekNewMoE(nn.Module):
     def __init__(
         self,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepseekNewConfig,
         parallel_config: ParallelConfig,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -411,7 +411,7 @@ class Indexer(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepseekNewConfig,
         compress_ratio: int,
         quant_config: QuantizationConfig | None,
         cache_config: CacheConfig | None,
@@ -451,7 +451,7 @@ class Compressor(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepseekNewConfig,
         compress_ratio: int = 4, 
         head_dim: int = 512, 
         rotate: bool = False,
@@ -526,11 +526,11 @@ class Compressor(nn.Module):
             x = x_rot.reshape(1,num_tokens, -1, rotary_dim)
         return x.to(dtype)
 
-class DeepseekV4Attention(nn.Module):
+class DeepseekNewAttention(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepseekNewConfig,
         max_position_embeddings: int = 0,
         cache_config: CacheConfig | None = None,
         quant_config: QuantizationConfig | None = None,
@@ -703,7 +703,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.layer_idx = layer_idx
         self.norm_eps = config.rms_norm_eps
 
-        attn_cls = DeepseekV4Attention
+        attn_cls = DeepseekNewAttention
         
         self.self_attn = attn_cls(
             vllm_config=vllm_config,
@@ -715,7 +715,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             topk_indices_buffer=topk_indices_buffer,
         )
 
-        self.mlp = DeepseekV4MoE(
+        self.mlp = DeepseekNewMoE(
                 config=config,
                 parallel_config=parallel_config,
                 quant_config=quant_config,
@@ -777,7 +777,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
 
 @support_torch_compile
-class DeepseekV4Model(nn.Module):
+class DeepseekNewModel(nn.Module):
     fall_back_to_pt_during_load = False
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
@@ -899,12 +899,12 @@ class DeepseekV4Model(nn.Module):
 
 
 class DeepseekV2MixtureOfExperts(MixtureOfExperts):
-    moe_mlp_layers: list[DeepseekV4MoE]
+    moe_mlp_layers: list[DeepseekNewMoE]
     """
     List of MoE MLP layers in the model.
     """
 
-    def extract_moe_parameters(self, example_moe: DeepseekV4MoE | None):
+    def extract_moe_parameters(self, example_moe: DeepseekNewMoE | None):
         if example_moe is None:
             self.num_moe_layers = 0
             self.num_expert_groups = 0
@@ -914,7 +914,7 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             self.num_routed_experts = 0
             self.num_shared_experts = 0
             self.num_redundant_experts = 0
-            logger.warning("DeepSeekV2: No DeepseekV4MoE layer found in model.layers.")
+            logger.warning("DeepSeekV2: No DeepseekNewMoE layer found in model.layers.")
         else:
             self.num_logical_experts = example_moe.n_logical_experts
             self.num_physical_experts = example_moe.n_physical_experts
@@ -939,13 +939,13 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class AscendDeepseekV4ForCausalLM(
+class AscendDeepseekNewForCausalLM(
     nn.Module, SupportsPP, DeepseekV2MixtureOfExperts, SupportsLoRA, SupportsEagle
 ):
     packed_modules_mapping = {
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
-    model_cls = DeepseekV4Model
+    model_cls = DeepseekNewModel
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -989,7 +989,7 @@ class AscendDeepseekV4ForCausalLM(
                 continue
 
             assert isinstance(layer, DeepseekV2DecoderLayer)
-            if isinstance(layer.mlp, DeepseekV4MoE):
+            if isinstance(layer.mlp, DeepseekNewMoE):
                 # Pick last one layer since the first ones may be dense layers.
                 example_moe = layer.mlp
                 self.moe_mlp_layers.append(layer.mlp)
