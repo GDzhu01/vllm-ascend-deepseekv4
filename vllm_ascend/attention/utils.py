@@ -88,6 +88,7 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     actual_seq_lengths_q: list[int] = field(default_factory=list)
 
     positions: torch.Tensor = None
+    positions_cpu: torch.Tensor = None
 
     attn_state: Any = None
 
@@ -123,6 +124,7 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
             causal=self.causal,
             actual_seq_lengths_q=self.actual_seq_lengths_q[:num_actual_tokens],
             positions=self.positions,
+            positions_cpu=self.positions_cpu,
             attn_state=self.attn_state,
             graph_pad_size=-1,  # It should be -1 when not run in fullgraph mode.
             num_input_tokens=self.num_input_tokens,
