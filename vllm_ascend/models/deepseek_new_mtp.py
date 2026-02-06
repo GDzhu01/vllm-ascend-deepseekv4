@@ -29,7 +29,7 @@ from vllm.sequence import IntermediateTensors
 from .deepseek_new import (
     DeepseekV2DecoderLayer,
     DeepseekV2MixtureOfExperts,
-    DeepSeekNewMoE,
+    DeepseekNewMoE,
     get_spec_layer_idx_from_weight_name,
 )
 from vllm.model_executor.models.interfaces import SupportsPP
@@ -214,7 +214,7 @@ class DeepSeekMultiTokenPredictor(nn.Module):
 
 
 @support_torch_compile
-class DeepSeekNewMTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
+class DeepseekNewMTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         self.config = vllm_config.model_config.hf_config
@@ -237,7 +237,7 @@ class DeepSeekNewMTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
             assert isinstance(layer, DeepSeekMultiTokenPredictorLayer)
             layer = layer.mtp_block
             assert isinstance(layer, DeepseekV2DecoderLayer)
-            if isinstance(layer.mlp, DeepSeekNewMoE):
+            if isinstance(layer.mlp, DeepseekNewMoE):
                 # Pick last one layer since the first ones may be dense layers.
                 example_moe = layer.mlp
                 self.moe_mlp_layers.append(layer.mlp)
