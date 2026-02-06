@@ -9,7 +9,7 @@ This document will show the main verification steps of the model, including supp
 ## Environment Preparation
 
 ### Model Weight
-- `DeepSeek-V4-w8a8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) nodes. [Download model weight](https://modelers.cn/models/Modelers_Park/DeepSeek-V4)
+- `DeepSeek-V4-w8a8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/models/Modelers_Park/DeepSeek-V4)
 
 It is recommended to download the model weight to the shared directory of multiple nodes, such as `/root/.cache/`
 
@@ -151,8 +151,8 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --served-model-name deepseek_v4 \
 --enable-expert-parallel \
 --max-num-seqs 16 \
---max_model_len 8192 \
---max-num-batched-tokens 4096 \
+--max_model_len 65536 \
+--max-num-batched-tokens 65536 \
 --trust-remote-code \
 --no-enable-chunked-prefill \
 --async-scheduling \
@@ -188,8 +188,8 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --served-model-name deepseek_v4 \
 --enable-expert-parallel \
 --max-num-seqs 16 \
---max_model_len 8192 \
---max-num-batched-tokens 4096 \
+--max_model_len 10240 \
+--max-num-batched-tokens 10240 \
 --trust-remote-code \
 --no-enable-chunked-prefill \
 --async-scheduling \
@@ -340,7 +340,7 @@ Before you start, please
 
         export ASCEND_RT_VISIBLE_DEVICES=$1
 
-        vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot \
+        vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8 \
             --host 0.0.0.0 \
             --port $2 \
             --data-parallel-size $3 \
@@ -350,7 +350,7 @@ Before you start, please
             --tensor-parallel-size $7 \
             --enable-expert-parallel \
             --seed 1024 \
-            --served-model-name dsv4 \
+            --served-model-name deepseek_v4 \
             --max-model-len 16384 \
             --max-num-batched-tokens 16384 \
             --max-num-seqs 4 \
@@ -410,7 +410,7 @@ Before you start, please
         export USE_MULTI_BLOCK_POOL=1
         export ASCEND_RT_VISIBLE_DEVICES=$1
 
-        vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot \
+        vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8 \
             --host 0.0.0.0 \
             --port $2 \
             --data-parallel-size $3 \
@@ -420,7 +420,7 @@ Before you start, please
             --tensor-parallel-size $7 \
             --enable-expert-parallel \
             --seed 1024 \
-            --served-model-name dsv4 \
+            --served-model-name deepseek_v4 \
             --max-model-len 70000 \
             --max-num-batched-tokens 144 \
             --max-num-seqs 48 \
