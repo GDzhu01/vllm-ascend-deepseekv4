@@ -19,7 +19,7 @@ If you want to deploy multi-node environment, you need to verify multi-node comm
 
 ### Installation
 
-You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in version `v0.13.0rc3-pre`.
+You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in image `v0.13.0rc3-pre`.
 
 :::::{tab-set}
 :sync-group: install
@@ -32,7 +32,7 @@ Start the docker image on your each node.
 ```{code-block} bash
    :substitutions:
 
-export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-pre-a3
+export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-a3-pre
 docker run --rm \
     --name vllm-ascend \
     --shm-size=1g \
