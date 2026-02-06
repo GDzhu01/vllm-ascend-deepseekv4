@@ -141,25 +141,23 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export ACL_OP_INIT_MODE=1
 export TRITON_ALL_BLOCKS_PARALLEL=1
 
-vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
---host 0.0.0.0 \
---port 8000 \
---block-size 128 \
---data-parallel-size 1 \
---tensor-parallel-size 8 \
---quantization ascend \
---served-model-name deepseek_v4 \
---enable-expert-parallel \
---max-num-seqs 16 \
---max_model_len 65536 \
---max-num-batched-tokens 65536 \
---trust-remote-code \
---no-enable-chunked-prefill \
---async-scheduling \
---gpu-memory-utilization 0.9 \
---compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
---speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
---additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
+vllm serve /mnt/weights/hello2026_w8a8_dynamic_m6_quarot_quant-mtp_real \
+  --max_model_len 65536 \
+  --max-num-batched-tokens 65536 \
+  --served-model-name ds \
+  --gpu-memory-utilization 0.9 \
+  --max-num-seqs 16 \
+  --data-parallel-size 1 \
+  --tensor-parallel-size 8 \
+  --enable-expert-parallel \
+  --quantization ascend \
+  --port 8006 \
+  --block-size 128 \
+  --no-enable-chunked-prefill \
+  --async-scheduling \
+  --additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}' \
+  --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
 ```
 
 ::::
@@ -181,24 +179,22 @@ export VLLM_ASCEND_ENABLE_FUSED_MC2=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 
 vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
---host 0.0.0.0 \
---port 8000 \
---block-size 128 \
---data-parallel-size 2 \
---tensor-parallel-size 8 \
---quantization ascend \
---served-model-name deepseek_v4 \
---enable-expert-parallel \
---max-num-seqs 16 \
---max_model_len 10240 \
---max-num-batched-tokens 10240 \
---trust-remote-code \
---no-enable-chunked-prefill \
---async-scheduling \
---gpu-memory-utilization 0.9 \
---compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
---speculative-config '{"num_speculative_tokens": 1, "method": "deepseek_mtp"}' \
---additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
+    --max_model_len 10240 \
+    --max-num-batched-tokens 10240 \
+    --served-model-name deepseek_v4 \
+    --gpu-memory-utilization 0.9 \
+    --max-num-seqs 16 \
+    --data-parallel-size 2 \
+    --tensor-parallel-size 8 \
+    --enable-expert-parallel \
+    --quantization ascend \
+    --speculative-config '{"num_speculative_tokens": 1,"method": "deepseek_mtp"}' \
+    --port 8005 \
+    --block-size 128 \
+    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
+    --no-enable-chunked-prefill \
+    --async-scheduling \
+    --additional-config '{"enable_cpu_binding": "true","multistream_overlap_shared_expert": true}'
 ```
 ::::
 :::::
