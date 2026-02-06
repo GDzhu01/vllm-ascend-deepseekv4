@@ -6,12 +6,6 @@ DeepSeek-V4 is introducing several key upgrades over DeepSeek-V3. (1) The Manifo
 
 This document will show the main verification steps of the model, including supported features, feature configuration, environment preparation, single-node and multi-node deployment, accuracy and performance evaluation.
 
-## Supported Features
-
-Refer to [supported features](../user_guide/support_matrix/supported_models.md) to get the model's supported feature matrix.
-
-Refer to [feature guide](../user_guide/feature_guide/index.md) to get the feature's configuration.
-
 ## Environment Preparation
 
 ### Model Weight
@@ -25,7 +19,7 @@ If you want to deploy multi-node environment, you need to verify multi-node comm
 
 ### Installation
 
-You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in version `v0.13.0rc3`, which is an RC version of `0.13.0.post1`.
+You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in version `v0.13.0rc3-pre`.
 
 :::::{tab-set}
 :sync-group: install
@@ -38,7 +32,7 @@ Start the docker image on your each node.
 ```{code-block} bash
    :substitutions:
 
-export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-a3
+export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-pre-a3
 docker run --rm \
     --name vllm-ascend \
     --shm-size=1g \
@@ -81,7 +75,7 @@ Start the docker image on your each node.
 ```{code-block} bash
    :substitutions:
 
-export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3
+export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-pre
 docker run --rm \
     --name vllm-ascend \
     --shm-size=1g \
@@ -113,8 +107,11 @@ docker run --rm \
 In addition, if you don't want to use the docker image as above, you can also build all from source:
 
 - Install `vllm-ascend` from source, refer to [installation](../installation.md).
-
 If you want to deploy multi-node environment, you need to set up environment on each node.
+
+:::{note}
+Please use the v0.13.0rc3 code to install vllm-ascend.
+:::
 
 ## Deployment
 
@@ -126,7 +123,7 @@ In this tutorial, we suppose you downloaded the model weight to `/root/.cache/`.
 
 - `DeepSeek-V4-w8a8`: can be deployed on 1 Atlas 800 A3 (64G × 16) or 1 Atlas 800 A2 (64G × 8).
 
-Run the following scripts on two nodes respectively.
+Run the following scripts on each node respectively. 
 
 :::::{tab-set}
 :sync-group: install
@@ -141,9 +138,7 @@ export USE_MULTI_BLOCK_POOL=1
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=10
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export VLLM_USE_V1=1
 export ACL_OP_INIT_MODE=1
-export VLLM_VERSION=0.13.0
 export TRITON_ALL_BLOCKS_PARALLEL=1
 
 vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
@@ -162,7 +157,7 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --no-enable-chunked-prefill \
 --async-scheduling \
 --gpu-memory-utilization 0.9 \
---compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
 --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
 --additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
 ```
@@ -176,10 +171,8 @@ Run the following script to execute online inference.
 export OMP_PROC_BIND=false
 export OMP_NUM_THREADS=10  
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True  
-export VLLM_USE_V1=1
 export ACL_OP_INIT_MODE=1
 export ASCEND_A3_ENABLE=1
-export VLLM_VERSION=0.13.0
 export USE_MULTI_BLOCK_POOL=1
 export HCCL_BUFFSIZE=4650
 export VLLM_ASCEND_ENABLE_FUSED_MC2=1
@@ -201,14 +194,14 @@ vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
 --no-enable-chunked-prefill \
 --async-scheduling \
 --gpu-memory-utilization 0.9 \
---compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
 --speculative-config '{"num_speculative_tokens": 1, "method": "deepseek_mtp"}' \
 --additional-config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}'
 ```
 
 ### Prefill-Decode Disaggregation
 
-We'd like to show the deployment guide of `DeepSeek-V4` on multi-node environment with 6P1D for better performance.
+We'd like to show the deployment guide of DeepSeek-V34 on Atlas 800 A3 (64G × 16) multi-node environment with 6P1D for better performance.
 
 Before you start, please
 
@@ -317,7 +310,7 @@ Before you start, please
 
 2. prepare the script `run_dp_template.sh` on each node.
 
-    1. Prefill node (Same settings for the six prefill nodes)
+    1. Prefill node (Same settings for the 6 prefill nodes)
 
         ```shell
         nic_name="enp48s3u1u1" # change to your own nic name
@@ -338,14 +331,13 @@ Before you start, please
         export OMP_PROC_BIND=false
         export OMP_NUM_THREADS=10
         export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-        export VLLM_USE_V1=1
         export HCCL_BUFFSIZE=2560
+        export TASK_QUEUE_ENABLE=1
 
-        export VLLM_USE_V1=1
         export ASCEND_BUFFER_POOL=4:8
-        export VLLM_VERSION=0.13.0
         export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:$LD_PRELOAD
         export USE_MULTI_BLOCK_POOL=1
+
         export ASCEND_RT_VISIBLE_DEVICES=$1
 
         vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot \
@@ -413,11 +405,9 @@ Before you start, please
         export OMP_NUM_THREADS=10
         export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
         export HCCL_BUFFSIZE=1024
-        export TASK_QUEUE_ENABLE=1
         export ASCEND_BUFFER_POOL=4:8
 
         export USE_MULTI_BLOCK_POOL=1
-        export VLLM_VERSION=0.13.0
         export ASCEND_RT_VISIBLE_DEVICES=$1
 
         vllm serve /root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot \
@@ -459,7 +449,7 @@ Before you start, please
                         }
                 }
             }' \
-            --additional_config '{"enable_cpu_binding": "True","multistream_overlap_shared_expert": false,"multistream_dsa_preprocess": false}'
+            --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": false, "multistream_dsa_preprocess": false}'
         ```
 
 Once the preparation is done, you can start the server with the following command on each node:
@@ -468,56 +458,56 @@ Once the preparation is done, you can start the server with the following comman
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 2. Prefill node 1
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 1 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 3. Prefill node 2
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 2 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 4. Prefill node 3
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 3 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 5. Prefill node 4
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 4 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 6. Prefill node 5
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 2 --tp-size 16 --dp-size-local 1 --dp-rank-start 4 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12890 --vllm-start-port 9100
 ```
 
 7. Decode node 0
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.105 --dp-rpc-port 12777 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --dp-address 141.61.39.117 --dp-rpc-port 12777 --vllm-start-port 9100
 ```
 
 8. Decode node 1
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address 141.61.39.105 --dp-rpc-port 12777 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address 141.61.39.117 --dp-rpc-port 12777 --vllm-start-port 9100
 ```
 
 ## Functional Verification
@@ -561,7 +551,7 @@ As an example, take the `gsm8k` dataset as a test dataset, and run accuracy eval
 ```shell
 lm_eval \
   --model local-completions \
-  --model_args model=/root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot,base_url=http://127.0.0.1:8000/v1/completions,tokenized_requests=False,trust_remote_code=True \
+  --model_args model=/root/.cache/Eco-Tech/DeepSeek-V4-w8a8,base_url=http://127.0.0.1:8000/v1/completions,tokenized_requests=False,trust_remote_code=True \
   --tasks gsm8k \
   --output_path ./
 ```
@@ -589,7 +579,7 @@ Take the `serve` as an example. Run the code as follows.
 
 ```shell
 export VLLM_USE_MODELSCOPE=true
-vllm bench serve --model /root/.cache/Eco-Tech/DeepSeek-V4-w8a8-mtp-QuaRot  --dataset-name random --random-input 200 --num-prompt 200 --request-rate 1 --save-result --result-dir ./
+vllm bench serve --model /root/.cache/Eco-Tech/DeepSeek-V4-w8a8  --dataset-name random --random-input 200 --num-prompt 200 --request-rate 1 --save-result --result-dir ./
 ```
 
 
