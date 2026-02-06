@@ -2977,9 +2977,12 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        num_hidden_layers = self.model_config.hf_config.num_hidden_layers
-        c4_layers = list(range(0, num_hidden_layers, 2))
-        c128_layers = list(range(1, num_hidden_layers, 2))
+        c4_layers: list[int] | None = None
+        c128_layers: list[int] | None = None
+        if hasattr(self.model_config.hf_config, "num_hidden_layers"):
+            num_hidden_layers = self.model_config.hf_config.num_hidden_layers
+            c4_layers = list(range(0, num_hidden_layers, 2))
+            c128_layers = list(range(1, num_hidden_layers, 2))
 
         kv_caches: Dict[str, torch.Tensor] = {}
         for group in self._kv_cache_spec_attn_group_iterator():
@@ -2992,7 +2995,8 @@ class NPUModelRunner(GPUModelRunner):
                 if isinstance(kv_cache_spec, CompressAttentionSpec):
                     dtype = kv_cache_spec.dtype
                     layer_index = extract_layer_index(layer_name)
-
+                    assert c4_layers is not None
+                    assert c128_layers is not None
                     if layer_index in c4_layers:
                         c4_kv_tensor, indexer_k_tensor, indexer_scale_tensor = kv_cache_raw_tensors[
                             layer_name]
