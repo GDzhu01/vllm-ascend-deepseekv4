@@ -55,19 +55,20 @@
 
 
 add_op_to_compiled_list()
+
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnnExc PRIVATE
-        grouped_matmul_swiglu_quant_weight_nz_tensor_list_def.cpp
-    )
-    add_ops_compile_options(
-        OP_NAME GroupedMatmulSwigluQuantWeightNzTensorList
-        OPTIONS --cce-auto-sync=off
-                -Wno-deprecated-declarations
-                -Werror
+    grouped_matmul_swiglu_quant_weight_nz_tensor_list_def.cpp
     )
 endif()
 
-if(NOT BUILD_OPS_RTY_KERNEL)
-    add_modules_sources(OPTYPE grouped_matmul_swiglu_quant_weight_nz_tensor_list 
-                ACLNNTYPE aclnn_exclude)
+if (BUILD_OPS_RTY_KERNEL)
+    add_ops_compile_options(
+        OP_NAME GroupedMatmulSwigluQuantWeightNzTensorList
+        OPTIONS --cce-auto-sync=on
+                -Wno-deprecated-declarations
+                -Werror
+    )
+else()
+    add_modules_sources(OPTYPE grouped_matmul_swiglu_quant_weight_nz_tensor_list ACLNNTYPE aclnn_exclude)
 endif()

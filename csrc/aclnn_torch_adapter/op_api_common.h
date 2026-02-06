@@ -139,6 +139,9 @@ inline void *GetOpApiFuncAddrInLib(void *handler, const char *libName,
 
 inline void *GetOpApiLibHandler(const char *libName) {
   auto handler = dlopen(libName, RTLD_LAZY);
+  if (!handler) {
+    fprintf(stderr, "dlopen error: %s\n", dlerror());
+  }
   return handler;
 }
 

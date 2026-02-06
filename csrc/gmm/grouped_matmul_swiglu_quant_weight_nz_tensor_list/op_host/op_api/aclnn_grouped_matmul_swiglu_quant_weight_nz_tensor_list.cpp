@@ -23,7 +23,7 @@
 #include "opdev/shape_utils.h"
 #include "opdev/tensor_view_utils.h"
 #include "opdev/make_op_executor.h"
-#include "../grouped_matmul_swiglu_quant_weight_nz_tensor_list.h"
+#include "grouped_matmul_swiglu_quant_weight_nz_tensor_list.h"
 #include "aclnn_grouped_matmul_swiglu_quant_weight_nz_tensor_list.h"
 
 using namespace op;

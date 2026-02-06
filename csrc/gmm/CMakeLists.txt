@@ -8,11 +8,13 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-file(GLOB SUBDIRECTORIES LIST_DIRECTORIES true RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
-# 遍历子目录
-foreach(SUBDIR ${SUBDIRECTORIES})
-  # 检查子目录中是否存在 CMakeLists.txt
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${SUBDIR}/CMakeLists.txt)
-    add_subdirectory(${SUBDIR})
-  endif()
+file(GLOB CURRENT_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
+foreach(SUB_DIR ${CURRENT_DIRS})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SUB_DIR}/CMakeLists.txt")
+        add_subdirectory(${SUB_DIR})
+    else()
+        if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SUB_DIR}/op_host/CMakeLists.txt")
+            add_subdirectory(${SUB_DIR}/op_host)
+        endif()
+    endif()
 endforeach()
