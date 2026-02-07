@@ -142,6 +142,7 @@ export ACL_OP_INIT_MODE=1
 export TRITON_ALL_BLOCKS_PARALLEL=1
 
 vllm serve /mnt/weights/hello2026_w8a8_dynamic_m6_quarot_quant-mtp_real \
+  --host 0.0.0.0 \
   --max_model_len 65536 \
   --max-num-batched-tokens 65536 \
   --served-model-name ds \
@@ -179,6 +180,7 @@ export VLLM_ASCEND_ENABLE_FUSED_MC2=1
 export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
 
 vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
+    --host 0.0.0.0 \
     --max_model_len 10240 \
     --max-num-batched-tokens 10240 \
     --served-model-name deepseek_v4 \
