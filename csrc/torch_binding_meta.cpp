@@ -36,6 +36,7 @@
 namespace vllm_ascend {
 namespace meta {
 const int64_t INT4_NUMS_IN_INT32 = 8;
+#ifdef VLLM_ENABLE_ATB_AND_DIRECT_KERNELS
 std::tuple<at::Tensor, at::Tensor> rotary_embedding_meta(
   at::Tensor &positions,
   at::Tensor &query,
@@ -116,6 +117,7 @@ std::tuple<at::Tensor &, at::Tensor &, at::Tensor &, at::Tensor &, at::Tensor &>
 {
     return {q_out0, kv_cache_out0, q_out1, kv_cache_out1, inner_out};
 }
+#endif
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant(
     const at::Tensor &x, const at::Tensor &weight, const at::Tensor &weight_scale, const at::Tensor &x_scale,
@@ -961,6 +963,122 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_meta(
     return std::make_tuple(y_out, scale_out);
 }
 
+void indexer_compress_epilog_meta(
+    at::Tensor& indexer_compress_cache, 
+    at::Tensor& indexer_compress_cache_scale, 
+    const at::Tensor& x, 
+    const at::Tensor& slot_mapping, 
+    int64_t quant_mode=1, 
+    bool round_scale=true)
+{
+    return;
+}
+
+void kv_compress_epilog_meta(
+    at::Tensor& kv_compress_cache,
+    const at::Tensor& x,
+    const at::Tensor& slot_mapping,
+    int64_t quant_group_size, 
+    int64_t quant_mode, 
+    bool round_scale_flag)
+{
+    return;
+}
+
+std::tuple<at::Tensor, at::Tensor> construct_temp_output_tensor(const at::Tensor &q, std::string layout,
+    bool return_softmax_lse)
+{
+    for (size_t i = 0; i < q.sizes().size(); i++) {
+        TORCH_CHECK(q.size(i) > 0,
+            "All values within query's shape should be greater "
+            "than 0, but shape[",
+            i,
+            "] is ",
+            q.size(i));
+    }
+    at::Tensor output = at::empty(q.sizes(), q.options().dtype(q.dtype()));
+    at::Tensor softmax_lse;
+    if (return_softmax_lse) {
+        std::vector<int64_t> lse_sizes(q.sizes().begin(), q.sizes().end());
+        lse_sizes.back() = 1;
+        softmax_lse = at::empty(lse_sizes, q.options().dtype(c10::ScalarType::Float));
+    } else {
+        softmax_lse = at::empty({0}, q.options().dtype(c10::ScalarType::Float));
+    }
+
+    return std::tuple<at::Tensor, at::Tensor>(output, softmax_lse);
+}
+
+std::tuple<at::Tensor, at::Tensor> npu_kv_quant_sparse_attn_sharedkv_meta(const at::Tensor &q, int64_t kv_quant_mode,
+    const c10::optional<at::Tensor> &ori_kv, const c10::optional<at::Tensor> &cmp_kv,
+    const c10::optional<at::Tensor> &ori_sparse_indices, const c10::optional<at::Tensor> &cmp_sparse_indices,
+    const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table,
+    const c10::optional<at::Tensor> &cu_seqlens_q, const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv, const c10::optional<at::Tensor> &seqused_q, 
+    const c10::optional<at::Tensor> &seqused_kv, const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
+    int64_t tile_size, int64_t rope_head_dim, double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, 
+    int64_t cmp_mask_mode, int64_t ori_win_left, int64_t ori_win_right, c10::string_view layout_q,
+    c10::string_view layout_kv, bool return_softmax_lse)
+{
+    std::string layout_q_str = std::string(layout_q);
+    std::tuple<at::Tensor, at::Tensor> output = construct_temp_output_tensor(q, layout_q_str, return_softmax_lse);
+
+    return output;
+}
+
+at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_meta(
+    int64_t num_heads_q,
+    int64_t num_heads_kv,
+    int64_t head_dim,
+    int64_t kv_quant_mode,
+    const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q,
+    const c10::optional<at::Tensor> &seqused_kv,
+    int64_t batch_size,
+    int64_t max_seqlen_q,
+    int64_t max_seqlen_kv,
+    int64_t ori_topk,
+    int64_t cmp_topk,
+    int64_t tile_size,
+    int64_t rope_head_dim,
+    int64_t cmp_ratio,
+    int64_t ori_mask_mode,
+    int64_t cmp_mask_mode,
+    int64_t ori_win_left,
+    int64_t ori_win_right,
+    c10::string_view layout_q,
+    c10::string_view layout_kv,
+    bool has_ori_kv,
+    bool has_cmp_kv,
+    const c10::string_view device)
+{
+    constexpr int64_t OUTPUT_SIZE = 2048;
+    at::Tensor output;
+    if (cu_seqlens_q.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
+    } else if (cu_seqlens_ori_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_ori_kv.value().device()));
+    } else if (cu_seqlens_cmp_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_cmp_kv.value().device()));
+    } else if (seqused_q.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_q.value().device()));
+    } else if (seqused_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_kv.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
+    }
+    return output;
+}
+
+
 } // namespace meta
 } // namespace vllm_ascend
 
@@ -968,7 +1086,7 @@ namespace {
 // Register the meta implementations of the custom kernels for symbolic tracing, this will also
 // the custom kernel been captured into aclgraph
 TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
-
+    #ifdef VLLM_ENABLE_ATB_AND_DIRECT_KERNELS
     // Rotary embedding meta implementation
     ops.impl("rotary_embedding", &vllm_ascend::meta::rotary_embedding_meta);
     // Masked input and mask meta implementation
@@ -979,6 +1097,7 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("sgmv_expand", &vllm_ascend::meta::sgmv_expand_meta);
     // MLA preprocess
     ops.impl("mla_preprocess", &vllm_ascend::meta::mla_preprocess);
+    #endif
     // grouped_matmul_swiglu_quant meta implementation
     ops.impl("grouped_matmul_swiglu_quant", &vllm_ascend::meta::grouped_matmul_swiglu_quant);
     // Grouped matmul swiglu quant weight nz tensor list
@@ -1027,5 +1146,13 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("inplace_partial_rotary_mul", &vllm_ascend::meta::inplace_partial_rotary_mul_meta);
     // npu_rms_norm_dynamic_quant
     ops.impl("npu_rms_norm_dynamic_quant", &vllm_ascend::meta::npu_rms_norm_dynamic_quant_meta);
+    // indexer_compress_epilog
+    ops.impl("indexer_compress_epilog", &vllm_ascend::meta::indexer_compress_epilog_meta);
+    // kv_compress_epilog
+    ops.impl("kv_compress_epilog", &vllm_ascend::meta::kv_compress_epilog_meta);
+    // npu_kv_quant_sparse_attn_sharedkv
+    ops.impl("npu_kv_quant_sparse_attn_sharedkv", &vllm_ascend::meta::npu_kv_quant_sparse_attn_sharedkv_meta);
+    // npu_kv_quant_sparse_attn_sharedkv_metadata_meta
+    ops.impl("npu_kv_quant_sparse_attn_sharedkv_metadata", &vllm_ascend::meta::npu_kv_quant_sparse_attn_sharedkv_metadata_meta);
 }
 }

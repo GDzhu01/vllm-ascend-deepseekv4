@@ -264,7 +264,7 @@ def _select_experts_with_fusion_ops(
             input_ids = None
             tid2eid_ones = None
         
-        topk_weights, topk_ids, _ = torch.ops.custom.npu_moe_gating_top_k(
+        topk_weights, topk_ids, _ = torch.ops._C_ascend.moe_gating_top_k_hash(
             x=router_logits,                        # 输入张量
             k=top_k,                        # 选取的专家数量
             bias=e_score_correction_bias,                # 偏置张量（可选）
@@ -279,8 +279,7 @@ def _select_experts_with_fusion_ops(
             norm_type=2,       # 归一化类型（可选）
             out_flag=False          # 是否输出归一化结果（可选）
         )
-        
-        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+
         return topk_weights, topk_ids
 
         scores = F.softplus(router_logits).sqrt()

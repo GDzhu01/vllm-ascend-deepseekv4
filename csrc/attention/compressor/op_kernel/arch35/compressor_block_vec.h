@@ -1117,15 +1117,10 @@ __aicore__ inline void CompressorBlockVector<COMP>::CalRope(const Compressor::Ru
         inputQue1.EnQue(sinUb);
         inputQue1.DeQue<X_T>();
 
-        if constexpr (COMP::rotaryMode == ROTARY_MODE::INTERLEAVE) {
-            PipeBarrier<PIPE_V>();
-            InterleaveModeVF(sinUb, cosUb, tmpRopeInUb, tmpRopeOutUb, constInfo_.ropeHeadDim, curDealScSize, 1);
-            PipeBarrier<PIPE_V>();
-        } else {
-            PipeBarrier<PIPE_V>();
-            HalfAlignVF(sinUb, cosUb, tmpRopeInUb, tmpRopeOutUb, constInfo_.ropeHeadDim, curDealScSize, 1);
-            PipeBarrier<PIPE_V>();
-        }
+        bool isInterleave = (COMP::rotaryMode == ROTARY_MODE::INTERLEAVE) ? true : false;
+        PipeBarrier<PIPE_V>();
+        RopeVF(sinUb, cosUb, tmpRopeInUb, tmpRopeOutUb, constInfo_.ropeHeadDim, curDealScSize, 1, isInterleave);
+        PipeBarrier<PIPE_V>();
         inputQue1.FreeTensor(sinUb);
         // normal部分和rope拼接，并搬到outputub
         ropeCopyParams.blockCount = curDealScSize;

@@ -163,6 +163,7 @@ def gen_build_info():
         "ascend310p3vir04": "_310P",
         "ascend310p3vir08": "_310P",
         "ascend910_9579": "A5",
+        "ascend910_95": "A5",
     }
 
     assert soc_version in soc_to_device, f"Undefined soc_version: {soc_version}. Please file an issue to vllm-ascend."
@@ -346,6 +347,7 @@ class cmake_build_ext(build_ext):
             "910b": "ascend910b1",
             "910c": "ascend910_9392",
             "310p": "ascend310p1",
+            "ascend910_95": "ascend910_9589",
         }
         CANN_SOC_VERSION = soc_version_map.get(envs.SOC_VERSION,
                                                envs.SOC_VERSION)

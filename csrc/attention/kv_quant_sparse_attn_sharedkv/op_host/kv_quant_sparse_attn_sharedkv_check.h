@@ -430,13 +430,18 @@ private:
     ge::graphStatus CheckSingleParaCuSeqLensQ() const;
     ge::graphStatus CheckSingleParaSequsedKv() const;
     ge::graphStatus CheckSingleParaSinks() const;
+    ge::graphStatus CheckSingleParaMetadata() const;
 
     ge::graphStatus CheckSinglePara() const;
-    ge::graphStatus CheckDequantScaleNotExistence();
     ge::graphStatus CheckParaExistenceAntiquant() const;
+    ge::graphStatus CheckCmpSparseIndicesExistence();
     ge::graphStatus CheckParaExistence();
+    ge::graphStatus CheckCmpRatioExistence();
     ge::graphStatus GetActualSeqLenSize(uint32_t &size, const gert::Tensor *tensor,
         const SASLayout &layout, const std::string &name) const;
+    ge::graphStatus CheckSWAExistence();
+    ge::graphStatus CheckCFAExistence();
+    ge::graphStatus CheckSCFAExistence();
 
     ge::graphStatus CheckKVShapeForBatchContinuous();
     uint32_t GetTypeSize(ge::DataType dtype) const;
@@ -459,6 +464,7 @@ private:
     ge::graphStatus CheckActualSeqLensShape();
     ge::graphStatus CheckMultiParaConsistency();
 
+    ge::graphStatus CheckFeatureWinKV() const;
     ge::graphStatus CheckFeatureAntiquantShape() const;
     ge::graphStatus CheckFeatureAntiquantLayout() const;
     ge::graphStatus CheckFeatureAntiquantDtype() const;
@@ -501,6 +507,15 @@ private:
     uint32_t cmpBlockTable_ = 0;
     uint32_t kv_quant_mode_ = 0;
 
+    int64_t oriWinLeft_ = 0;
+    int64_t oriWinRight_ = 0;
+
+    int64_t cmpRatio_ = 0;
+
+    uint32_t dSize_ = sasInfo_.dSize;
+    uint32_t dSizeV_ = sasInfo_.dSizeV;
+    uint32_t dSizeVInput_ = sasInfo_.dSizeVInput;
+
     uint32_t oriMaskMode_ = 0;
     uint32_t cmpMaskMode_ = 0;
 
@@ -510,7 +525,6 @@ private:
 
     uint32_t oriMaxBlockNumPerBatch_ = 0;
     uint32_t cmpMaxBlockNumPerBatch_ = 0;
-    //int64_t blockSize_ = 0;
 
     uint32_t aicNum_ = 0;
     uint32_t aivNum_ = 0;
@@ -527,6 +541,8 @@ private:
     ge::DataType oriKvType_ = ge::DT_FLOAT16;
     ge::DataType cmpKvType_ = ge::DT_FLOAT16;
     ge::DataType outputType_ = ge::DT_FLOAT16;
+
+    SASTemplateMode perfMode_;
 
     gert::Shape queryShapeCmp_{};
     gert::Shape keyShapeCmp_{};

@@ -60,7 +60,11 @@ __aicore__ inline void GetSingleCoreParam(RunParamStr& runParam, const ConstInfo
     runParam.actualS1Size = actualS1Size;
     runParam.actualS2Size = actualS2Size;
     runParam.nextTokensPerBatch = runParam.actualS2Size - runParam.actualS1Size;
-    runParam.preTokensPerBatch = -(runParam.actualS2Size - runParam.actualS1Size - constInfo.oriWinLeft);
+    if (constInfo.oriWinLeft == -1) {
+        runParam.preTokensPerBatch = runParam.actualS1Size;
+    } else {
+        runParam.preTokensPerBatch = -(runParam.actualS2Size - runParam.actualS1Size - constInfo.oriWinLeft);
+    }
     runParam.preTokensPerBatch = Min(runParam.preTokensPerBatch, runParam.actualS1Size);
 }
 

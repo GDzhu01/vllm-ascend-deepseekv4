@@ -397,24 +397,24 @@ class NPUPlatform(Platform):
         global _CUSTOM_OP_REGISTERED
         if _CUSTOM_OP_REGISTERED:
             return
-        # CUR_DIR = os.path.dirname(os.path.realpath(__file__))
-        # CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-        #                                "custom_transformer")
-        # CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
-        #                         "custom_transformer","op_api","lib")
-        # if os.path.exists(CUSTOM_OPP_PATH):
-        #     current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
-        #                                            "")
-        #     if current_cust_opp_path:
-        #         os.environ[
-        #             "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
-        #     else:
-        #         os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
-        #     current_ld_path = os.environ.get("LD_LIBRARY_PATH",
-        #                                 "")
-        #     os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
-        #     print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
-        # _CUSTOM_OP_REGISTERED = True
+        CUR_DIR = os.path.dirname(os.path.realpath(__file__))
+        CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+                                       "custom_transformer")
+        CUSTOM_OPP_LD_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors",
+                                "custom_transformer","op_api","lib")
+        if os.path.exists(CUSTOM_OPP_PATH):
+            current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH",
+                                                   "")
+            if current_cust_opp_path:
+                os.environ[
+                    "ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
+            else:
+                os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+            current_ld_path = os.environ.get("LD_LIBRARY_PATH",
+                                        "")
+            os.environ["LD_LIBRARY_PATH"] = f"{CUSTOM_OPP_LD_PATH}:{current_ld_path}"
+            print(f'os.environ["LD_LIBRARY_PATH"]:{os.environ["LD_LIBRARY_PATH"]}')
+        _CUSTOM_OP_REGISTERED = True
 
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, attn_selector_config):

@@ -47,6 +47,7 @@ class GraphFusionPassManager:
         self.passes.append(pass_)
 
     def configure(self, config: VllmConfig):
+        return
         # By default, we enable the graph fusion and quantization fusion pass.
         self.ascend_compilation_config: dict = config.additional_config.get(
             "ascend_compilation_config", {})

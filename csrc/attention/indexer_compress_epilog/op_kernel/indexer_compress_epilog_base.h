@@ -1,12 +1,11 @@
 /**
- * This program is free software, you can redistribute it and/or modify it.
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING
- * BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. See LICENSE in the root of
- * the software repository for the full text of the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -35,7 +34,10 @@ constexpr float FP8_E4M3FN_MIN_VALUE = -448.0f;
 constexpr uint32_t FAST_LOG_SHIFT_BITS = 23U;
 constexpr uint32_t FAST_LOG_AND_VALUE1 = 0xFF;
 constexpr uint32_t FAST_LOG_AND_VALUE2 = (((uint32_t)1 << (uint32_t)23) - (uint32_t)1);
+constexpr uint32_t INV_FP8_E5M2_MAX_VALUE = 0x37924925;
+constexpr uint32_t INV_FP8_E4M3_MAX_VALUE = 0x3b124925;
 
+#define FLOAT_OVERFLOW_MODE_CTRL 60
 #ifndef INFINITY
 #define INFINITY (__builtin_inff())
 #endif
@@ -266,6 +268,13 @@ __aicore__ inline void VFProcessDynamicBlockQuant(
     uint32_t tailReminder = curColNum - (loopCount - 1) * VL_FP32;
     uint32_t scaleColNumAlign = RoundUp<float>((curColNum + 128 - 1) / 128);
     uint32_t sregNum = loopCountReminder == 0 ? curColNum - loopCountFoldTwo * VL_FP32 : loopCountFoldTwo * VL_FP32;
+    static constexpr AscendC::MicroAPI::DivSpecificMode mode = {AscendC::MicroAPI::MaskMergeMode::ZEROING, false};
+    uint32_t maxValueInt = 0;
+    if constexpr (IsSameType<T0, fp8_e5m2_t>::value) {
+        maxValueInt = INV_FP8_E5M2_MAX_VALUE;
+    } else if constexpr (IsSameType<T0, fp8_e4m3fn_t>::value) {
+        maxValueInt = INV_FP8_E4M3_MAX_VALUE;
+    }
 
     __VEC_SCOPE__
     {
@@ -285,28 +294,49 @@ __aicore__ inline void VFProcessDynamicBlockQuant(
         RegTensor<float> scale1;
         RegTensor<float> inf;
         RegTensor<float> one;
+        RegTensor<float> zero;
+        RegTensor<uint32_t> coeffReg;
         MaskReg pregLoop = CreateMask<float>();
         Duplicate(one, static_cast<float>(1.0f), pregLoop);
-        Duplicate(inf, POS_INFINITY, pregLoop);
+        Duplicate(coeffReg, maxValueInt, pregLoop);
+        Duplicate(zero, 0.0f);
+        Duplicate(inf, 1.0f);
+        Div<float, &mode>(inf, inf, zero, pregLoop);
         MaskReg pregMain = CreateMask<float>();
         MaskReg preg1 = CreateMask<float, AscendC::MicroAPI::MaskPattern::VL1>();
+        MaskReg compareLeft;
+ 	    MaskReg compareRight;
+        MaskReg compareScalar;
         for (uint16_t i = 0; i < curRowNum; i++) {
             uint32_t sreg = sregNum;
             for (uint16_t j = 0; j < loopCountFoldTwo; j++) {
                 pregLoop = UpdateMask<float>(sreg);
                 LoadInputData<T1>(xLeft, xLocalAddr, pregMain, 2 * j * VL_FP32 + i * curColNumAlign);
                 LoadInputData<T1>(xRight, xLocalAddr, pregLoop, (2 * j + 1) * VL_FP32 + i * curColNumAlign);
-                Abs(xAbsLeft, xLeft, pregMain);
+                Muls(xAbsLeft, xLeft, 0.0f, pregMain);
+ 	            Compare<float, CMPMODE::NE>(compareLeft, xAbsLeft, xAbsLeft, pregMain);
+ 	            MaskNot(compareLeft, compareLeft, pregMain);
+ 	            Abs(xAbsLeft, xLeft, compareLeft);
                 ReduceMax(scale0, xAbsLeft, pregMain);
-                Abs(xAbsRight, xRight, pregLoop);
+                Muls(xAbsRight, xRight, 0.0f, pregLoop);
+ 	            Compare<float, CMPMODE::NE>(compareRight, xAbsRight, xAbsRight, pregLoop);
+ 	            MaskNot(compareRight, compareRight, pregLoop);
+ 	            Abs(xAbsRight, xRight, compareRight);
                 ReduceMax(scale1, xAbsRight, pregLoop);
                 Max(scale, scale0, scale1, preg1);
-                Muls(scale, scale, coeff, preg1);
+                CompareScalar<float, CMPMODE::NE>(compareScalar, scale, (float)0.0, preg1);
+                Mul(scale, scale, (RegTensor<float>&)coeffReg, compareScalar);
                 Min(scale, scale, inf, preg1);
                 Duplicate(dupScale, scale, pregMain);
                 DataCopy<float, AscendC::MicroAPI::StoreDist::DIST_FIRST_ELEMENT_B32>(scaleLocalAddr + j + i * scaleColNumAlign, scale, preg1);
-                Div(xLeft, xLeft, dupScale, pregMain);
-                Div(xRight, xRight, dupScale, pregLoop);
+                Div<float, &mode>(x0Left, xLeft, dupScale, pregMain);
+                Muls(x1Left, x0Left, 0.0f, pregMain);
+                Compare<float, CMPMODE::NE>(compareLeft, x1Left, x1Left, pregMain);
+                Select(xLeft, xLeft, x0Left, compareLeft);
+                Div<float, &mode>(x0Right, xRight, dupScale, pregLoop);
+                Muls(x1Right, x0Right, 0.0f, pregLoop);
+                Compare<float, CMPMODE::NE>(compareRight, x1Right, x1Right, pregLoop);
+                Select(xRight, xRight, x0Right, compareRight);
                 StoreOutputData<T0>(yLocalAddr, xLeft, pregMain, 2 * j * VL_FP32 + i * dstCurColNumAlign);
                 StoreOutputData<T0>(yLocalAddr, xRight, pregLoop, (2 * j + 1) * VL_FP32 + i * dstCurColNumAlign);
             }
@@ -316,11 +346,15 @@ __aicore__ inline void VFProcessDynamicBlockQuant(
                 LoadInputData<T1>(xLeft, xLocalAddr, pregLoop, loopCountFoldTwo * 2 * VL_FP32 + i * curColNumAlign);
                 Abs(xAbsLeft, xLeft, pregLoop);
                 ReduceMax(scale, xAbsLeft, pregLoop);
-                Muls(scale, scale, coeff, preg1);
+                CompareScalar<float, CMPMODE::NE>(compareScalar, scale, (float)0.0, preg1);
+                Mul(scale, scale, (RegTensor<float>&)coeffReg, compareScalar);
                 Min(scale, scale, inf, preg1);
                 Duplicate(dupScale, scale, pregLoop);
                 DataCopy<float, AscendC::MicroAPI::StoreDist::DIST_FIRST_ELEMENT_B32>(scaleLocalAddr + loopCountFoldTwo + i * scaleColNumAlign, scale, preg1);
-                Div(xLeft, xLeft, dupScale, pregLoop);
+                Div<float, &mode>(x0Left, xLeft, dupScale, pregLoop);
+                Muls(x1Left, x0Left, 0.0f, pregLoop);
+                Compare<float, CMPMODE::NE>(compareLeft, x1Left, x1Left, pregLoop);
+                Select(xLeft, xLeft, x0Left, compareLeft);
                 StoreOutputData(yLocalAddr, xLeft, pregLoop, loopCountFoldTwo * 2 * VL_FP32 + i * dstCurColNumAlign);
             }
         }

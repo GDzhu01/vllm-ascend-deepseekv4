@@ -578,6 +578,12 @@ __aicore__ inline void CompressorVec1SliceIterator<COMP>::Reset(uint32_t bIdx, u
 {
     sliceInfo_.bIdx = bIdx;
     sliceInfo_.sIdx = sIdx;
+    while (tools_.GetSeqUsed(sliceInfo_.bIdx) == 0) {
+        sliceInfo_.bIdx++;
+        if (sliceInfo_.bIdx == batch_size_) {
+            sliceInfo_.bIdx = 0;
+        }
+    }
     sliceInfo_.bSeqUsed = tools_.GetSeqUsed(sliceInfo_.bIdx);
     sliceInfo_.bStartPos = tools_.GetStartPos(sliceInfo_.bIdx);
     if constexpr (COMP::coff == COFF::OVERLAP) {

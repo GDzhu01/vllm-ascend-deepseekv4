@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 
 #include "kernel_operator.h"
 #include "vf_topk.h"
-#include "vf_topk_16.h"
 #include "vf_topk_16_gather.h"
 
 namespace topk {
@@ -64,7 +63,6 @@ public:
         outputValueLocal = nkValueLocal[64];
     }
 
-
     __aicore__ inline void operator()(LocalTensor<uint32_t>& outputIdxLocal,
                                       LocalTensor<uint32_t>& inputLocal,
                                       uint32_t s2SeqLen)
@@ -83,7 +81,6 @@ public:
                           topK,       // topk数量
                           s2SeqLen); // 输入元素总数
     }
-
 private:
     LocalTensor<uint32_t> tmpIdxLocal;     // filter阶段使用暂存index Buf topK * 4B
     LocalTensor<uint32_t> tmpValueLocal;   // filter阶段使用暂存value Buf topK * 4B
@@ -96,7 +93,6 @@ private:
     LocalTensor<uint32_t> outputValueLocal; // 输出value tensor
     uint32_t topK;
 };
-
 
 template<>
 class LITopk<uint16_t> {
@@ -126,7 +122,6 @@ public:
         idxHighLocal = histogramsLocal[256];
         idxLowLocal = idxHighLocal[256];
         nkValueLocal = idxLowLocal[256];
-
         LocalTensor<uint32_t> tmpIndexLocalTmp = nkValueLocal[64];
         tmpIndexLocal = tmpIndexLocalTmp.template ReinterpretCast<uint16_t>();
     }
@@ -154,7 +149,6 @@ public:
                 PipeBarrier<PIPE_V>();
                 AscendC::DataCopy(indicesOutLocal, hisIndexLocal[(loopIdx + 1) % 2], topK);
             }
-        
         }
     }
 private:
@@ -168,5 +162,4 @@ private:
     uint32_t trunkLen = 16384;
 };
 }
-
 #endif

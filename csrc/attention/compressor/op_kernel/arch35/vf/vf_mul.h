@@ -30,17 +30,24 @@ __simd_vf__ void MulReduceSumbase32VFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreA
     MicroAPI::RegTensor<T> vreg0;
     MicroAPI::RegTensor<T> vreg1;
     MicroAPI::RegTensor<T> vregSum;
-    MicroAPI::MaskReg maskHalf = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::VL32>();
-    uint32_t count = baseD;
+    MicroAPI::RegTensor<T> vregSum0;
+    MicroAPI::RegTensor<T> vregSum1;
+    MicroAPI::MaskReg mask = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::ALL>();
+    MicroAPI::MaskReg maskLHalf = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::VL32>();
+    MicroAPI::MaskReg maskRHalf;
+    MicroAPI::Not(maskRHalf,maskLHalf,mask);
     for(uint16_t scLoop = 0; scLoop < scLoopCnt; scLoop++) {
-        MicroAPI::Duplicate(vregSum, 0, maskHalf);
-        for(uint16_t rLoop = 0; rLoop < coff*r; rLoop++) {
-            MicroAPI::LoadAlign(vreg0, kvAddr + rLoop*baseD);
-            MicroAPI::LoadAlign(vreg1, scoreAddr + rLoop*baseD);
-            MicroAPI::Mul(vreg0, vreg0, vreg1, maskHalf);
-            MicroAPI::Add(vregSum, vregSum, vreg0, maskHalf);
+        MicroAPI::Duplicate(vregSum, 0, mask);
+        for(uint16_t rLoop = 0; rLoop < r; rLoop++) {
+            MicroAPI::LoadAlign(vreg0, kvAddr + rLoop * 2 * baseD);
+            MicroAPI::LoadAlign(vreg1, scoreAddr + rLoop * 2 * baseD);
+            MicroAPI::Mul(vreg0, vreg0, vreg1, mask);
+            MicroAPI::Add(vregSum, vregSum, vreg0, mask);
         }
-        MicroAPI::StoreAlign(outputAddr + scLoop*baseD, vregSum, maskHalf);
+        MicroAPI::Squeeze<T, AscendC::MicroAPI::GatherMaskMode::NO_STORE_REG>(vregSum0, vregSum, maskLHalf);
+        MicroAPI::Squeeze<T, AscendC::MicroAPI::GatherMaskMode::NO_STORE_REG>(vregSum1, vregSum, maskRHalf);
+        MicroAPI::Add(vregSum0, vregSum0, vregSum1, maskLHalf);
+        MicroAPI::StoreAlign(outputAddr + scLoop*baseD, vregSum0, maskLHalf);
     }
 }
 

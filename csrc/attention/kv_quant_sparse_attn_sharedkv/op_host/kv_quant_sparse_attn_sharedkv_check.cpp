@@ -74,6 +74,10 @@ void KvQuantSASTilingCheck::Init()
     qkHeadDim_ = sasInfo_.qkHeadDim;
     qTSize_ = sasInfo_.qTSize;
 
+    dSize_ = sasInfo_.dSize;
+    dSizeV_ = sasInfo_.dSizeV;
+    dSizeVInput_ = sasInfo_.dSizeVInput;
+
     actualLenDimsQ_ = sasInfo_.actualLenDimsQ;
     maxActualseq_ = sasInfo_.maxActualseq;
 
@@ -84,20 +88,14 @@ void KvQuantSASTilingCheck::Init()
     oriBlockSize_ = sasInfo_.oriBlockSize;
     cmpBlockSize_ = sasInfo_.cmpBlockSize;
 
-    if (opParamInfo_.oriKv.tensor != nullptr) {
-        oriBlockNum_ = opParamInfo_.oriKv.tensor->GetShape().GetStorageShape().GetDim(0);
-        oriBlockSize_ = opParamInfo_.oriKv.tensor->GetShape().GetStorageShape().GetDim(1);
-    }
-
-    if (opParamInfo_.cmpKv.tensor != nullptr) {
-        cmpBlockNum_ = opParamInfo_.cmpKv.tensor->GetShape().GetStorageShape().GetDim(0);
-        cmpBlockSize_ = opParamInfo_.cmpKv.tensor->GetShape().GetStorageShape().GetDim(1);
-    }
-
     sparseBlockCount_ = sasInfo_.sparseBlockCount;
     sparseBlockSize_ = sasInfo_.sparseBlockSize;
 
     tileSize_ = sasInfo_.tileSize;
+
+    cmpRatio_ = sasInfo_.cmpRatio;
+    oriWinLeft_ = sasInfo_.oriWinLeft;
+    oriWinRight_ = sasInfo_.oriWinRight;
 
     oriMaskMode_ = sasInfo_.oriMaskMode;
     cmpMaskMode_ = sasInfo_.cmpMaskMode;
@@ -110,6 +108,14 @@ void KvQuantSASTilingCheck::Init()
     qLayout_ = sasInfo_.qLayout;
     kvLayout_ = sasInfo_.kvLayout;
     outLayout_ = sasInfo_.outLayout;
+
+    if (opParamInfo_.cmpKv.tensor == nullptr) {
+        perfMode_ = SASTemplateMode::SWA_TEMPLATE_MODE;
+    } else if (opParamInfo_.cmpSparseIndices.tensor != nullptr) {
+        perfMode_ = SASTemplateMode::SCFA_TEMPLATE_MODE;
+    } else {
+        perfMode_ = SASTemplateMode::CFA_TEMPLATE_MODE;
+    }
 }
 
 ge::graphStatus KvQuantSASTilingCheck::Process()

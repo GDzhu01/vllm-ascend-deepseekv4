@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
  * \brief
  */
 
-#ifndef quant_lightning_indexer_TILING_H_
-#define quant_lightning_indexer_TILING_H_
+#ifndef QUANT_LIGHTNING_INDEXER_TILING_H
+#define QUANT_LIGHTNING_INDEXER_TILING_H
 
 #include "err/ops_err.h"
 #include "exe_graph/runtime/tiling_context.h"
@@ -248,4 +248,4 @@ private:
 };
 
 }  // namespace optiling
-#endif  // quant_lightning_indexer_TILING_H_
+#endif  // QUANT_LIGHTNING_INDEXER_TILING_H
