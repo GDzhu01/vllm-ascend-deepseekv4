@@ -512,6 +512,8 @@ python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --d
 python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address 141.61.39.117 --dp-rpc-port 12777 --vllm-start-port 9100
 ```
 
+Finally, Refer to [Prefill-Decode Disaggregation (Deepseek)](./pd_disaggregation_mooncake_multi_node.md) to deploy the P-D disaggregation proxy.
+
 ## Functional Verification
 
 Once your server is started, you can query the model with input prompts:
