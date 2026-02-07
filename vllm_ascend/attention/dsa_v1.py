@@ -102,6 +102,9 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
             # Slice the valid data for this request from the packed input
             # Shape: [length, n, d]
             req_data = x[input_offset: input_offset + length]
+            if compute_tokens != 0:
+                num_blocks += 1
+            offset = compute_tokens % 128 + 128
 
             # Select the assigned blocks in the output
             # Shape: [num_blocks, block_size, n, d]
@@ -113,7 +116,8 @@ def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 
 
             # Copy valid data into the beginning of the allocated blocks
             # The rest remains zeros
-            target_flat[:length] = req_data
+            target_flat[offset:length] = req_data
+            target_flat[offset-128:offset] = swa
 
         # Update pointers
         input_offset += length
@@ -635,7 +639,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # tmp swa_block
         prefill_seq_lens = self.seq_lens[reqs_start:]
 
-        prefill_swa_block = (prefill_seq_lens + self.block_size - 1) // self.block_size
+        prefill_swa_block = (prefill_seq_lens + self.block_size - 1) // self.block_size + 1
         cumsum_prefill_swa_block = prefill_swa_block.cumsum(dim=0)
         prefill_swa_block_ids = torch.arange(1, cumsum_prefill_swa_block[-1] + 1,
                                 dtype=self.block_table.dtype,
@@ -646,11 +650,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                          dtype=self.block_table.dtype,
                                          device=self.block_table.device)
-
+        num_computed_blocks = (num_computed_tokens + self.block_size - 1) // self.block_size - 1
         for i in range(num_prefill):
             start_idx = cumsum_prefill_swa_block[i] - prefill_swa_block[i]
             end_idx = cumsum_prefill_swa_block[i]
-            prefill_swa_block_table[i, :prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
+            prefill_swa_block_table[i, num_computed_blocks:num_computed_blocks+prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
 
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
 
@@ -1279,12 +1283,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
-        # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
-            kv_state[0].view(-1, kv.shape[-1]),
-            attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
-            kv
-        )
         compress_cos = attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = attn_metadata.prefill.compress_sin[layer_name]
         if self.compress_ratio > 1:
@@ -1406,6 +1404,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="TND" if self.enable_kv_tnd else "PA_ND"
             )[0]
+        # swa exec kv
+        torch_npu.npu_scatter_nd_update_(
+            kv_state[0].view(-1, kv.shape[-1]),
+            attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
+            kv
+        )
         return attn_output
 
     def _forward_decode(
