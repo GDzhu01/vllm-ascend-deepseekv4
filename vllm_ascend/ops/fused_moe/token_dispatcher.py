@@ -282,7 +282,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
             })
         if self.a5_need_extra_args:
             stage3_kwargs.update({
-                "comm_alg": "mte",
+                "comm_alg": "ccu",
             })
 
         kwargs_mc2.update(stage3_kwargs)
@@ -314,7 +314,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher):
             "moe_expert_num": moe_expert_num,
             "global_bs": 0,
             "expert_token_nums_type": 0,
-            "comm_alg": "mte",
+            "comm_alg": "ccu",
         }
         stage1_kwargs = {
             "scales": None,
