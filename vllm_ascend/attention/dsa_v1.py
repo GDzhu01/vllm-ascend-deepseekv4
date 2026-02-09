@@ -56,72 +56,6 @@ def rotate_activation(x: torch.Tensor, attn_metadata) -> torch.Tensor:
     return hadamard_transform_ref(x, scale=hidden_size ** -0.5, attn_metadata=attn_metadata)
 
 
-def pad_to_blocks(x: torch.Tensor, length_list: torch.Tensor, block_size: int = 128):
-    """
-    Pads a ragged/packed tensor into fixed-size blocks.
-
-    Args:
-        x: Input tensor of shape [t, n, d] where t = sum(length_list).
-        length_list: Tensor of shape [bs] containing valid sequence lengths.
-        block_size: The size of each block (default 128).
-
-    Returns:
-        padded_blocks: Tensor of shape [total_blocks, block_size, n, d].
-    """
-    # 1. Validation
-    if x.shape[0] != length_list.sum():
-        raise ValueError(
-            f"Input dimension 0 ({x.shape[0]}) does not match sum of length_list ({length_list.sum()})"
-        )
-
-    bs = length_list.shape[0]
-    n, d = x.shape[1], x.shape[2]
-
-    # 2. Calculate how many blocks are needed for each request
-    # Formula: ceil(length / block_size) -> (length + block_size - 1) // block_size
-    blocks_per_req = (length_list + block_size - 1) // block_size
-    total_blocks = blocks_per_req.sum() + 1
-
-    # 3. Allocate output tensor with zeros (this handles the padding automatically)
-    # Shape: [total_blocks, block_size, n, d]
-    out = torch.zeros(
-        (total_blocks, block_size, n, d),
-        dtype=x.dtype,
-        device=x.device
-    )
-
-    # 4. Fill data
-    input_offset = 0
-    block_offset = 1
-
-    for i in range(bs):
-        length = length_list[i]
-        num_blocks = blocks_per_req[i]
-
-        if length > 0:
-            # Slice the valid data for this request from the packed input
-            # Shape: [length, n, d]
-            req_data = x[input_offset: input_offset + length]
-
-            # Select the assigned blocks in the output
-            # Shape: [num_blocks, block_size, n, d]
-            target_blocks = out[block_offset: block_offset + num_blocks]
-
-            # View as a flat sequence to easily copy the data
-            # Shape: [num_blocks * block_size, n, d]
-            target_flat = target_blocks.view(-1, n, d)
-
-            # Copy valid data into the beginning of the allocated blocks
-            # The rest remains zeros
-            target_flat[:length] = req_data
-
-        # Update pointers
-        input_offset += length
-        block_offset += num_blocks
-
-    return out
-
-
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -156,15 +90,20 @@ class AscendDSABackend(AttentionBackend):
 
 @dataclass
 class ChunkedContextMetadata:
-    # New for MLA (compared to FlashAttention)
-    # For handling chunked prefill
-    cu_seq_lens: torch.Tensor
-    starts: torch.Tensor
-    seq_tot: list[int]
-    max_seq_lens: list[int]
-    workspace: torch.Tensor
-    chunk_seq_lens: torch.Tensor
-    chunk_seq_lens_npu: torch.Tensor
+    has_context: torch.Tensor
+    """If the request has chunked context"""
+    swa_offsets: torch.Tensor
+    """The offset in kv_cache of swa"""
+    swa_lengths: torch.Tensor
+    """The length in kv_cache of swa"""
+    swa_block_ids: torch.Tensor
+    """The block ids in kv_cache of swa"""
+    computed_offsets: torch.Tensor
+    """The offset in kv for PS_ND layout."""
+    key_start_loc: torch.Tensor
+    """The start location of key/value vector with cached swa for TND layout"""
+    num_computed_blocks: torch.Tensor
+    """The number of blocks for computed tokens"""
 
 @dataclass
 class AscendDSAPrefillMetadata:
@@ -279,6 +218,91 @@ class AscendDSAMetadata:
 
 M = TypeVar("M", bound=AscendDSAMetadata)
 
+def pad_to_blocks(x: torch.Tensor, swa_cache: torch.Tensor, length_list: torch.Tensor, context_metadata: ChunkedContextMetadata | None, block_size: int = 128):
+    """
+    Pads a ragged/packed tensor into fixed-size blocks.
+
+    Args:
+        x: Input tensor of shape [t, n, d] where t = sum(length_list).
+        swa_cache: Cache tensor for swa of shape [total_num_reqs*3, block_size, d].
+        length_list: Tensor of shape [bs] containing valid sequence lengths.
+        context_metadata: Metadata for chunked context.
+        block_size: The size of each block (default 128).
+
+    Returns:
+        padded_blocks: Tensor of shape [total_blocks, block_size, n, d].
+    """
+    bs = length_list.shape[0]
+    n, d = x.shape[1], x.shape[2]
+    swa_cache = swa_cache.view(-1, 3 * block_size, n, d)
+
+    # 2. Calculate how many blocks are needed for each request
+    if context_metadata:
+        computed_offsets = context_metadata.computed_offsets
+    else:
+        computed_offsets = 0
+    blocks_per_req = cdiv(length_list+computed_offsets, block_size)
+    total_blocks = blocks_per_req.sum() + 1
+
+    # 3. Allocate output tensor with zeros (this handles the padding automatically)
+    # Shape: [total_blocks, block_size, n, d]
+    out = torch.zeros(
+        (total_blocks, block_size, n, d),
+        dtype=x.dtype,
+        device=x.device
+    )
+
+    # 4. Fill data
+    input_offset = 0
+    block_offset = 1
+
+    for i in range(bs):
+        length = length_list[i]
+        num_blocks = blocks_per_req[i]
+
+        if length > 0:
+            # Slice the valid data for this request from the packed input
+            # Shape: [length, n, d]
+            req_data = x[input_offset: input_offset + length]
+
+            # Select the assigned blocks in the output
+            # Shape: [num_blocks, block_size, n, d]
+            target_blocks = out[block_offset: block_offset + num_blocks]
+
+            # View as a flat sequence to easily copy the data
+            # Shape: [num_blocks * block_size, n, d]
+            target_flat = target_blocks.view(-1, n, d)
+
+            # Copy context swa data into the blocks
+            offset = 0
+            if context_metadata and context_metadata.has_context[i]:
+                offset = context_metadata.computed_offsets[i]
+                swa_data = load_swa(
+                    swa_cache = swa_cache[context_metadata.swa_block_ids[i]],
+                    offset = context_metadata.swa_offsets[i],
+                    length = context_metadata.swa_lengths[i],
+                    block_size = block_size
+                )
+                target_flat[offset-swa_data.shape[0]:offset] = swa_data
+            # Copy valid data into the blocks
+            target_flat[offset:offset+length] = req_data
+
+        # Update pointers
+        input_offset += length
+        block_offset += num_blocks
+
+    return out
+
+def load_swa(swa_cache: torch.Tensor, offset: int, length: int, block_size: int = 128):
+    if offset >= length:
+        swa_data = swa_cache[offset-length: offset]
+    else:
+        # | CacheBlock1 | CacheBlock2 | CacheBlock3 |
+        # | swa swa xxx | xxx xxx xxx | xxx xxx swa |
+        swa_data = torch.cat([swa_cache[offset-length:], swa_cache[:offset]], dim=0)
+    assert swa_data.shape[0] == length
+    return swa_data
+        
 
 class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     # Does this backend/builder support ACL Graphs for attention (default: no).
@@ -465,46 +489,35 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         if not self.chunked_prefill_enabled:
             return None
         num_reqs = common_attn_metadata.num_reqs
-
-        num_computed_tokens_cpu = (self.seq_lens - self.query_lens)
         reqs_start = self.num_decodes
+        tokens_start = self.num_decode_tokens
 
-        self.context_lens_cpu = num_computed_tokens_cpu[reqs_start:num_reqs]
-        max_context_len_cpu = self.context_lens_cpu.max().item()
-        if not max_context_len_cpu > 0:
+        num_computed_tokens_cpu = (self.seq_lens.to(self.device) - self.query_lens.to(self.device))[reqs_start:num_reqs]
+        has_context = num_computed_tokens_cpu != 0
+        if not any(has_context):
             return None
-        num_prefills_with_context_cpu = (self.context_lens_cpu
-                                         > 0).sum().item()
-        self.max_context_chunk = (self.chunked_prefill_workspace_size //
-                                  num_prefills_with_context_cpu)
-        self.max_context_chunk = round_down(self.max_context_chunk,
-                                            self.block_size)
+        needs_plus_block = (num_computed_tokens_cpu >= self.block_size)
+        num_computed_blocks = cdiv(num_computed_tokens_cpu, self.block_size) - needs_plus_block
 
-        assert self.max_context_chunk > 0
-        self.num_chunks = cdiv(max_context_len_cpu, self.max_context_chunk)
-        chunk_starts = torch.arange(self.num_chunks, dtype=torch.int32) \
-                           .unsqueeze(1).expand(-1, self.num_prefills) * self.max_context_chunk
-        chunk_ends = torch.min(self.context_lens_cpu.unsqueeze(0),
-                               chunk_starts + self.max_context_chunk)
-        self.chunk_seq_lens = (chunk_ends - chunk_starts).clamp(min=0)
-        self.cu_seq_lens_cpu = torch.zeros(self.num_chunks,
-                                           self.num_prefills + 1,
-                                           dtype=torch.int32,
-                                           pin_memory=True)
-        torch.cumsum(self.chunk_seq_lens,
-                     dim=1,
-                     out=self.cu_seq_lens_cpu[:, 1:],
-                     dtype=torch.int32)
+        # offsets and length in swa cache(kv_cache[0])
+        swa_offsets = num_computed_tokens_cpu % (self.block_size * 3)
+        swa_lengths = torch.clamp(num_computed_tokens_cpu, max=self.block_size)
+        # offsets in kv
+        computed_offsets = num_computed_tokens_cpu % self.block_size + self.block_size * needs_plus_block
+        cum_swa_lens = torch.cumsum(swa_lengths, 0)
+        q_start_loc = common_attn_metadata.query_start_loc[reqs_start:num_reqs+1].to(self.device)
+        key_start_loc = q_start_loc - q_start_loc[0]
+        key_start_loc[1:] += cum_swa_lens
+
+        swa_block_ids = common_attn_metadata.swa_block_table[reqs_start:, 0] // 3
         return ChunkedContextMetadata(
-            cu_seq_lens=self.cu_seq_lens_cpu.pin_memory().to(
-                self.device, non_blocking=True),
-            starts=chunk_starts.pin_memory().to(self.device,
-                                                non_blocking=True),
-            seq_tot=self.chunk_seq_lens.sum(dim=1).tolist(),
-            max_seq_lens=self.chunk_seq_lens.max(dim=1).values.tolist(),
-            chunk_seq_lens=self.chunk_seq_lens,
-            chunk_seq_lens_npu=self.chunk_seq_lens.npu(),
-            workspace=self.chunked_prefill_workspace,
+            has_context=has_context,
+            swa_offsets=swa_offsets,
+            swa_lengths=swa_lengths,
+            swa_block_ids=swa_block_ids,
+            computed_offsets=computed_offsets,
+            key_start_loc=key_start_loc,
+            num_computed_blocks=num_computed_blocks,
         )
 
     def build(
@@ -634,23 +647,25 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         # tmp swa_block
         prefill_seq_lens = self.seq_lens[reqs_start:]
+        seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
 
-        prefill_swa_block = (prefill_seq_lens + self.block_size - 1) // self.block_size
+        computed_offsets = chunked_context_metadata.computed_offsets if chunked_context_metadata else 0
+        prefill_swa_block = cdiv(seq_lens_q+computed_offsets, self.block_size)
+        num_computed_blocks = chunked_context_metadata.num_computed_blocks if chunked_context_metadata else torch.zeros_like(prefill_swa_block)
         cumsum_prefill_swa_block = prefill_swa_block.cumsum(dim=0)
         prefill_swa_block_ids = torch.arange(1, cumsum_prefill_swa_block[-1] + 1,
                                 dtype=self.block_table.dtype,
                                 device=self.block_table.device)
-        num_prefill = prefill_seq_lens.shape[0]
+        num_prefill = seq_lens_q.shape[0]
         prefill_swa_block_table_shape = (num_prefill,
                                          cdiv(self.vllm_config.model_config.max_model_len, self.block_size))
         prefill_swa_block_table = torch.zeros(prefill_swa_block_table_shape,
                                          dtype=self.block_table.dtype,
                                          device=self.block_table.device)
-
         for i in range(num_prefill):
             start_idx = cumsum_prefill_swa_block[i] - prefill_swa_block[i]
             end_idx = cumsum_prefill_swa_block[i]
-            prefill_swa_block_table[i, :prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
+            prefill_swa_block_table[i, num_computed_blocks[i]:num_computed_blocks[i]+prefill_swa_block[i]] = prefill_swa_block_ids[start_idx:end_idx]
 
         prefill_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[tokens_start:]
 
@@ -669,7 +684,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_slot_mapping = self.slot_mapping[compressed_tokens_start:compressed_tokens_end + compressed_tokens_start]
 
         self.start_pos_prefill.fill_(0)
-        seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
         self.start_pos_prefill[:num_prefill] = self.seq_lens[reqs_start:] - seq_lens_q
 
         tp_size = get_tensor_model_parallel_world_size()
@@ -1250,10 +1264,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.compress_ratio==128:
             (_, compressor_kv_state, compressor_score_state) = kv_state
 
+        assert attn_metadata.prefill
         cos = attn_metadata.prefill.cos[layer_name]
         sin = attn_metadata.prefill.sin[layer_name]
         actual_seq_lengths_query = attn_metadata.prefill.query_start_loc
-        actual_seq_lengths_key = attn_metadata.prefill.seq_lens
+        actual_seq_lengths_key = actual_seq_lengths_query # attn_metadata.prefill.chunked_context.key_start_loc if attn_metadata.prefill.chunked_context else actual_seq_lengths_query
+        actual_seq_lengths = attn_metadata.prefill.seq_lens
         compressed_kv_block_table = attn_metadata.prefill.block_table
         compressed_kv_slot_mapping = attn_metadata.prefill.slot_mapping
 
@@ -1279,12 +1295,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
-        # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
-            kv_state[0].view(-1, kv.shape[-1]),
-            attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
-            kv
-        )
         compress_cos = attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = attn_metadata.prefill.compress_sin[layer_name]
         if self.compress_ratio > 1:
@@ -1300,7 +1310,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                     compressed_cos=compress_cos,
                                                     compressed_sin=compress_sin,
                                                     actual_seq_lengths_query=actual_seq_lengths_query,
-                                                    actual_seq_lengths_key=actual_seq_lengths_key,
+                                                    actual_seq_lengths_key=actual_seq_lengths_query,
                                                     with_prefill=True)
 
             coff = 2 if self.compressor_overlap else 1
@@ -1339,9 +1349,10 @@ class AscendDSAImpl(DSAAttentionImpl):
                             compressed_kv.view(-1, compressed_kv.shape[-1]))
 
         if self.enable_kv_tnd:
+            # cat swa to kv for chunked prefill
             sliding_window_kv = kv
         else:
-            sliding_window_kv = pad_to_blocks(kv, actual_seq_lengths_key, block_size=128)
+            sliding_window_kv = pad_to_blocks(kv, kv_state[0], actual_seq_lengths_query[1:]-actual_seq_lengths_query[:-1], attn_metadata.prefill.chunked_context, block_size=128)
 
         if self.compress_ratio == 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
@@ -1349,8 +1360,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_kv=sliding_window_kv,
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
+                cu_seqlens_ori_kv=actual_seq_lengths_key,
+                seqused_kv=actual_seq_lengths,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c1_metadata,
                 softmax_scale=self.softmax_scale,
@@ -1370,9 +1381,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
+                cu_seqlens_ori_kv=actual_seq_lengths_key,
                 cu_seqlens_cmp_kv=attn_metadata.prefill.cu_c4_cmp_seqlen_list,
-                seqused_kv=actual_seq_lengths_key,
+                seqused_kv=actual_seq_lengths,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c4_metadata,
                 softmax_scale=self.softmax_scale,
@@ -1392,9 +1403,9 @@ class AscendDSAImpl(DSAAttentionImpl):
                 ori_block_table=attn_metadata.prefill.prefill_swa_block_table,
                 cmp_block_table=compressed_kv_block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
+                cu_seqlens_ori_kv=actual_seq_lengths_key,
                 cu_seqlens_cmp_kv=attn_metadata.prefill.cu_c128_cmp_seqlen_list,
-                seqused_kv=actual_seq_lengths_key,
+                seqused_kv=actual_seq_lengths,
                 sinks=self.attn_sink,
                 metadata=attn_metadata.prefill.sas_c128_metadata,
                 softmax_scale=self.softmax_scale,
@@ -1406,6 +1417,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_q="TND",
                 layout_kv="TND" if self.enable_kv_tnd else "PA_ND"
             )[0]
+
+        # swa exec kv
+        torch_npu.npu_scatter_nd_update_(
+            kv_state[0].view(-1, kv.shape[-1]),
+            attn_metadata.prefill.swa_slot_mapping.unsqueeze(-1),
+            kv
+        )
+
         return attn_output
 
     def _forward_decode(
