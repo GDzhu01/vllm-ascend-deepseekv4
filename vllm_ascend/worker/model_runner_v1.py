@@ -62,10 +62,6 @@ from vllm.v1.kv_cache_interface import (AttentionSpec, CrossAttentionSpec,
                                         FullAttentionSpec, KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
-                                        CompressAttentionSpec,
-                                        Compress4AttentionSpec,
-                                        Compress128AttentionSpec,
-                                        CompressIndexerAttentionSpec,
                                         UniformTypeKVCacheSpecs)
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, AsyncModelRunnerOutput,
                              LogprobsLists, LogprobsTensors, ModelRunnerOutput,
@@ -100,7 +96,17 @@ from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
                                                update_mla_attn_params)
 from vllm_ascend.core.kv_cache_spec import (Compress4AttentionSpec,
                                             Compress128AttentionSpec,
-                                            CompressAttentionSpec)
+                                            # ------------- state -------------
+                                            C128AttnKVStateSpec,
+                                            C128AttnScoreStateSpec,
+                                            C4AttnKVStateSpec,
+                                            C4AttnScoreStateSpec,
+                                            C4IndexerKVStateSpec,
+                                            C4IndexerScoreStateSpec,
+                                            # ---------------------------------
+                                            C4IndexerSpec,
+                                            SWAAttentionSpec,
+                                            )
 # yapf: enable
 from vllm_ascend.eplb.adaptor.vllm_adaptor import VllmEplbAdaptor
 from vllm_ascend.eplb.core.eplb_device_transfer_loader import \
@@ -3273,6 +3279,117 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         self.reorder_batch_threshold = reorder_batch_threshold_i  # noqa
 
+
+    def _get_kv_cache_spec_for_dsv4(self, layer_id, layer_name):
+        kv_cache_spec_list: dict[str, list[KVCacheSpec]] = defaultdict(list)
+        hf_config = self.model_config.hf_config
+        if layer_id in [0, 1] or "mtp" in layer_name:
+            # TODO(cmq): DON'T use magic number for the block size and pad_size
+            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=128*1*1*2,
+            ))
+        elif layer_id % 2 == 0:
+            # TODO(cmq): DON'T use magic number for the block size
+            kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                nope_dim=hf_config.head_dim -
+                hf_config.rope_head_dim,
+                rope_dim=hf_config.rope_head_dim,
+                scale_dim=0,
+                dtype=torch.bfloat16,
+                indexer_scale_dim=128,
+            ))
+            pad_size = kv_cache_spec_list[-1].indexer_scale_size_bytes()
+            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(C4IndexerSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim,
+                dtype=torch.int8,
+                pad_size=pad_size,
+            ))
+            # TODO(cmq): get window size from hf_config, instead of hard code in spec class
+            kv_cache_spec_list[layer_name].append(C4AttnKVStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(C4AttnScoreStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(C4IndexerKVStateSpec(
+                block_size=256,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(C4IndexerScoreStateSpec(
+                block_size=256,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+
+        elif layer_id % 2 != 0:
+            # TODO(cmq): DON'T use magic number for the block size
+            kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                nope_dim=hf_config.head_dim -
+                hf_config.rope_head_dim,
+                rope_dim=hf_config.rope_head_dim,
+                scale_dim=0,
+                dtype=torch.bfloat16,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=pad_size,
+            ))
+            # TODO(cmq): get window size from hf_config, instead of hard code in spec class
+            kv_cache_spec_list[layer_name].append(C128AttnKVStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list[layer_name].append(C128AttnScoreStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+
+
     def get_kv_cache_spec(self) -> dict[str, list[KVCacheSpec]]:
         """
         Generates the KVCacheSpec by parsing the kv cache format from each
@@ -3346,82 +3463,10 @@ class NPUModelRunner(GPUModelRunner):
                         dtype=self.kv_cache_dtype)]
 
             elif isinstance(attn_module, DSAAttention):
-                hf_config = self.model_config.hf_config
-                if layer_id in [0, 1] or "mtp" in layer_name:
-                    self.runner_only_attn_layers.add(layer_name)
-                elif layer_id % 2 == 0:
-                    # TODO(cmq): take scale into account
-                    if get_ascend_device_type() == AscendDeviceType.A5:
-                        kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
-                            scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
-                            dtype=torch.float8_e4m3fn,
-                            compress_ratio=4,
-                        ))
-                        kv_cache_spec_list[layer_name].append(CompressIndexerAttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=128,
-                            dtype=torch.float8_e4m3fn,
-                            compress_ratio=4,
-                        ))
-                    else:
-                        kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            rope_dim=hf_config.rope_head_dim,
-                            scale_dim=0,
-                            dtype=torch.bfloat16,
-                            compress_ratio=4,
-                        ))
-                        kv_cache_spec_list[layer_name].append(CompressIndexerAttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=128,
-                            dtype=torch.int8,
-                            compress_ratio=4,
-                        ))
-                elif layer_id % 2 != 0:
-                    if get_ascend_device_type() == AscendDeviceType.A5:
-                        # TODO(cmq): get the dim info from model config
-                        kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
-                            scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
-                            dtype=torch.bfloat16,
-                            compress_ratio=128,
-                        ))
-                    else:
-                        kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            rope_dim=hf_config.rope_head_dim,
-                            scale_dim=0,
-                            dtype=torch.bfloat16,
-                            compress_ratio=128,
-                        ))
-
+                return self._get_kv_cache_spec_for_dsv4(
+                    layer_id=layer_id,
+                    layer_name=layer_name,
+                )
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
         if len(mamba_layers) > 0:
             if (self.vllm_config.speculative_config is not None
