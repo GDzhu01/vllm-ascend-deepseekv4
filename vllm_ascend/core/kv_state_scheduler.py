@@ -103,6 +103,7 @@ class KVStateScheduler(Scheduler):
         self.is_mtp_kv_consumer = self.vllm_config.speculative_config and \
                                   self.vllm_config.kv_transfer_config and \
                                   self.vllm_config.kv_transfer_config.is_kv_consumer
+        self.block_size = self.vllm_config.cache_config.block_size
 
     def add_request(self, request: Request) -> None:
         # Fill in placeholder tokens to enable full graph compatibility. Without
@@ -167,7 +168,7 @@ class KVStateScheduler(Scheduler):
                 req_index += 1
                 continue
 
-            num_new_tokens = (
+            remain_tokens = num_new_tokens = (
                 request.num_tokens_with_spec
                 + request.num_output_placeholders
                 - request.num_computed_tokens
@@ -181,6 +182,13 @@ class KVStateScheduler(Scheduler):
             num_new_tokens = min(
                 num_new_tokens, self.max_model_len - 1 - request.num_computed_tokens
             )
+            
+            # we need align chunk size with block_size to avoid wrong cache r/w
+            # caused by current chunked prefill impl
+            if remain_tokens != num_new_tokens:
+                num_new_tokens = (num_new_tokens // self.block_size) * self.block_size
+                if token_budget - num_new_tokens < self.block_size:
+                    token_budget = num_new_tokens
 
             # Schedule encoder inputs.
             encoder_inputs_to_schedule = None
@@ -433,6 +441,7 @@ class KVStateScheduler(Scheduler):
                                           num_computed_tokens)
                     else:
                         num_new_tokens = request.num_tokens - num_computed_tokens
+                    ori_num_new_tokens = num_new_tokens
                     threshold = self.scheduler_config.long_prefill_token_threshold
                     if 0 < threshold < num_new_tokens:
                         num_new_tokens = threshold
@@ -448,6 +457,12 @@ class KVStateScheduler(Scheduler):
                         break
 
                     num_new_tokens = min(num_new_tokens, token_budget)
+                    # we need align chunk size with block_size to avoid wrong cache r/w
+                    # caused by current chunked prefill impl
+                    if ori_num_new_tokens != num_new_tokens:
+                        num_new_tokens = (num_new_tokens // self.block_size) * self.block_size
+                        if token_budget - num_new_tokens < self.block_size:
+                            token_budget = num_new_tokens
                     assert num_new_tokens > 0
 
                     # Schedule encoder inputs.
