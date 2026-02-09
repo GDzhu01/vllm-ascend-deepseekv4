@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable
 from itertools import islice
 from typing import Optional
 
+# This is a test diff for vllm ascend
 import torch
 import torch.nn.functional as F
 import torch_npu
@@ -230,6 +231,7 @@ class DeepseekV4MoE(nn.Module):
         prefix: str = "",
         is_draft_layer: bool = False,
     ):
+        # This is a test diff for vllm ascend
         super().__init__()
         self.tp_size = get_tensor_model_parallel_world_size()
         self.tp_rank = get_tensor_model_parallel_rank()
@@ -654,6 +656,7 @@ class DeepseekV4Attention(nn.Module):
         self.compressor: Optional[Compressor] = None
         self.indexer: Optional[Indexer] = None
 
+        # This is a test diff for vllm ascend
         if self.compress_ratio > 1:
             self.compressor = Compressor(
                 vllm_config,
