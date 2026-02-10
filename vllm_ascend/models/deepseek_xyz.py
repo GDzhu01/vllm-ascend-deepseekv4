@@ -696,7 +696,7 @@ class DeepSeekXYZAttention(nn.Module):
             q_lora_rank=self.q_lora_rank,
             o_lora_rank=self.o_lora_rank,
             head_dim=self.head_dim,
-            qk_rope_head_dim=self.qk_rope_head_dim,
+            rope_head_dim=self.qk_rope_head_dim,
             nope_head_dim=self.nope_head_dim,
             eps=self.eps,
             n_groups=self.n_groups,

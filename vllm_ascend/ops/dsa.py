@@ -117,7 +117,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             nope_head_dim=self.nope_head_dim,
             n_groups=self.n_groups,
             n_local_groups=self.n_local_groups,
-            sliding_window=self.sliding_window,
+            window_size=self.sliding_window,
             compress_ratio=self.compress_ratio,
             cache_config=cache_config,
             quant_config=quant_config,

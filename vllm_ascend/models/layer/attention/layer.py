@@ -122,7 +122,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             nope_head_dim=self.nope_head_dim,
             n_groups=self.n_groups,
             n_local_groups=self.n_local_groups,
-            window_size=self.window_size,
+            sliding_window=self.window_size,
             compress_ratio=self.compress_ratio,
             **extra_impl_args,
         )
