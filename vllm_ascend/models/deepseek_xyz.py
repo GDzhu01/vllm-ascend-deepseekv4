@@ -293,7 +293,7 @@ class DeepSeekXYZMoE(nn.Module):
         if self.hash:
             self.gate.tid2eid = nn.Parameter(torch.empty(
                 config.vocab_size,
-                config.n_activated_experts,
+                config.num_experts_per_tok,
                 dtype=torch.int32),
                                              requires_grad=False)
             self.gate.e_score_correction_bias = None
@@ -306,7 +306,7 @@ class DeepSeekXYZMoE(nn.Module):
             shared_experts=self.shared_experts,
             gate=self.gate,
             num_experts=config.n_routed_experts,
-            top_k=config.n_activated_experts,
+            top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
             intermediate_size=config.moe_intermediate_size,
             reduce_results=False,
@@ -633,10 +633,10 @@ class DeepSeekXYZAttention(nn.Module):
         self.compress_ratio = config.compress_ratios[layer_idx]
 
         if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 40000
+            config.rope_parameters['rope_theta'] = config.hf_config.compress_rope_theta
             rope_groups = ['default', f'c{self.compress_ratio}']
         else:
-            config.rope_parameters['rope_theta'] = 10000
+            config.rope_parameters['rope_theta'] = config.hf_config.compress_rope_theta
             rope_groups = ['default']
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,

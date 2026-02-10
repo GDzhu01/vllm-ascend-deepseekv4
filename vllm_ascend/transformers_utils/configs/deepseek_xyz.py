@@ -148,7 +148,6 @@ class DeepSeekXYZConfig(PretrainedConfig):
         # moe
         n_routed_experts=256,
         n_shared_experts=1,
-        n_activated_experts=6,
         num_experts_per_tok=6,
         first_k_dense_replace=0,
         scoring_func="sqrtsoftplus",
@@ -212,7 +211,6 @@ class DeepSeekXYZConfig(PretrainedConfig):
         # moe
         self.n_routed_experts = n_routed_experts
         self.n_shared_experts = n_shared_experts
-        self.n_activated_experts = n_activated_experts
         self.scoring_func = scoring_func
         self.num_experts_per_tok = num_experts_per_tok
         self.first_k_dense_replace = first_k_dense_replace
@@ -228,6 +226,12 @@ class DeepSeekXYZConfig(PretrainedConfig):
         self.o_lora_rank = o_lora_rank
         self.sliding_window = sliding_window
         self.compress_ratios = compress_ratios
+        new_compress_ratios = []
+        for compress_ratio in self.compress_ratios:
+            if compress_ratio == 0:
+                compress_ratio = 1
+            new_compress_ratios.append(compress_ratio)
+        self.compress_ratios = new_compress_ratios
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
 
