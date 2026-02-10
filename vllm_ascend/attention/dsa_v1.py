@@ -218,6 +218,36 @@ class AscendDSAMetadata:
 
 M = TypeVar("M", bound=AscendDSAMetadata)
 
+def cat_swa_to_kv(x: torch.Tensor, swa_cache: torch.Tensor, q_start_loc: torch.Tensor, context_metadata: ChunkedContextMetadata | None, block_size: int = 128):
+    if context_metadata is None or not any(context_metadata.has_context):
+        return x
+    assert x.shape[0] == q_start_loc[-1]
+    n, d = x.shape[1], x.shape[2]
+    swa_cache = swa_cache.view(-1, 3 * block_size, n, d)
+    key_start_loc = context_metadata.key_start_loc
+    swa_offsets = context_metadata.swa_offsets
+    swa_lengths = context_metadata.swa_lengths
+    swa_block_ids = context_metadata.swa_block_ids
+    has_context = context_metadata.has_context
+    bs = has_context.shape[0]
+
+    out = torch.zeros(
+        (key_start_loc[-1], n, d),
+        dtype=x.dtype,
+        device=x.device,
+    )
+    for i in range(bs):
+        out[key_start_loc[i]+swa_lengths[i]:key_start_loc[i+1]] = x[q_start_loc[i]:q_start_loc[i+1]]
+        if has_context[i]:
+            swa_data = load_swa(
+                swa_cache = swa_cache[swa_block_ids[i]],
+                offset = swa_offsets[i],
+                length = swa_lengths[i],
+                block_size = block_size
+            ).view(-1, n, d)
+            out[key_start_loc[i]:key_start_loc[i]+swa_lengths[i]] = swa_data
+    return out
+
 def pad_to_blocks(x: torch.Tensor, swa_cache: torch.Tensor, length_list: torch.Tensor, context_metadata: ChunkedContextMetadata | None, block_size: int = 128):
     """
     Pads a ragged/packed tensor into fixed-size blocks.
@@ -1349,8 +1379,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                             compressed_kv.view(-1, compressed_kv.shape[-1]))
 
         if self.enable_kv_tnd:
-            # cat swa to kv for chunked prefill
-            sliding_window_kv = kv
+            sliding_window_kv = cat_swa_to_kv(kv, kv_state[0], actual_seq_lengths_query, attn_metadata.prefill.chunked_context, block_size=128)
         else:
             sliding_window_kv = pad_to_blocks(kv, kv_state[0], actual_seq_lengths_query[1:]-actual_seq_lengths_query[:-1], attn_metadata.prefill.chunked_context, block_size=128)
 
