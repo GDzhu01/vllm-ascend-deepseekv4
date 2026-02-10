@@ -15,12 +15,12 @@ else:
 
 def hf_config_override(hf_config: PretrainedConfig) -> PretrainedConfig:
     initial_architecture = hf_config.architectures[0]
-    if hf_config.model_type in ("deepseek_v3", "deepseek_v32", "deepseek_v4"):
+    if hf_config.model_type in ("deepseek_v3", "deepseek_v32", "deepseek_xyz"):
         target_model_type = hf_config.model_type
         hf_config.model_type = "deepseek_mtp"
     if hf_config.model_type == "deepseek_mtp":
-        if target_model_type == "deepseek_v4":
-            hf_config.update({"architectures": ["DeepSeekV4MTPModel"]})
+        if target_model_type == "deepseek_xyz":
+            hf_config.update({"architectures": ["DeepSeekXYZMTPModel"]})
         else:
             n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
             hf_config.update({

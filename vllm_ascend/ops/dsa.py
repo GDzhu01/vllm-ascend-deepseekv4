@@ -68,7 +68,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         eps: float,
         n_groups: int,
         n_local_groups: int,
-        window_size: int,
+        sliding_window: int,
         compress_ratio: int,
         dsa_modules: DSAModules,
         cache_config: CacheConfig | None = None,
@@ -88,7 +88,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.eps = eps
         self.n_groups = n_groups
         self.n_local_groups = n_local_groups
-        self.window_size = window_size
+        self.sliding_window = sliding_window
         self.compress_ratio = compress_ratio
 
         self.wq_a = dsa_modules.wq_a
@@ -117,7 +117,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             nope_head_dim=self.nope_head_dim,
             n_groups=self.n_groups,
             n_local_groups=self.n_local_groups,
-            window_size=self.window_size,
+            sliding_window=self.sliding_window,
             compress_ratio=self.compress_ratio,
             cache_config=cache_config,
             quant_config=quant_config,

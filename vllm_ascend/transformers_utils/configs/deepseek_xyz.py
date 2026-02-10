@@ -4,7 +4,7 @@ from transformers import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 
 
-class DeepseekV4Config(PretrainedConfig):
+class DeepSeekXYZConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`DeepseekV3Model`]. It is used to instantiate an DeepSeek
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -102,16 +102,16 @@ class DeepseekV4Config(PretrainedConfig):
             The dropout ratio for the attention probabilities.
 
     ```python
-    >>> from transformers import DeepseekV3Model, DeepseekV4Config
+    >>> from transformers import DeepseekV3Model, DeepSeekXYZConfig
 
     >>> # Initializing a Deepseek-V3 style configuration
-    >>> configuration = DeepseekV4Config()
+    >>> configuration = DeepSeekXYZConfig()
 
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
 
-    model_type = "deepseek_v4"
+    model_type = "deepseek_xyz"
     keys_to_ignore_at_inference = ["past_key_values"]
     base_model_tp_plan = {  # TODO: only replicate attention layers when > first_k_dense_replace
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",
@@ -140,10 +140,10 @@ class DeepseekV4Config(PretrainedConfig):
         # base
         vocab_size=129280,
         hidden_size=4096,
-        moe_inter_dim=2048,
+        moe_intermediate_size=2048,
         num_hidden_layers=43,
         moe_layer_freq=1,
-        n_hash_layers=3,
+        num_hash_layers=3,
         num_attention_heads=64,
         # moe
         n_routed_experts=256,
@@ -151,7 +151,7 @@ class DeepseekV4Config(PretrainedConfig):
         n_activated_experts=6,
         num_experts_per_tok=6,
         first_k_dense_replace=0,
-        score_func="sqrtsoftplus",
+        scoring_func="sqrtsoftplus",
         topk_method="noaux_tc",
         routed_scaling_factor=1.5,
         # mqa
@@ -202,8 +202,8 @@ class DeepseekV4Config(PretrainedConfig):
     ):
         # base
         self.vocab_size = vocab_size
-        self.moe_inter_dim = moe_inter_dim
-        self.n_hash_layers = n_hash_layers
+        self.moe_intermediate_size = moe_intermediate_size
+        self.num_hash_layers = num_hash_layers
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.moe_layer_freq = moe_layer_freq
@@ -213,7 +213,7 @@ class DeepseekV4Config(PretrainedConfig):
         self.n_routed_experts = n_routed_experts
         self.n_shared_experts = n_shared_experts
         self.n_activated_experts = n_activated_experts
-        self.score_func = score_func
+        self.scoring_func = scoring_func
         self.num_experts_per_tok = num_experts_per_tok
         self.first_k_dense_replace = first_k_dense_replace
         self.topk_method = topk_method
@@ -244,7 +244,7 @@ class DeepseekV4Config(PretrainedConfig):
         self.scale_fmt = scale_fmt
 
         #
-        self.moe_intermediate_size = moe_inter_dim
+        self.moe_intermediate_size = moe_intermediate_size
         self.rms_norm_eps = 1e-6
         self.pad_token_id = None
         self.bos_token_id = 0
