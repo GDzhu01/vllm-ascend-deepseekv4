@@ -9,15 +9,20 @@ from vllm.v1.core.kv_cache_coordinator import (KVCacheCoordinator,
                                                HybridKVCacheCoordinator,
                                                )
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
-from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
-from vllm.v1.kv_cache_interface import KVCacheConfig
+from vllm.v1.core.kv_cache_utils import (
+    BlockHash,
+    BlockHashList,
+    BlockHashListWithBlockSize,
+    KVCacheBlock,
+)
+from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttentionSpec
 
 from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 
 
-class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
+class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
     """
     KV cache coordinator for hybrid models with multiple KV cache types, and
     thus multiple kv cache groups.
@@ -38,80 +43,96 @@ class KVCacheCoordinatorWithMultiPool(KVCacheCoordinator):
         hash_block_size: int,
         metrics_collector: KVCacheMetricsCollector | None = None,
     ):
-        self.kv_cache_config = kv_cache_config
-        self.max_model_len = max_model_len
-        self.enable_caching = enable_caching
-        self.kv_cache_spec = self.kv_cache_config.kv_cache_groups[
-            0].kv_cache_spec
-        self.block_size = self.kv_cache_spec.block_size
-        self.dcp_world_size = dcp_world_size
-        self.pcp_world_size = pcp_world_size
-
-        # Needs special handling for find_longest_cache_hit if eagle is enabled
-        self.use_eagle = use_eagle
-        cache_num_blocks = [
-            kv_cache_config.num_blocks //
-            kv_cache_group.kv_cache_spec.compress_ratio
-            for kv_cache_group in kv_cache_config.kv_cache_groups
-        ]
-        self.block_pool = MultiBlockPool(
-            cache_num_blocks,
+        super().__init__(
+            kv_cache_config,
+            max_model_len,
+            use_eagle,
             enable_caching,
-            hash_block_size,
             enable_kv_cache_events,
-            metrics_collector,
+            dcp_world_size=dcp_world_size,
+            pcp_world_size=pcp_world_size,
+            hash_block_size=hash_block_size,
+            metrics_collector=metrics_collector,
         )
-        self.single_type_managers = tuple(
-            get_manager_for_kv_cache_spec(
-                kv_cache_spec=kv_cache_group.kv_cache_spec,
-                block_pool=self.block_pool,
-                kv_cache_group_id=i,
-                dcp_world_size=dcp_world_size,
-                pcp_world_size=pcp_world_size,
-            ) for i, kv_cache_group in enumerate(
-                self.kv_cache_config.kv_cache_groups))
-        self.num_single_type_manager = len(self.single_type_managers)
 
     def find_longest_cache_hit(
         self,
         block_hashes: list[BlockHash],
         max_cache_hit_length: int,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int]:
-        blocks: tuple[list[KVCacheBlock], ...] = tuple(
-            [] for _ in range(self.num_single_type_manager))
-        return blocks, 0
-
-    def get_num_blocks_to_allocate(
-        self,
-        request_id: str,
-        num_tokens: int,
-        new_computed_blocks: tuple[Sequence[KVCacheBlock], ...],
-        num_encoder_tokens: int,
-    ) -> int:
         """
-        Get the number of blocks needed to be allocated for the request.
+        Find the longest cache hit using an iterative fixed-point algorithm.
+
+        Each attention type either accepts the current candidate length or
+        reduces it. If any type reduces the length, restart checks over all
+        types. This converges because length monotonically decreases and is
+        bounded below by 0.
 
         Args:
-            request_id: The request ID.
-            num_tokens: The total number of tokens that need a slot (including
-                tokens that are already allocated).
-            new_computed_blocks: The new computed blocks just hitting the
-                prefix caching.
-            num_encoder_tokens: The number of encoder tokens for allocating
-                blocks for cross-attention.
+            block_hashes: The block hashes of the request.
+            max_cache_hit_length: The maximum length of the cache hit.
 
         Returns:
-            The number of blocks.
+            A tuple containing:
+                - A tuple of the cache hit blocks for each single type manager.
+                - The number of tokens of the longest cache hit.
         """
-        num_blocks_to_allocate = []
-        for i, manager in enumerate(self.single_type_managers):
-            num_blocks_to_allocate.append(
-                manager.get_num_blocks_to_allocate(request_id, num_tokens,
-                                                   new_computed_blocks[i]))
-        # We need to use the C128 block pool to check the number of blocks for allocation, as C128 is the bottleneck for the block count.
-        return num_blocks_to_allocate[1]
 
+        def _get_block_hashes(kv_cache_spec: KVCacheSpec) -> BlockHashList:
+            if kv_cache_spec.block_size == self.hash_block_size:
+                return block_hashes
+            return BlockHashListWithBlockSize(
+                block_hashes, self.hash_block_size, kv_cache_spec.block_size
+            )
 
+        num_groups = len(self.kv_cache_config.kv_cache_groups)
+        hit_length = max_cache_hit_length
+        hit_blocks_by_group: list[list[KVCacheBlock] | None] = [None] * num_groups
+
+        while True:
+            curr_hit_length = hit_length
+
+            for spec, group_ids, manager_cls in self.attention_groups:
+                is_full_attn = isinstance(spec, FullAttentionSpec)
+
+                # Full attention: reuse cached blocks (downward-closed property)
+                cached_blocks = hit_blocks_by_group[group_ids[0]]
+                if is_full_attn and cached_blocks is not None:
+                    # For full attention, we only need to compute the cache hit
+                    # length once. Starting from the second iteration, if the
+                    # curr_hit_length is reduced by other groups, we can simply
+                    # keep the first (curr_hit_length // block_size) blocks from
+                    # the last iteration.
+                    num_blocks = curr_hit_length // spec.block_size
+                    curr_hit_length = num_blocks * spec.block_size
+                    for group_id in group_ids:
+                        blocks = hit_blocks_by_group[group_id]
+                        assert blocks is not None
+                        del blocks[num_blocks:]
+                else:
+                    hit_blocks = manager_cls.find_longest_cache_hit(
+                        block_hashes=_get_block_hashes(spec),
+                        max_length=curr_hit_length,
+                        kv_cache_group_ids=group_ids,
+                        block_pool=self.block_pool,
+                        kv_cache_spec=spec,
+                        use_eagle=self.use_eagle,
+                        alignment_tokens=self.lcm_block_size,
+                    )
+                    # curr_hit_length need multipy compress_ratio to recover original len
+                    compress_ratio = spec.compress_ratio if hasattr(spec, "compress_ratio") else 1
+                    curr_hit_length = len(hit_blocks[0]) * spec.block_size * compress_ratio
+                    for group_id, blocks in zip(group_ids, hit_blocks):
+                        hit_blocks_by_group[group_id] = blocks
+
+            if curr_hit_length < hit_length:
+                hit_length = curr_hit_length
+            else:
+                break
+
+        return tuple(
+            blocks if blocks is not None else [] for blocks in hit_blocks_by_group
+        ), hit_length
 
 
 def get_kv_cache_coordinator(
@@ -125,30 +146,7 @@ def get_kv_cache_coordinator(
     hash_block_size: int,
     metrics_collector: KVCacheMetricsCollector | None = None,
 ) -> KVCacheCoordinator:
-    if not enable_caching:
-        return KVCacheCoordinatorNoPrefixCache(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
-            enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
-        )
-    if len(kv_cache_config.kv_cache_groups) == 1:
-        return UnitaryKVCacheCoordinator(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
-            enable_caching,
-            enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
-        )
-    return HybridKVCacheCoordinator(
+    return AscendHybridKVCacheCoordinator(
         kv_cache_config,
         max_model_len,
         use_eagle,
@@ -159,30 +157,6 @@ def get_kv_cache_coordinator(
         hash_block_size=hash_block_size,
         metrics_collector=metrics_collector,
     )
-
-
-# def get_kv_cache_coordinator(
-#     kv_cache_config: KVCacheConfig,
-#     max_model_len: int,
-#     use_eagle: bool,
-#     enable_caching: bool,
-#     enable_kv_cache_events: bool,
-#     dcp_world_size: int,
-#     pcp_world_size: int,
-#     hash_block_size: int,
-#     metrics_collector: KVCacheMetricsCollector | None = None,
-# ) -> KVCacheCoordinator:
-#     return KVCacheCoordinatorWithMultiPool(
-#         kv_cache_config,
-#         max_model_len,
-#         use_eagle,
-#         enable_caching,
-#         enable_kv_cache_events,
-#         dcp_world_size=dcp_world_size,
-#         pcp_world_size=pcp_world_size,
-#         hash_block_size=hash_block_size,
-#         metrics_collector=metrics_collector,
-#     )
 
 
 vllm.v1.core.kv_cache_coordinator.get_kv_cache_coordinator = get_kv_cache_coordinator

@@ -6,16 +6,24 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_utils import BlockHashList, KVCacheBlock
 from vllm.v1.core.single_type_kv_cache_manager import (
-    SingleTypeKVCacheManager, spec_manager_map)
+    SingleTypeKVCacheManager, SlidingWindowManager, FullAttentionManager, spec_manager_map)
 from vllm.v1.kv_cache_interface import KVCacheSpec
 from vllm.v1.request import Request
 
-from vllm_ascend.core.kv_cache_spec import (Compress4AttentionSpec,
+from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec, # --
+                                            Compress4AttentionSpec,
                                             Compress128AttentionSpec,
-                                            CompressAttentionSpec)
+                                            SWAAttentionSpec,  # --
+                                            C4AttnKVStateSpec,
+                                            C4AttnScoreStateSpec,
+                                            C128AttnKVStateSpec,
+                                            C128AttnScoreStateSpec,
+                                            C4IndexerKVStateSpec,
+                                            C4IndexerScoreStateSpec,
+                                            C4IndexerSpec)
 
 
-class CompressAttentionManager(SingleTypeKVCacheManager):
+class CompressAttentionManager(FullAttentionManager):
 
     def __init__(self, kv_cache_spec: CompressAttentionSpec,
                  block_pool: BlockPool, **kwargs) -> None:
@@ -122,12 +130,19 @@ class CompressAttentionManager(SingleTypeKVCacheManager):
         self.block_pool.free_blocks(ordered_blocks, self.kv_cache_group_id)
         self.num_cached_block.pop(request_id, None)
 
-
 def get_manager_for_kv_cache_spec(kv_cache_spec: KVCacheSpec,
                                   **kwargs) -> SingleTypeKVCacheManager:
     spec_manager_map.update({
         Compress4AttentionSpec: CompressAttentionManager,
         Compress128AttentionSpec: CompressAttentionManager,
+        SWAAttentionSpec: SlidingWindowManager,
+        C4AttnKVStateSpec: SlidingWindowManager,
+        C4AttnScoreStateSpec: SlidingWindowManager,
+        C128AttnKVStateSpec: SlidingWindowManager,
+        C128AttnScoreStateSpec: SlidingWindowManager,
+        C4IndexerKVStateSpec: SlidingWindowManager,
+        C4IndexerScoreStateSpec: SlidingWindowManager,
+        C4IndexerSpec: CompressAttentionManager
     })
     manager_class = spec_manager_map[type(kv_cache_spec)]
     manager = manager_class(kv_cache_spec, **kwargs)
