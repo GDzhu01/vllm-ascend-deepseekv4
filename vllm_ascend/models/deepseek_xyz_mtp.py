@@ -28,7 +28,7 @@ from vllm.sequence import IntermediateTensors
 from vllm_ascend.ascend_config import get_ascend_config
 
 from .deepseek_xyz import (DeepseekV2DecoderLayer, DeepseekV2MixtureOfExperts,
-                          DeepseekXYZMoE, get_spec_layer_idx_from_weight_name)
+                          DeepSeekXYZMoE, get_spec_layer_idx_from_weight_name)
 
 logger = init_logger(__name__)
 

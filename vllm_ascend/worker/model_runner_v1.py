@@ -3429,7 +3429,7 @@ class NPUModelRunner(GPUModelRunner):
                     if get_ascend_device_type() == AscendDeviceType.A5:
                         kv_cache_spec[layer_name] = Compress4AttentionSpec(
                             block_size=block_size,
-                            num_kv_heads=hf_config.num_kv_heads,
+                            num_kv_heads=hf_config.num_key_value_heads,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim -
                             hf_config.rope_head_dim,
@@ -3448,7 +3448,7 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         kv_cache_spec[layer_name] = Compress4AttentionSpec(
                             block_size=block_size,
-                            num_kv_heads=hf_config.num_kv_heads,
+                            num_kv_heads=hf_config.num_key_value_heads,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim -
                             hf_config.rope_head_dim,
@@ -3465,7 +3465,7 @@ class NPUModelRunner(GPUModelRunner):
                     if get_ascend_device_type() == AscendDeviceType.A5:
                         kv_cache_spec[layer_name] = Compress128AttentionSpec(
                             block_size=block_size,
-                            num_kv_heads=1,
+                            num_kv_heads=hf_config.num_key_value_heads,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim -
                             hf_config.rope_head_dim,
@@ -3480,7 +3480,7 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         kv_cache_spec[layer_name] = Compress128AttentionSpec(
                             block_size=block_size,
-                            num_kv_heads=1,
+                            num_kv_heads=hf_config.num_key_value_heads,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim -
                             hf_config.rope_head_dim,
