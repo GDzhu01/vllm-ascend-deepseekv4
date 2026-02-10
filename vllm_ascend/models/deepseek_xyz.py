@@ -70,7 +70,7 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
-from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
+from vllm_ascend.transformers_utils.configs.deepseek_xyz import DeepSeekXYZConfig
 
 logger = init_logger(__name__)
 
@@ -220,11 +220,11 @@ class DeepseekV2MLP(nn.Module):
         return x
 
 
-class DeepseekV4MoE(nn.Module):
+class DeepSeekXYZMoE(nn.Module):
 
     def __init__(
         self,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepSeekXYZConfig,
         parallel_config: ParallelConfig,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -289,11 +289,11 @@ class DeepseekV4MoE(nn.Module):
                 prefix=f"{prefix}.shared_experts",
             )
 
-        self.hash = layer_idx < config.n_hash_layers and not is_draft_layer
+        self.hash = layer_idx < config.num_hash_layers and not is_draft_layer
         if self.hash:
             self.gate.tid2eid = nn.Parameter(torch.empty(
                 config.vocab_size,
-                config.n_activated_experts,
+                config.num_experts_per_tok,
                 dtype=torch.int32),
                                              requires_grad=False)
             self.gate.e_score_correction_bias = None
@@ -306,9 +306,9 @@ class DeepseekV4MoE(nn.Module):
             shared_experts=self.shared_experts,
             gate=self.gate,
             num_experts=config.n_routed_experts,
-            top_k=config.n_activated_experts,
+            top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
-            intermediate_size=config.moe_inter_dim,
+            intermediate_size=config.moe_intermediate_size,
             reduce_results=False,
             renormalize=config.norm_topk_prob,
             quant_config=quant_config,
@@ -316,7 +316,7 @@ class DeepseekV4MoE(nn.Module):
             num_expert_group=getattr(config, "n_group", 1),
             topk_group=getattr(config, "topk_group", 1),
             prefix=f"{prefix}.experts",
-            scoring_func=getattr(config, "score_func", "softmax"),
+            scoring_func=getattr(config, "scoring_func", "softmax"),
             # we do scaling outside, set factor to 1.0 to avoid double mul
             # aiter applies routed_scaling_factor internally
             # routed_scaling_factor=1.5,
@@ -328,7 +328,7 @@ class DeepseekV4MoE(nn.Module):
             is_sequence_parallel=self.is_sequence_parallel,
             n_shared_experts=config.n_shared_experts
             if self.is_fusion_moe_shared_experts_enabled else 0,
-            hash=layer_idx < config.n_hash_layers and not is_draft_layer,
+            hash=layer_idx < config.num_hash_layers and not is_draft_layer,
             tid2eid=self.gate.tid2eid)
 
     def forward(self,
@@ -409,7 +409,7 @@ class Indexer(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepSeekXYZConfig,
         compress_ratio: int,
         quant_config: QuantizationConfig | None,
         cache_config: CacheConfig | None,
@@ -420,7 +420,7 @@ class Indexer(nn.Module):
         self.config = config
         self.n_heads = config.index_n_heads
         self.head_dim = config.index_head_dim
-        self.rope_head_dim = config.rope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
         self.index_topk = config.index_topk
         self.q_lora_rank = config.q_lora_rank
         self.softmax_scale = self.head_dim**-0.5
@@ -463,7 +463,7 @@ class Compressor(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepSeekXYZConfig,
         compress_ratio: int = 4,
         head_dim: int = 512,
         rotate: bool = False,
@@ -476,8 +476,8 @@ class Compressor(nn.Module):
         self.config = config
         self.dim = config.hidden_size
         self.head_dim = head_dim
-        self.rope_head_dim = config.rope_head_dim
-        self.nope_head_dim = head_dim - config.rope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.nope_head_dim = head_dim - config.qk_rope_head_dim
         self.compress_ratio = compress_ratio
         self.overlap = compress_ratio == 4
         self.rotate = rotate
@@ -554,12 +554,12 @@ class Compressor(nn.Module):
         return x.to(dtype)
 
 
-class DeepseekV4Attention(nn.Module):
+class DeepSeekXYZAttention(nn.Module):
 
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
+        config: DeepseekV2Config | DeepseekV3Config | DeepSeekXYZConfig,
         max_position_embeddings: int = 0,
         cache_config: CacheConfig | None = None,
         quant_config: QuantizationConfig | None = None,
@@ -576,11 +576,11 @@ class DeepseekV4Attention(nn.Module):
         self.q_lora_rank = config.q_lora_rank
         self.o_lora_rank = config.o_lora_rank
         self.head_dim = config.head_dim
-        self.rope_head_dim = config.rope_head_dim
-        self.nope_head_dim = config.head_dim - config.rope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.nope_head_dim = config.head_dim - config.qk_rope_head_dim
         self.n_groups = config.o_groups
         self.n_local_groups = self.n_groups // tp_size
-        self.window_size = config.window_size
+        self.sliding_window = config.sliding_window
         self.eps = config.norm_eps
         self.norm_eps = config.norm_eps
         self.scale = self.head_dim**-0.5
@@ -633,16 +633,16 @@ class DeepseekV4Attention(nn.Module):
         self.compress_ratio = config.compress_ratios[layer_idx]
 
         if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 40000
+            config.rope_parameters['rope_theta'] = config.hf_config.compress_rope_theta
             rope_groups = ['default', f'c{self.compress_ratio}']
         else:
-            config.rope_parameters['rope_theta'] = 10000
+            config.rope_parameters['rope_theta'] = config.hf_config.compress_rope_theta
             rope_groups = ['default']
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
             layername=f'{prefix}.attn',
-            head_size=self.rope_head_dim,
-            rotary_dim=self.rope_head_dim,
+            head_size=self.qk_rope_head_dim,
+            rotary_dim=self.qk_rope_head_dim,
             max_position_embeddings=max_position_embeddings,
             is_neox_style=False,
             scaling_factor=config.rope_parameters['factor'],
@@ -696,12 +696,12 @@ class DeepseekV4Attention(nn.Module):
             q_lora_rank=self.q_lora_rank,
             o_lora_rank=self.o_lora_rank,
             head_dim=self.head_dim,
-            rope_head_dim=self.rope_head_dim,
+            rope_head_dim=self.qk_rope_head_dim,
             nope_head_dim=self.nope_head_dim,
             eps=self.eps,
             n_groups=self.n_groups,
             n_local_groups=self.n_local_groups,
-            window_size=self.window_size,
+            sliding_window=self.sliding_window,
             compress_ratio=self.compress_ratio,
             dsa_modules=dsa_modules,
             cache_config=cache_config,
@@ -746,7 +746,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.layer_idx = layer_idx
         self.norm_eps = config.rms_norm_eps
 
-        attn_cls = DeepseekV4Attention
+        attn_cls = DeepSeekXYZAttention
 
         self.self_attn = attn_cls(
             vllm_config=vllm_config,
@@ -758,7 +758,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             topk_indices_buffer=topk_indices_buffer,
         )
 
-        self.mlp = DeepseekV4MoE(
+        self.mlp = DeepSeekXYZMoE(
             config=config,
             parallel_config=parallel_config,
             quant_config=quant_config,
@@ -831,7 +831,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
 
 @support_torch_compile
-class DeepseekV4Model(nn.Module):
+class DeepSeekXYZModel(nn.Module):
     fall_back_to_pt_during_load = False
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
@@ -951,12 +951,12 @@ class DeepseekV4Model(nn.Module):
 
 
 class DeepseekV2MixtureOfExperts(MixtureOfExperts):
-    moe_mlp_layers: list[DeepseekV4MoE]
+    moe_mlp_layers: list[DeepSeekXYZMoE]
     """
     List of MoE MLP layers in the model.
     """
 
-    def extract_moe_parameters(self, example_moe: DeepseekV4MoE | None):
+    def extract_moe_parameters(self, example_moe: DeepSeekXYZMoE | None):
         if example_moe is None:
             self.num_moe_layers = 0
             self.num_expert_groups = 0
@@ -967,7 +967,7 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             self.num_shared_experts = 0
             self.num_redundant_experts = 0
             logger.warning(
-                "DeepSeekV2: No DeepseekV4MoE layer found in model.layers.")
+                "DeepSeekV2: No DeepSeekXYZMoE layer found in model.layers.")
         else:
             self.num_logical_experts = example_moe.n_logical_experts
             self.num_physical_experts = example_moe.n_physical_experts
@@ -992,13 +992,13 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
+class AscendDeepseekXYZForCausalLM(nn.Module, SupportsPP,
                                   DeepseekV2MixtureOfExperts, SupportsLoRA,
                                   SupportsEagle):
     packed_modules_mapping = {
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
-    model_cls = DeepseekV4Model
+    model_cls = DeepSeekXYZModel
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -1038,7 +1038,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 continue
 
             assert isinstance(layer, DeepseekV2DecoderLayer)
-            if isinstance(layer.mlp, DeepseekV4MoE):
+            if isinstance(layer.mlp, DeepSeekXYZMoE):
                 # Pick last one layer since the first ones may be dense layers.
                 example_moe = layer.mlp
                 self.moe_mlp_layers.append(layer.mlp)

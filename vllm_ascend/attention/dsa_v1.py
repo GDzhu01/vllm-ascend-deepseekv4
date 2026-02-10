@@ -377,7 +377,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         if AscendDSAMetadataBuilder.hadamard is None:
             hf_config = self.model_config.hf_config
-            if hf_config.model_type == 'deepseek_v4':
+            if hf_config.model_type == 'deepseek_xyz':
                 indexer_head_dim = hf_config.index_head_dim
                 try:
                     from scipy.linalg import hadamard
@@ -744,7 +744,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             batch_size=len(self.seq_lens[reqs_start:]),
             cmp_ratio=1,
             ori_mask_mode=4,  # 4:sliding window
-            ori_win_left=self.model_config.hf_config.window_size - 1,
+            ori_win_left=self.model_config.hf_config.sliding_window - 1,
             ori_win_right=0,
             layout_q="TND",
             layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -769,7 +769,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cmp_ratio=4,
             ori_mask_mode=4,
             cmp_mask_mode=3,
-            ori_win_left=self.model_config.hf_config.window_size - 1,
+            ori_win_left=self.model_config.hf_config.sliding_window - 1,
             ori_win_right=0,
             layout_q="TND",
             layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -792,7 +792,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cmp_ratio=128,  #
             ori_mask_mode=4,  # 4:sliding window
             cmp_mask_mode=3,  # 3:causal
-            ori_win_left=self.model_config.hf_config.window_size - 1,
+            ori_win_left=self.model_config.hf_config.sliding_window - 1,
             ori_win_right=0,
             layout_q="TND",
             layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -967,7 +967,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 cmp_ratio=1,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.model_config.hf_config.window_size - 1,
+                ori_win_left=self.model_config.hf_config.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
@@ -993,7 +993,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 cmp_ratio=4,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.model_config.hf_config.window_size - 1,
+                ori_win_left=self.model_config.hf_config.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
@@ -1017,7 +1017,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 cmp_ratio=128,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.model_config.hf_config.window_size - 1,
+                ori_win_left=self.model_config.hf_config.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND",
@@ -1127,7 +1127,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         nope_head_dim: int,
         n_groups: int,
         n_local_groups: int,
-        window_size: int,
+        sliding_window: int,
         compress_ratio: int,
         **kwargs,
     ):
@@ -1140,7 +1140,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.head_dim = head_dim
         self.n_group = n_groups
         self.n_local_groups = n_local_groups
-        self.window_size = window_size
+        self.sliding_window = sliding_window
         self.q_lora_rank = q_lora_rank
         self.compress_ratio = compress_ratio
         self.softmax_scale = self.head_dim**-0.5
@@ -1436,7 +1436,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
@@ -1459,7 +1459,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
@@ -1482,7 +1482,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
@@ -1633,7 +1633,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 softmax_scale=self.softmax_scale,
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND")[0]
@@ -1653,7 +1653,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND")[0]
@@ -1672,7 +1672,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
                 cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
+                ori_win_left=self.sliding_window - 1,
                 ori_win_right=0,
                 layout_q="TND",
                 layout_kv="PA_ND")[0]
