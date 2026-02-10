@@ -275,7 +275,7 @@ void QuantLightningIndexerMetadataCpuKernel::CalcSplitInfo(SplitContext &splitCo
     SplitInfo &splitInfo = splitContext.splitInfo;
     for (uint32_t bIdx = 0; bIdx < batchSize_; bIdx++) {
         uint32_t s1Size = GetS1SeqSize(bIdx);
-        uint32_t s2Size = GetS2SeqSize(bIdx);
+        uint32_t s2Size = GetS2SeqSize(bIdx) / cmpRatio_;
         splitInfo.s1GBaseNum[bIdx] = (s1Size * groupSize_ + (mBaseSize_ - 1U)) / mBaseSize_;
         splitInfo.s1GTailSize[bIdx] = (s1Size * groupSize_) % mBaseSize_;
         splitInfo.s2BaseNum[bIdx] = (s2Size + s2BaseSize_ - 1U) / s2BaseSize_;
