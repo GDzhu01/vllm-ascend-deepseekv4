@@ -70,7 +70,7 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
-from vllm_ascend.transformers_utils.configs.deepseek_xyz import DeepseekXYZConfig
+from vllm_ascend.transformers_utils.configs.deepseek_xyz import DeepSeekXYZConfig
 
 logger = init_logger(__name__)
 
@@ -992,7 +992,7 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class AscendDeepSeekXYZForCausalLM(nn.Module, SupportsPP,
+class AscendDeepseekXYZForCausalLM(nn.Module, SupportsPP,
                                   DeepseekV2MixtureOfExperts, SupportsLoRA,
                                   SupportsEagle):
     packed_modules_mapping = {

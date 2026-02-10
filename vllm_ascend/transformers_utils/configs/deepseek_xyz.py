@@ -161,7 +161,7 @@ class DeepSeekXYZConfig(PretrainedConfig):
         norm_eps: float = 1e-6,
         o_groups=8,
         o_lora_rank=1024,
-        window_size=128,
+        sliding_window=128,
         compress_ratios=[
             1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
             128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
@@ -226,7 +226,7 @@ class DeepSeekXYZConfig(PretrainedConfig):
         self.norm_eps = norm_eps
         self.o_groups = o_groups
         self.o_lora_rank = o_lora_rank
-        self.window_size = window_size
+        self.sliding_window = sliding_window
         self.compress_ratios = compress_ratios
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
