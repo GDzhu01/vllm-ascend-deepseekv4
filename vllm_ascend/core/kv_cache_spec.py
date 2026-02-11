@@ -55,6 +55,7 @@ class Compress4AttentionSpec(CompressAttentionSpec):
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
     #   pad to 128 to make sure the performance is ok
+    compress_ratio: int = 4
 
     @property
     def page_size_bytes(self) -> int:
@@ -92,6 +93,7 @@ class Compress128AttentionSpec(CompressAttentionSpec):
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
     #   pad to 128 to make sure the performance is ok
+    compress_ratio: int = 128
 
     @property
     def page_size_bytes(self) -> int:
@@ -181,6 +183,7 @@ class C4IndexerSpec(AttentionSpec):
 
     # indexer attn
     #   scale head_dim = 1      A3: fp16 A5: fp32
+    compress_ratio: int = 4
     indexer_scale_dim: int = 0
     indexer_scale_dtype: torch.dtype = torch.bfloat16
 

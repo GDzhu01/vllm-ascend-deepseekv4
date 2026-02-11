@@ -368,7 +368,8 @@ class NPUPlatform(Platform):
             speculative_config.enforce_eager:
             speculative_config.enforce_eager = False
 
-        # if model_config and hasattr(model_config.hf_config, "compress_ratios"):
+        if model_config and hasattr(model_config.hf_config, "compress_ratios"):
+            cache_config.block_size = 64
         #     from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
         #     kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
         #         vllm_config)

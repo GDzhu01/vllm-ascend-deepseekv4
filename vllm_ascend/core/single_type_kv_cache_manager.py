@@ -39,7 +39,7 @@ class CompressAttentionManager(FullAttentionManager):
     ) -> int:
         # Allocate extra `num_speculative_blocks` blocks for
         # speculative decoding (MTP/EAGLE) with linear attention.
-        assert isinstance(self.kv_cache_spec, CompressAttentionSpec)
+        assert isinstance(self.kv_cache_spec, (CompressAttentionSpec, C4IndexerSpec))
 
         num_tokens //= self.compress_ratio
 
@@ -69,7 +69,7 @@ class CompressAttentionManager(FullAttentionManager):
             return []
         else:
             new_blocks = self.block_pool.get_new_blocks(
-                num_new_blocks, self.kv_cache_group_id)
+                num_new_blocks)
             req_blocks.extend(new_blocks)
             return new_blocks
 
@@ -127,7 +127,7 @@ class CompressAttentionManager(FullAttentionManager):
         # freed first.
         ordered_blocks = reversed(req_blocks)
 
-        self.block_pool.free_blocks(ordered_blocks, self.kv_cache_group_id)
+        self.block_pool.free_blocks(ordered_blocks)
         self.num_cached_block.pop(request_id, None)
 
 def get_manager_for_kv_cache_spec(kv_cache_spec: KVCacheSpec,

@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 import vllm
+from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_coordinator import (KVCacheCoordinator,
                                                KVCacheCoordinatorNoPrefixCache,
                                                UnitaryKVCacheCoordinator,
@@ -43,17 +44,39 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         hash_block_size: int,
         metrics_collector: KVCacheMetricsCollector | None = None,
     ):
-        super().__init__(
-            kv_cache_config,
-            max_model_len,
-            use_eagle,
+        self.kv_cache_config = kv_cache_config
+        self.max_model_len = max_model_len
+        self.enable_caching = enable_caching
+
+        self.block_pool = BlockPool(
+            kv_cache_config.num_blocks,
             enable_caching,
+            hash_block_size,
             enable_kv_cache_events,
-            dcp_world_size=dcp_world_size,
-            pcp_world_size=pcp_world_size,
-            hash_block_size=hash_block_size,
-            metrics_collector=metrics_collector,
+            metrics_collector,
         )
+
+        # Needs special handling for find_longest_cache_hit if eagle is enabled
+        self.use_eagle = use_eagle
+        self.single_type_managers = tuple(
+            get_manager_for_kv_cache_spec(
+                kv_cache_spec=kv_cache_group.kv_cache_spec,
+                block_pool=self.block_pool,
+                kv_cache_group_id=i,
+                dcp_world_size=dcp_world_size,
+                pcp_world_size=pcp_world_size,
+            )
+            for i, kv_cache_group in enumerate(self.kv_cache_config.kv_cache_groups)
+        )
+
+        self.hash_block_size = hash_block_size
+        assert all(
+            g.kv_cache_spec.block_size % hash_block_size == 0
+            for g in kv_cache_config.kv_cache_groups
+        ), "block_size must be divisible by hash_block_size"
+        assert dcp_world_size == 1, "DCP not support hybrid attn now."
+        assert pcp_world_size == 1, "PCP not support hybrid attn now."
+        self.verify_and_split_kv_cache_groups()
 
     def find_longest_cache_hit(
         self,
