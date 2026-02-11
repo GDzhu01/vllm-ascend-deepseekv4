@@ -2586,7 +2586,6 @@ class NPUModelRunner(GPUModelRunner):
             cache size of each layer
         """
         kv_cache_config = deepcopy(kv_cache_config)
-        print(f'{kv_cache_config=}')
         self.kv_cache_config = kv_cache_config
         self.may_add_encoder_only_layers_to_kv_cache_config()
         self.maybe_add_kv_sharing_layers_to_kv_cache_groups(kv_cache_config)
@@ -2602,14 +2601,8 @@ class NPUModelRunner(GPUModelRunner):
         self.may_reinitialize_input_batch(kv_cache_config)
         kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
 
-        kv_states = self.initialize_kv_state()
-
         if has_kv_transfer_group():
-            if self.use_compress:
-                get_kv_transfer_group().register_kv_caches(
-                    kv_caches, kv_states)
-            else:
-                get_kv_transfer_group().register_kv_caches(kv_caches)
+            get_kv_transfer_group().register_kv_caches(kv_caches)
 
 
     def _align_memory(self, tensor: torch.Tensor,
@@ -2831,8 +2824,7 @@ class NPUModelRunner(GPUModelRunner):
                     continue
 
                 if isinstance(kv_cache_spec, SWAAttentionSpec) or \
-                    isinstance(kv_cache_spec, CompressAttentionSpec) or \
-                    isinstance(kv_cache_spec, C4IndexerSpec):
+                    isinstance(kv_cache_spec, CompressAttentionSpec):
                     dtype = kv_cache_spec.dtype
 
                     kv_tensor = kv_cache_raw_tensors[layer_name]
@@ -2847,10 +2839,36 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_spec.num_kv_heads,
                         kv_cache_spec.head_size)
                     # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
-                    kv_size = sum_page_size_bytes - kv_cache_spec.pad_size
+                    kv_size = sum_page_size_bytes - num_blocks * kv_cache_spec.pad_size
                     kv_cache = kv_tensor[:kv_size].view(kv_cache_spec.dtype).view(kv_cache_shape)
                     # TODO(cmq): refactor me to dict, we need to differ the spec type
                     kv_caches[layer_name].append(kv_cache)
+                elif isinstance(kv_cache_spec, C4IndexerSpec):
+                    dtype = kv_cache_spec.dtype
+                    indexer_scale_dtype = kv_cache_spec.indexer_scale_dtype
+
+                    kv_tensor = kv_cache_raw_tensors[layer_name]
+                    sum_page_size_bytes = kv_tensor.numel()
+
+                    num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                    assert num_blocks == kv_cache_config.num_blocks, \
+                        f"num_blocks: {num_blocks} should be equal to " \
+                        f"kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
+                    indexer_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    indexer_scale_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.indexer_scale_dim)
+                    indexer_kv_size = sum_page_size_bytes - kv_cache_spec.indexer_scale_size_bytes * num_blocks
+                    indexer_kv_cache = kv_tensor[:indexer_kv_size].view(dtype).view(indexer_kv_cache_shape)
+                    indexer_scale_cache = kv_tensor[indexer_kv_size:].view(indexer_scale_dtype).view(indexer_scale_cache_shape)
+
+                    # TODO(cmq): refactor me to dict, we need to differ the spec type
+                    kv_caches[layer_name].extend([indexer_kv_cache, indexer_scale_cache])
+
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
@@ -3268,7 +3286,6 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
-        print(f'{kv_cache_spec_list=}')
         return kv_cache_spec_list
 
 
@@ -3378,7 +3395,6 @@ class NPUModelRunner(GPUModelRunner):
                         if self.speculative_config else 0),
                 )]
 
-        print(f'{kv_cache_spec_list=}')
         return kv_cache_spec_list
 
     def _check_and_update_cudagraph_mode(
