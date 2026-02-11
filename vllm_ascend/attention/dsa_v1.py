@@ -1260,8 +1260,9 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        wo_a = self.wo_a.weight.transpose(1, 2).view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("tgd,grd->tgr", o, wo_a)
+        # wo_a = self.wo_a.weight.transpose(1, 2).view(self.n_local_groups, self.o_lora_rank, -1)
+        # o = torch.einsum("tgd,grd->tgr", o, wo_a)
+        o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
         o = o.reshape(num_tokens, -1)
         output[...] = self.wo_b(o)
 
@@ -1489,47 +1490,46 @@ class AscendDSAImpl(DSAAttentionImpl):
         wait_hidden_state_cal_event = torch.npu.current_stream().record_event() \
             if self.multistream_dsa_preprocess else None
 
-        # win kv & tok_dis
-        kv = self.wkv(hidden_states)
-        before_norm_event = torch.npu.current_stream().record_event() \
-            if self.multistream_dsa_preprocess else None
-        kv = self.kv_norm(kv)
-        kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
-        # kv = self._partial_rope(kv, cos, sin)
-        torch.ops._C_ascend.inplace_partial_rotary_mul(
-                kv.unsqueeze(1), cos, sin,
-                rotary_mode="interleave",
-                partial_slice=[self.nope_head_dim, self.head_dim],
-            )
-
-        # swa exec kv
-        torch.ops._C_ascend.kv_compress_epilog(
-            kv_compress_cache=kv_state[0].view(-1, kv_state[0].shape[-1]),
-            x=kv.view(-1, kv.shape[-1]),
-            slot_mapping=attn_metadata.decode.swa_slot_mapping[:kv.shape[0]],
-            quant_group_size=64,
-            quant_mode=2, round_scale_flag=True
-        )
-        
         # q
-        with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
-            if before_norm_event:
-                torch.npu.current_stream().wait_event(before_norm_event)
-
-            qr = q = self.wq_a(hidden_states) # bs
-        if self.multistream_dsa_preprocess:
-            torch.npu.current_stream().wait_stream(
-                attention_calculation_stream())
+        qr = q = self.wq_a(hidden_states)
         q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim)) # tp
-        # q = triton_q_rms(q, self.eps)
-        # q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
         q = self.q_norm_without_weight(q)
-        # q = self._partial_rope(q, cos, sin)
+
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1), cos, sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        # print(self.multistream_dsa_preprocess)
+        # assert self.multistream_dsa_preprocess
+        with npu_stream_switch(attention_calculation_stream(), enabled=self.multistream_dsa_preprocess):
+            if wait_hidden_state_cal_event:
+                torch.npu.current_stream().wait_event(wait_hidden_state_cal_event)
+
+            # win kv & tok_dis
+            kv = self.wkv(hidden_states)
+            kv = self.kv_norm(kv)
+            kv = kv.view(-1, 1, self.nope_head_dim+self.rope_head_dim)
+
+            torch.ops._C_ascend.inplace_partial_rotary_mul(
+                kv.unsqueeze(1), cos, sin,
+                rotary_mode="interleave",
+                partial_slice=[self.nope_head_dim, self.head_dim],
+            )
+            # swa exec kv
+            torch.ops._C_ascend.kv_compress_epilog(
+                kv_compress_cache=kv_state[0].view(-1, kv_state[0].shape[-1]),
+                x=kv.view(-1, kv.shape[-1]),
+                slot_mapping=attn_metadata.decode.swa_slot_mapping[:kv.shape[0]],
+                quant_group_size=64,
+                quant_mode=2,
+                round_scale_flag=True
+            )
+
+            wait_attention_cal_event = torch.npu.current_stream().record_event() if self.multistream_dsa_preprocess else None
+
+        if wait_attention_cal_event:
+                torch.npu.current_stream().wait_event(wait_attention_cal_event)
 
         if self.compress_ratio > 1:
             compress_cos = attn_metadata.decode.compress_cos[layer_name]

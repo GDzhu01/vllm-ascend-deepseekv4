@@ -2067,8 +2067,6 @@ class NPUModelRunner(GPUModelRunner):
             seq_lens = SEQ_LEN_WITH_MAX_PA_WORKSPACE if is_graph_capturing and using_paged_attention(
                 num_tokens, self.vllm_config) else max_query_len
             
-            # TODO 规避qli算子在kv length < 4场景下的报错bug，后续bug修复后删除
-            seq_lens = 4
             self.seq_lens.np[:num_reqs] = seq_lens
             self.seq_lens.np[num_reqs:] = 0
             self.seq_lens.copy_to_gpu()
