@@ -94,18 +94,12 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
 
     graph_pad_size: int = -1
 
-    state_block_table: torch.Tensor = None
-
     # num_input_tokens refers to total number of tokens including
     # padding tokens. It is used to handle some padding operations.
     num_input_tokens: int = 0
 
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
-
-    state_ids: torch.Tensor | None = None
-    swa_slot_mapping: torch.Tensor = None
-    swa_block_table: torch.Tensor = None
 
     # TODO: Remove it when vLLM no longer uses this function.
     def unpadded(self, num_actual_tokens: int,

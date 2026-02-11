@@ -398,22 +398,6 @@ class NPUModelRunner(GPUModelRunner):
         self.intermediate_tensors: IntermediateTensors | None = None
         self.reorder_batch_threshold: int | None = None
         self.long_seq_metadata = None
-        self.kv_states: list[tuple[torch.Tensor]] = []
-        # Since compressor kernel need PA format input,
-        # and write backward blocks instead of overwrite in one block,
-        # we need to initialize three blocks and simulate writing backward
-        # by exchanging order of these blocks.
-        # (Two for swa, one extra reserved for mtp)
-        self.state_block_multiple = 3
-        self.swa_slot_mapping = self._make_buffer(self.max_num_tokens,
-                                                  dtype=torch.int32)
-        self.swa_block_table = self._make_buffer(
-            (self.max_num_reqs, self.state_block_multiple), dtype=torch.int32)
-        self.state_block_table = self._make_buffer(
-            (self.max_num_reqs,
-             cdiv(self.model_config.max_model_len, self.block_size)),
-            dtype=torch.int32,
-        )
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -682,20 +666,6 @@ class NPUModelRunner(GPUModelRunner):
         )
         num_input_tokens = batch_descriptor.num_tokens
         self.query_lens = torch.from_numpy(num_scheduled_tokens)
-
-        # compute slot_mapping and block_table of sliding window
-        if self.use_compress:
-            state_ids_np = np.array(
-                [self.requests[req_id].state_id for req_id in req_ids], )
-            swa_slot_mapping, swa_block_table, state_block_table = \
-                self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
-            self.swa_slot_mapping.np[:
-                                     total_num_scheduled_tokens] = swa_slot_mapping
-            self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
-            self.swa_block_table.np[:num_reqs] = swa_block_table
-            self.swa_block_table.copy_to_gpu(num_reqs)
-            self.state_block_table.np[:num_reqs] = state_block_table
-            self.state_block_table.copy_to_gpu(num_reqs)
 
         # Get info across DP ranks.
         # NOTE: maybe_padded_num_tokens is only used when using TorchAir with DP,
@@ -1068,14 +1038,6 @@ class NPUModelRunner(GPUModelRunner):
                     slot_mapping = blk_table.slot_mapping.gpu[:self.
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
-            if self.use_compress:
-                # get kv_state id
-                state_ids_cpu = torch.tensor(
-                    [self.requests[req_id].state_id for req_id in req_ids],
-                    dtype=torch.int32,
-                    device="cpu",
-                ).pin_memory()
-                state_ids = state_ids_cpu.to(self.device, non_blocking=True)
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1132,11 +1094,6 @@ class NPUModelRunner(GPUModelRunner):
                     # TODO: change this to the right block table for linear attn
                     block_table_tensor=blk_table_tensor[:num_reqs],
                     slot_mapping=slot_mapping,
-                    state_ids=state_ids,
-                    swa_slot_mapping=self.swa_slot_mapping.
-                    gpu[:total_num_scheduled_tokens],
-                    swa_block_table=self.swa_block_table.gpu[:num_reqs],
-                    state_block_table=self.state_block_table.gpu[:num_reqs],
                     num_computed_tokens_cpu=self.input_batch.
                     num_computed_tokens_cpu_tensor[:num_reqs],
                     positions=self.positions.gpu,
@@ -2168,9 +2125,6 @@ class NPUModelRunner(GPUModelRunner):
                     actual_seq_lengths_q=self.actual_seq_lengths_q,
                     block_table_tensor=block_table_tensor,
                     slot_mapping=slot_mapping,
-                    swa_slot_mapping=self.swa_slot_mapping.gpu,
-                    swa_block_table=self.swa_block_table.gpu,
-                    state_block_table=self.state_block_table.gpu,
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     positions=self.positions.gpu,
                     positions_cpu=self.positions.cpu,
@@ -3451,160 +3405,6 @@ class NPUModelRunner(GPUModelRunner):
                             tensor,
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
-
-    def _compute_swa_meta(
-        self,
-        state_ids: np.ndarray,
-        positions: np.ndarray,
-        query_lens: np.ndarray,
-    ):
-        """
-        sliding_window: [(max_num_reqs + 1) * window_multiple(3), window_size(128), dim(512)]
-        Each request will be allocated to one state containing three continuous blocks.
-        Similar to kv_cache blocks, state 0 (block 0, 1, 2) keeps empty.
-        For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
-        [req0 -> state 2 (block 6, 7, 8), req1 -> state 4 (block 12, 13, 14)]
-
-                    |<-------- 128 -------->|<-------- 128 -------->|<-------- 128 -------->|
-                    -------------------------------------------------------------------------
-        (state_0)   | block_0 (keeps empty) | block_1 (keeps empty) | block_2 (keeps empty) |
-                    -------------------------------------------------------------------------
-        (state_1)   | block_3               | block_4               | block_5               |
-                    -------------------------------------------------------------------------
-        (state_2)   | block_6  req0         | block_7  req0         | block_8  req0         |
-                    -------------------------------------------------------------------------
-        (state_3)   | block_9               | block_10              | block_11              |
-                    -------------------------------------------------------------------------
-        (state_4)   | block_12 req1         | block_13 req1         | block_14 req1         |
-                    -------------------------------------------------------------------------
-
-        """
-        num_reqs = state_ids.shape[0]
-        block_size = self.vllm_config.cache_config.block_size
-        block_multiple = self.state_block_multiple  # currently 3 blocks for each req
-
-        # similar to kv_cache slot_mapping,
-        # slot = base (of block_id) + offset (inside block)
-        base = state_ids.repeat(query_lens) * block_size * block_multiple
-        offset = positions % (block_size * block_multiple)
-        swa_slot_mapping = base + offset
-
-        # set slot of out of window tokens of prefill to -1
-        # if kernel support overwrite, we can remove this
-        out_of_window_mask_list = []
-        for query_len in query_lens:
-            if query_len <= block_size:
-                out_of_window_mask_list.append(np.repeat(0, query_len))
-            else:
-                out_of_window_mask_list.append(
-                    np.repeat(1, query_len - block_size))
-                out_of_window_mask_list.append(np.repeat(0, block_size))
-        out_of_window_mask = np.concatenate(out_of_window_mask_list)
-        swa_slot_mapping = np.where(out_of_window_mask, -1, swa_slot_mapping)
-
-        # generate swa and state block_table
-        # TODO implement in np batch processing, and in-place compute in block_table buffer
-        query_end_index = query_lens.cumsum() - 1
-        query_end_position = positions[query_end_index]
-        swa_block_table = np.zeros([num_reqs, block_multiple], dtype=np.int32)
-        state_block_table = np.zeros(
-            [num_reqs,
-             cdiv(self.model_config.max_model_len, block_size)],
-            dtype=np.int32)
-        for i in range(num_reqs):
-            base_block = state_ids[i] * block_multiple
-            block_num_total = query_end_position[i] // block_size + 1
-            if query_end_position[i] < block_size * (block_multiple - 1):
-                block_num_in_use = block_num_total
-                for j in range(block_num_in_use):
-                    swa_block_table[i][j] = base_block + j
-            else:
-                block_num_in_use = block_multiple
-                tail_block_offset = query_end_position[
-                    i] // block_size % block_multiple
-                head_block_offset = (tail_block_offset + 1) % block_multiple
-                for j in range(block_multiple):
-                    swa_block_table[i][j] = base_block + (head_block_offset +
-                                                          j) % block_multiple
-            # state block_id needs padding in front to actual seq_len
-            # according to requirement of compressor kernel
-            block_num_pad = block_num_total - block_num_in_use
-            state_block_table[i][block_num_pad : block_num_pad + block_num_in_use] = \
-                swa_block_table[i][:block_num_in_use]
-
-        return swa_slot_mapping, swa_block_table, state_block_table
-
-    def _compute_swa_meta_mtp(
-        self,
-        state_ids: torch.Tensor,
-        positions: torch.Tensor,
-        query_lens: torch.Tensor,
-    ):
-        """
-        sliding_window: [(max_num_reqs + 1) * window_multiple(3), window_size(128), dim(512)]
-        Each request will be allocated to one state containing three continuous blocks.
-        Similar to kv_cache blocks, state 0 (block 0, 1, 2) keeps empty.
-        For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
-        [req0 -> state 2 (block 6, 7, 8), req1 -> state 4 (block 12, 13, 14)]
-
-                    |<-------- 128 -------->|<-------- 128 -------->|<-------- 128 -------->|
-                    -------------------------------------------------------------------------
-        (state_0)   | block_0 (keeps empty) | block_1 (keeps empty) | block_2 (keeps empty) |
-                    -------------------------------------------------------------------------
-        (state_1)   | block_3               | block_4               | block_5               |
-                    -------------------------------------------------------------------------
-        (state_2)   | block_6  req0         | block_7  req0         | block_8  req0         |
-                    -------------------------------------------------------------------------
-        (state_3)   | block_9               | block_10              | block_11              |
-                    -------------------------------------------------------------------------
-        (state_4)   | block_12 req1         | block_13 req1         | block_14 req1         |
-                    -------------------------------------------------------------------------
-
-        """
-        num_reqs = state_ids.shape[0]
-        block_size = self.vllm_config.cache_config.block_size
-        block_multiple = self.state_block_multiple  # currently 3 blocks for each req
-
-        # similar to kv_cache slot_mapping,
-        # slot = base (of block_id) + offset (inside block)
-        base = torch.repeat_interleave(
-            state_ids, query_lens) * block_size * block_multiple
-        offset = positions % (block_size * block_multiple)
-        swa_slot_mapping = base + offset
-
-        # generate swa and state block_table
-        # TODO implement in np batch processing, and in-place compute in block_table buffer
-        # query_end_index = query_lens.cumsum() - 1
-        query_end_index = torch.cumsum(query_lens, dim=0) - 1
-        query_end_position = positions[query_end_index]
-        swa_block_table = torch.zeros([num_reqs, block_multiple],
-                                      dtype=torch.int32,
-                                      device=self.device)
-        for i in range(num_reqs):
-            base_block = state_ids[i] * block_multiple
-            block_num_total = query_end_position[i] // block_size + 1
-            if query_end_position[i] < block_size * (block_multiple - 1):
-                block_num_in_use = block_num_total
-                for j in range(block_num_in_use):
-                    swa_block_table[i][j] = base_block + j
-            else:
-                block_num_in_use = block_multiple
-                tail_block_offset = query_end_position[
-                    i] // block_size % block_multiple
-                head_block_offset = (tail_block_offset + 1) % block_multiple
-                for j in range(block_multiple):
-                    swa_block_table[i][j] = base_block + (head_block_offset +
-                                                          j) % block_multiple
-
-        return swa_slot_mapping, swa_block_table
-
-    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
-        super()._update_states(scheduler_output)
-        if self.use_compress:
-            for new_req_data in scheduler_output.scheduled_new_reqs:
-                req_id = new_req_data.req_id
-                self.requests[req_id].state_id = new_req_data.state_id
-
 
 @contextmanager
 def _torch_cuda_wrapper():
