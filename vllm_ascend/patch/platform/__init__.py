@@ -26,8 +26,8 @@ from vllm_ascend import envs
 from vllm_ascend.utils import vllm_version_is
 
 if envs.USE_MULTI_BLOCK_POOL:
-    import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
-    import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
+    # import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
+    # import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
     import vllm_ascend.patch.platform.patch_model_config  # noqa
     import vllm_ascend.patch.platform.patch_speculative_config  # noqa
     import vllm_ascend.patch.platform.patch_transformers  # noqa

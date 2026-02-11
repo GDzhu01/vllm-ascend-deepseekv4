@@ -414,22 +414,6 @@ class NPUModelRunner(GPUModelRunner):
             dtype=torch.int32,
         )
 
-        if self.use_compress:
-            kv_cache_spec = AttentionSpec(
-                block_size=self.block_size,
-                num_kv_heads=1,
-                head_size=512,
-                dtype=torch.bfloat16,
-            )
-            self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                kv_cache_spec,
-                list(self.runner_only_attn_layers),
-                self.vllm_config,
-                self.device,
-                AscendDSAMetadata,
-                supports_dcp_with_varlen=False,
-            )
-
     def _init_device_properties(self) -> None:
         self.num_sms = None
 
@@ -2599,6 +2583,7 @@ class NPUModelRunner(GPUModelRunner):
             cache size of each layer
         """
         kv_cache_config = deepcopy(kv_cache_config)
+        print(f'{kv_cache_config=}')
         self.kv_cache_config = kv_cache_config
         self.may_add_encoder_only_layers_to_kv_cache_config()
         self.maybe_add_kv_sharing_layers_to_kv_cache_groups(kv_cache_config)
@@ -3304,9 +3289,10 @@ class NPUModelRunner(GPUModelRunner):
                 rope_dim=hf_config.rope_head_dim,
                 scale_dim=0,
                 dtype=torch.bfloat16,
+                pad_size=0,
                 indexer_scale_dim=128,
             ))
-            pad_size = kv_cache_spec_list[-1].indexer_scale_size_bytes()
+            pad_size = 128*1*1*2
             kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
@@ -3353,6 +3339,7 @@ class NPUModelRunner(GPUModelRunner):
             ))
 
         elif layer_id % 2 != 0:
+            pad_size = 128*1*1*2
             # TODO(cmq): DON'T use magic number for the block size
             kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
                 block_size=128,
@@ -3388,6 +3375,8 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
+        print(f'{kv_cache_spec_list=}')
+        return kv_cache_spec_list
 
 
     def get_kv_cache_spec(self) -> dict[str, list[KVCacheSpec]]:
@@ -3463,7 +3452,7 @@ class NPUModelRunner(GPUModelRunner):
                         dtype=self.kv_cache_dtype)]
 
             elif isinstance(attn_module, DSAAttention):
-                return self._get_kv_cache_spec_for_dsv4(
+                kv_cache_spec_list[layer_name] = self._get_kv_cache_spec_for_dsv4(
                     layer_id=layer_id,
                     layer_name=layer_name,
                 )
@@ -3496,6 +3485,7 @@ class NPUModelRunner(GPUModelRunner):
                         if self.speculative_config else 0),
                 )]
 
+        print(f'{kv_cache_spec_list=}')
         return kv_cache_spec_list
 
     def _check_and_update_cudagraph_mode(
