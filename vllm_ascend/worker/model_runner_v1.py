@@ -94,7 +94,8 @@ from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
                                                update_attn_params,
                                                update_mla_attn_dcp_pcp_params,
                                                update_mla_attn_params)
-from vllm_ascend.core.kv_cache_spec import (Compress4AttentionSpec,
+from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
+                                            Compress4AttentionSpec,
                                             Compress128AttentionSpec,
                                             # ------------- state -------------
                                             C128AttnKVStateSpec,
@@ -1247,6 +1248,7 @@ class NPUModelRunner(GPUModelRunner):
                     attn_metadata[layer_name] = attn_metadata_i
 
         # ------------- make swa metadata -----------------
+        # TODO(cmq): delete me
         if self.use_compress:
             common_prefix_len = 0
             swa_attn_metadata = self.swa_metadata_builder.build(
@@ -2226,6 +2228,7 @@ class NPUModelRunner(GPUModelRunner):
                                 layer_name] = attn_metadata_full_attention
 
                 # ------------- make swa metadata -----------------
+            # TODO(cmq): delete me
             if self.use_compress:
                 swa_attn_metadata = self.swa_metadata_builder.build_for_graph_capture(
                     common_attn_metadata, attn_state)
@@ -2608,120 +2611,6 @@ class NPUModelRunner(GPUModelRunner):
             else:
                 get_kv_transfer_group().register_kv_caches(kv_caches)
 
-    def initialize_kv_state(self):
-        hf_config = self.model_config.hf_config
-        if hf_config.model_type != 'deepseek_v4':
-            return
-        kv_states: Dict[str, tuple[torch.Tensor]] = {}
-        compress_ratio_to_layers = {}
-        for layer_index, compress_ratio in enumerate(
-                hf_config.compress_ratios):
-            if compress_ratio not in compress_ratio_to_layers:
-                compress_ratio_to_layers[compress_ratio] = []
-            compress_ratio_to_layers[compress_ratio].append(layer_index)
-        c1_layers = compress_ratio_to_layers[1]
-        c4_layers = compress_ratio_to_layers[4]
-        c128_layers = compress_ratio_to_layers[128]
-        head_dim = hf_config.head_dim
-        indexer_head_dim = hf_config.index_head_dim
-        # Since compressor kernel need PA format input,
-        # we initialize KV state buffer with the size of block_size
-        # instead of its actual size.
-        block_size = self.vllm_config.cache_config.block_size
-        block_num = (self.max_num_reqs + 1) * self.state_block_multiple
-
-        def _get_aligned_tensor(size: torch.Size,
-                                dtype: torch.dtype,
-                                alignment: int = 1):
-            tensor_size = size.numel() * dtype.itemsize
-            original_tensor = torch.zeros(tensor_size + alignment,
-                                          dtype=torch.int8,
-                                          device=self.device)
-            aligned_tensor = self._align_memory(original_tensor,
-                                                alignment)[:tensor_size]
-            return aligned_tensor.view(dtype).view(size)
-
-        # initialize kv cache tensors
-        # prefill disaggregation need the addr of cache tensor be aligned with 2M
-        alignment = 2 * 1024 * 1024
-        for group in self._kv_cache_spec_attn_group_iterator():
-            for layer_name in group.layer_names:
-                layer_index = extract_layer_index(layer_name)
-                sliding_window = get_aligned_tensor_for_pd(
-                    torch.Size([block_num, block_size, head_dim]),
-                    self.device,
-                    torch.bfloat16,
-                    alignment,
-                )
-                if layer_index in c4_layers:
-                    coff = 2
-                    compress_ratio = 4
-                    c4_kv_state = get_aligned_tensor_for_pd(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        self.device,
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_score_state = get_aligned_tensor_for_pd(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        self.device,
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_indexer_kv_state = _get_aligned_tensor(
-                        torch.Size(
-                            [block_num, block_size, coff * indexer_head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_indexer_score_state = _get_aligned_tensor(
-                        torch.Size(
-                            [block_num, block_size, coff * indexer_head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    kv_states[layer_name] = (sliding_window, c4_kv_state,
-                                             c4_score_state,
-                                             c4_indexer_kv_state,
-                                             c4_indexer_score_state)
-                elif layer_index in c128_layers:
-                    coff = 1
-                    compress_ratio = 128
-                    c128_kv_state = get_aligned_tensor_for_pd(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        self.device,
-                        torch.float32,
-                        alignment,
-                    )
-                    c128_score_state = get_aligned_tensor_for_pd(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        self.device,
-                        torch.float32,
-                        alignment,
-                    )
-                    kv_states[layer_name] = (sliding_window, c128_kv_state,
-                                             c128_score_state)
-
-        # layer 0,1 are removed from kv spec groups,
-        # get them from runner_only_attn_layers to init sliding window.
-        for layer_name in self.runner_only_attn_layers:
-            layer_index = extract_layer_index(layer_name)
-            assert layer_index in c1_layers, "layer_index out of range"
-            sliding_window = get_aligned_tensor_for_pd(
-                torch.Size([block_num, block_size, head_dim]),
-                self.device,
-                torch.bfloat16,
-                alignment,
-            )
-            kv_states[layer_name] = (sliding_window, )
-
-        # bind kv cache to layers
-        # TODO maybe move this to bind_kv_states in utils
-        forward_context = self.compilation_config.static_forward_context
-        for layer_name, kv_state in kv_states.items():
-            self.kv_states.append(kv_states[layer_name])
-            forward_context[layer_name].kv_state = [kv_state]
-        return kv_states
 
     def _align_memory(self, tensor: torch.Tensor,
                       alignment: int) -> torch.Tensor:
@@ -2941,8 +2830,9 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_name in self.runner_only_attn_layers:
                     continue
 
-                if isinstance(kv_cache_spec, CompressAttentionSpec) or \
-                    isinstance(kv_cache_spec, CompressIndexerAttentionSpec):
+                if isinstance(kv_cache_spec, SWAAttentionSpec) or \
+                    isinstance(kv_cache_spec, CompressAttentionSpec) or \
+                    isinstance(kv_cache_spec, C4IndexerSpec):
                     dtype = kv_cache_spec.dtype
 
                     kv_tensor = kv_cache_raw_tensors[layer_name]
@@ -2957,7 +2847,9 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_spec.num_kv_heads,
                         kv_cache_spec.head_size)
                     # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
-                    kv_cache = kv_tensor.view(kv_cache_spec.dtype).view(kv_cache_shape)
+                    kv_size = sum_page_size_bytes - kv_cache_spec.pad_size
+                    kv_cache = kv_tensor[:kv_size].view(kv_cache_spec.dtype).view(kv_cache_shape)
+                    # TODO(cmq): refactor me to dict, we need to differ the spec type
                     kv_caches[layer_name].append(kv_cache)
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
@@ -3268,6 +3160,9 @@ class NPUModelRunner(GPUModelRunner):
     def _get_kv_cache_spec_for_dsv4(self, layer_id, layer_name):
         kv_cache_spec_list: dict[str, list[KVCacheSpec]] = defaultdict(list)
         hf_config = self.model_config.hf_config
+        # NOTE: `pad_size` refers to `block_size * num_heads * head_dim * sizeof(dtype)`
+        # of indexer scale kvcache spec
+        pad_size = 1024 * 1 * 1 * 2
         if layer_id in [0, 1] or "mtp" in layer_name:
             # TODO(cmq): DON'T use magic number for the block size and pad_size
             kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
@@ -3276,7 +3171,7 @@ class NPUModelRunner(GPUModelRunner):
                 head_size=hf_config.head_dim,
                 dtype=torch.bfloat16,
                 sliding_window=hf_config.window_size,
-                pad_size=128*1*1*2,
+                pad_size=pad_size,
             ))
         elif layer_id % 2 == 0:
             # TODO(cmq): DON'T use magic number for the block size
@@ -3291,8 +3186,8 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.bfloat16,
                 pad_size=0,
                 indexer_scale_dim=128,
+                pad_size=pad_size,
             ))
-            pad_size = 128*1*1*2
             kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
@@ -3302,11 +3197,10 @@ class NPUModelRunner(GPUModelRunner):
                 pad_size=pad_size,
             ))
             kv_cache_spec_list[layer_name].append(C4IndexerSpec(
-                block_size=128,
+                block_size=1024,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim,
                 dtype=torch.int8,
-                pad_size=pad_size,
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
             kv_cache_spec_list[layer_name].append(C4AttnKVStateSpec(

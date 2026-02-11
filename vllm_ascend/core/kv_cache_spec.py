@@ -50,31 +50,11 @@ def pad_to_128(x: int):
 
 @dataclass(frozen=True)
 class Compress4AttentionSpec(CompressAttentionSpec):
-    indexer_scale_dim: int = 0
-    indexer_scale_dtype: torch.dtype = torch.bfloat16
-    # indexer attn
-    #   scale head_dim = 1      A3: fp16 A5: fp32
-
     # c4
     #   nope+rope+scale head_dim =  448    +    64  +  7
     #                           A5: fp8        bf16   fp8
     #                           A3: bf16       bf16    /
     #   pad to 128 to make sure the performance is ok
-
-    @property
-    def compress_kv_size_bytes(self) -> int:
-        base_page_size = self.block_size * (
-            self.nope_dim * get_dtype_size(self.nope_dtype) + \
-            self.rope_dim * get_dtype_size(self.rope_dtype) + \
-            self.scale_dim * get_dtype_size(self.scale_dtype)
-        )
-        return pad_to_128(base_page_size)
-
-    @property
-    def indexer_scale_size_bytes(self) -> int:
-        indexer_scale_page_size = self.block_size * self.indexer_scale_dim * get_dtype_size(
-            self.indexer_scale_dtype)
-        return indexer_scale_page_size
 
     @property
     def page_size_bytes(self) -> int:
@@ -84,7 +64,16 @@ class Compress4AttentionSpec(CompressAttentionSpec):
         Returns:
             The page size
         """
-        return self.compress_kv_size_bytes + self.indexer_scale_size_bytes
+        page_size = self.block_size * (
+            self.nope_dim * get_dtype_size(self.nope_dtype) + \
+            self.rope_dim * get_dtype_size(self.rope_dtype) + \
+            self.scale_dim * get_dtype_size(self.scale_dtype)
+        )
+        page_size = pad_to_128(page_size)
+        if self.pad_size is not None:
+            assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
+            return self.pad_size + page_size
+        return page_size
 
     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
         """
@@ -190,6 +179,17 @@ class C4IndexerSpec(AttentionSpec):
     # indexer attn
     #   value head_dim = 128    A3: int8 A5: fp8
 
+    # indexer attn
+    #   scale head_dim = 1      A3: fp16 A5: fp32
+    indexer_scale_dim: int = 0
+    indexer_scale_dtype: torch.dtype = torch.bfloat16
+
+    @property
+    def indexer_scale_size_bytes(self) -> int:
+        indexer_scale_page_size = self.block_size * self.indexer_scale_dim * get_dtype_size(
+            self.indexer_scale_dtype)
+        return indexer_scale_page_size
+
     @property
     def page_size_bytes(self) -> int:
         """
@@ -200,6 +200,7 @@ class C4IndexerSpec(AttentionSpec):
         """
         page_size = self.block_size * self.head_size * get_dtype_size(
             self.dtype)
+        page_size += self.indexer_scale_size_bytes
         if self.pad_size is not None:
             assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
             return self.pad_size + page_size
