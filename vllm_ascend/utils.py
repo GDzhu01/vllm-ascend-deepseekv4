@@ -35,6 +35,7 @@ from packaging.version import InvalidVersion, Version
 from torch_npu.npu.streams import Event
 from vllm.logger import logger
 from vllm.sequence import IntermediateTensors
+# from vllm.v1.kv_cache_interface import KVCacheGroupSpec
 
 import vllm_ascend.envs as envs_ascend
 from vllm_ascend.ascend_config import WeightPrefetchConfig, get_ascend_config
@@ -1218,12 +1219,13 @@ def parse_layer_idx(prefix: str) -> Optional[int]:
 
     return layer_idx
 
-
-def get_compressed_pos_and_indices(
-    num_computed_tokens: np.ndarray, num_scheduled_tokens: np.ndarray,
-    arrange_np: np.ndarray, use_compress: bool
-) -> tuple[Optional[List[np.ndarray]], Optional[List[np.ndarray]],
-           Optional[List[np.ndarray]]]:
+def get_compressed_pos_and_indices( 
+        num_computed_tokens: np.ndarray,
+        num_scheduled_tokens: np.ndarray,
+        arrange_np: np.ndarray,
+        use_compress: bool,
+        kv_cache_groups
+ ) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
     """
     Batch generate compressed position ids for multi-requests on DSv4.
     Calculate compressed position ids independently for each single request.
@@ -1247,9 +1249,11 @@ def get_compressed_pos_and_indices(
     positions_compressed_list = []
     req_indices_compressed_list = []
     num_scheduled_tokens_compressed_list = []
-    compress_ratios = [4, 128]
-    for compress_ratio in compress_ratios:
+    
+    for _, kv_cache_group_spec in enumerate(kv_cache_groups):
         # Calculate compressed length of historical & total tokens
+        compress_ratio = getattr(kv_cache_group_spec.kv_cache_spec, "compress_ratio", 1)
+
         compressed_historical_len = num_computed_tokens // compress_ratio
         compressed_total_len = (num_computed_tokens +
                                 num_scheduled_tokens) // compress_ratio
@@ -1269,8 +1273,4 @@ def get_compressed_pos_and_indices(
         req_indices_compressed_list.append(req_indices_compressed)
         positions_compressed_list.append(compressed_pos_ids)
         num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
-        if compress_ratio == 4:
-            req_indices_compressed_list.append(req_indices_compressed)
-            positions_compressed_list.append(compressed_pos_ids)
-            num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
     return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list

@@ -604,8 +604,9 @@ class NPUModelRunner(GPUModelRunner):
         positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list = get_compressed_pos_and_indices(
             self.input_batch.num_computed_tokens_cpu[:num_reqs],
             num_scheduled_tokens[:num_reqs], self.arange_np[:num_reqs],
-            self.use_compress)
-
+            self.use_compress,
+            self.kv_cache_config.kv_cache_groups)
+        print(f"{len(positions_compressed_list)=}")
         self.input_batch.block_table.compute_slot_mapping(
             req_indices, positions_np, positions_compressed_list,
             req_indices_compressed_list)
@@ -1191,7 +1192,7 @@ class NPUModelRunner(GPUModelRunner):
                             num_decode_draft_tokens.cpu[:num_reqs],
                         )
                 if isinstance(builder, AscendDSAMetadataBuilder):
-                    compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                    compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
                     # TODO(zxr)
                     extra_attn_metadata_args = dict(
                         compress_ratio=compress_ratio,
@@ -2167,7 +2168,7 @@ class NPUModelRunner(GPUModelRunner):
                             common_metadata)
                     else:
                         if isinstance(builder, AscendDSAMetadataBuilder):
-                            compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                            compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
                             extra_attn_metadata_args = dict(
                                 compress_ratio=compress_ratio)
                         attn_metadata_full_attention = builder.build_for_graph_capture(
