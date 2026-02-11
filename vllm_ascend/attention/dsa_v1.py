@@ -160,7 +160,7 @@ class AscendDSABackend(AttentionBackend):
 
     @staticmethod
     def get_supported_block_size() -> list[int]:
-        return [128]
+        return [64]
 
 
 @dataclass
