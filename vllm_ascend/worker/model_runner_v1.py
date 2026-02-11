@@ -3158,14 +3158,14 @@ class NPUModelRunner(GPUModelRunner):
 
 
     def _get_kv_cache_spec_for_dsv4(self, layer_id, layer_name):
-        kv_cache_spec_list: dict[str, list[KVCacheSpec]] = defaultdict(list)
+        kv_cache_spec_list=[]
         hf_config = self.model_config.hf_config
         # NOTE: `pad_size` refers to `block_size * num_heads * head_dim * sizeof(dtype)`
         # of indexer scale kvcache spec
         pad_size = 1024 * 1 * 1 * 2
         if layer_id in [0, 1] or "mtp" in layer_name:
             # TODO(cmq): DON'T use magic number for the block size and pad_size
-            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+            kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
@@ -3175,7 +3175,7 @@ class NPUModelRunner(GPUModelRunner):
             ))
         elif layer_id % 2 == 0:
             # TODO(cmq): DON'T use magic number for the block size
-            kv_cache_spec_list[layer_name].append(Compress4AttentionSpec(
+            kv_cache_spec_list.append(Compress4AttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
@@ -3184,11 +3184,9 @@ class NPUModelRunner(GPUModelRunner):
                 rope_dim=hf_config.rope_head_dim,
                 scale_dim=0,
                 dtype=torch.bfloat16,
-                pad_size=0,
-                indexer_scale_dim=128,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+            kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
@@ -3196,35 +3194,37 @@ class NPUModelRunner(GPUModelRunner):
                 sliding_window=hf_config.window_size,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(C4IndexerSpec(
+            kv_cache_spec_list.append(C4IndexerSpec(
                 block_size=1024,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim,
+                indexer_scale_dim=1,
                 dtype=torch.int8,
+                pad_size=0
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
-            kv_cache_spec_list[layer_name].append(C4AttnKVStateSpec(
+            kv_cache_spec_list.append(C4AttnKVStateSpec(
                 block_size=64,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(C4AttnScoreStateSpec(
+            kv_cache_spec_list.append(C4AttnScoreStateSpec(
                 block_size=64,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(C4IndexerKVStateSpec(
+            kv_cache_spec_list.append(C4IndexerKVStateSpec(
                 block_size=256,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(C4IndexerScoreStateSpec(
+            kv_cache_spec_list.append(C4IndexerScoreStateSpec(
                 block_size=256,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim,
@@ -3233,9 +3233,8 @@ class NPUModelRunner(GPUModelRunner):
             ))
 
         elif layer_id % 2 != 0:
-            pad_size = 128*1*1*2
             # TODO(cmq): DON'T use magic number for the block size
-            kv_cache_spec_list[layer_name].append(Compress128AttentionSpec(
+            kv_cache_spec_list.append(Compress128AttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
@@ -3246,7 +3245,7 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.bfloat16,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(SWAAttentionSpec(
+            kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
@@ -3255,14 +3254,14 @@ class NPUModelRunner(GPUModelRunner):
                 pad_size=pad_size,
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
-            kv_cache_spec_list[layer_name].append(C128AttnKVStateSpec(
+            kv_cache_spec_list.append(C128AttnKVStateSpec(
                 block_size=64,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
-            kv_cache_spec_list[layer_name].append(C128AttnScoreStateSpec(
+            kv_cache_spec_list.append(C128AttnScoreStateSpec(
                 block_size=64,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
