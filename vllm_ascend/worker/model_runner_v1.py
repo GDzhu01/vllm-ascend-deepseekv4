@@ -1070,10 +1070,6 @@ class NPUModelRunner(GPUModelRunner):
                         self.query_start_loc.copy_to_gpu(num_reqs_padded + 1)
                         self.seq_lens.np[num_reqs:].fill(0)
                         self.seq_lens.copy_to_gpu(num_reqs_padded)
-                        self.swa_slot_mapping.np[
-                            total_num_scheduled_tokens:num_input_tokens +
-                            1].fill(-1)
-                        self.swa_slot_mapping.copy_to_gpu(num_input_tokens + 1)
 
                     # So we are trying to simulate the behavior of GPUModelRunner's
                     # prepare_inputs for uniform decode mode by padding query_start_loc
@@ -2057,7 +2053,8 @@ class NPUModelRunner(GPUModelRunner):
             assert with_prefill is False, \
                 "Full decode graph only supports uniform batch now."
 
-            attn_metadata = {}
+            # attn_metadata = {}
+            attn_metadata: dict[str, Any] = defaultdict(list)
 
             # The reason why we use a fixed seq_len rather than max_query_len is that
             # _npu_paged_attention_get_workspace only returns max workspace with specific

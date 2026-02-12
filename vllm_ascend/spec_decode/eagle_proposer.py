@@ -970,10 +970,7 @@ class EagleProposer(VllmEagleProposer):
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,
-            state_ids=common_attn_metadata.state_ids,
-            swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
-            swa_block_table=common_attn_metadata.swa_block_table,
-            state_block_table=common_attn_metadata.state_block_table)
+        )
         return spec_common_attn_metadata, token_indices
 
     def prepare_inputs_padded(
@@ -1059,11 +1056,7 @@ class EagleProposer(VllmEagleProposer):
             num_computed_tokens_cpu=common_attn_metadata.
             num_computed_tokens_cpu,
             seq_lens=common_attn_metadata.seq_lens,
-            max_seq_len=0,
-            state_ids=common_attn_metadata.state_ids,
-            swa_slot_mapping=common_attn_metadata.swa_slot_mapping,
-            swa_block_table=common_attn_metadata.swa_block_table,
-            state_block_table=common_attn_metadata.state_block_table)
+            max_seq_len=0,)
 
         return spec_common_attn_metadata, token_indices, token_indices_to_sample
 
