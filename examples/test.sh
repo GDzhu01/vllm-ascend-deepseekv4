@@ -16,15 +16,16 @@ nohup vllm serve /home/models/hello2026/ \
   --max_model_len 32000 \
   --max-num-batched-tokens 32000 \
   --served-model-name qwen \
-  --gpu-memory-utilization 0.95 \
-  --data-parallel-size 4 \
+  --gpu-memory-utilization 0.9 \
+  --data-parallel-size 8 \
   --enable-expert-parallel \
   --async-scheduling \
-  --max-num-seqs 32 \
+  --max-num-seqs 64 \
   --port 8666 \
   --block-size 128 \
-  --enforce_eager \
-  --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true}' \
+  --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true, "multistream_dsa_preprocess":true}' \
   2>&1 | tee run_online.log
 
 #   --enforce_eager \ --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
