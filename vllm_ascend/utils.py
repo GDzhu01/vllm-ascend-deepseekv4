@@ -1250,8 +1250,10 @@ def get_compressed_pos_and_indices(
     req_indices_compressed_list = []
     num_scheduled_tokens_compressed_list = []
     
-    for _, kv_cache_group_spec in enumerate(kv_cache_groups):
+    for kv_cache_group_id, kv_cache_group_spec in enumerate(kv_cache_groups):
         # Calculate compressed length of historical & total tokens
+        print(f"{kv_cache_group_id=}")
+        print(f"{kv_cache_group_spec=}")
         compress_ratio = getattr(kv_cache_group_spec.kv_cache_spec, "compress_ratio", 1)
 
         compressed_historical_len = num_computed_tokens // compress_ratio

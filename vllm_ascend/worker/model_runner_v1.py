@@ -783,7 +783,7 @@ class NPUModelRunner(GPUModelRunner):
                                 cu_num_tokens)
         self.positions.cpu[total_num_scheduled_tokens:num_input_tokens].zero_()
         self.positions.copy_to_gpu()
-        attn_metadata: dict[str, Any] = {}
+        attn_metadata: dict[str, Any] = defaultdict(list)
 
         # Record the index of requests that should not be sampled,
         # so that we could clear the sampled tokens before returning
@@ -1168,8 +1168,6 @@ class NPUModelRunner(GPUModelRunner):
                 self.long_seq_metadata.max_query_len_pcp_full = \
                     ori_query_lens_cpu.max().item()
 
-
-
             if self.speculative_config and \
                 self.spec_decode_common_attn_metadata is None:
                 self.spec_decode_common_attn_metadata = common_attn_metadata
@@ -1203,17 +1201,10 @@ class NPUModelRunner(GPUModelRunner):
                     **extra_attn_metadata_args)
 
                 for layer_name in attn_group.layer_names:
-                    attn_metadata[layer_name] = attn_metadata_i
-
-        # ------------- make swa metadata -----------------
-        # TODO(cmq): delete me
-        if self.use_compress:
-            common_prefix_len = 0
-            swa_attn_metadata = self.swa_metadata_builder.build(
-                common_prefix_len=common_prefix_len,
-                common_attn_metadata=common_attn_metadata)
-            for layer_name in self.runner_only_attn_layers:
-                attn_metadata[layer_name] = swa_attn_metadata
+                    print(f"{kv_cache_group_id=}")
+                    print(f"{layer_name=}")
+                    print(f"{common_attn_metadata.block_table_tensor=}")
+                    attn_metadata[layer_name].append(attn_metadata_i)
 
         # update global cos, sin
         update_cos_sin(positions)
@@ -2181,14 +2172,6 @@ class NPUModelRunner(GPUModelRunner):
                         else:
                             attn_metadata[
                                 layer_name] = attn_metadata_full_attention
-
-                # ------------- make swa metadata -----------------
-            # TODO(cmq): delete me
-            if self.use_compress:
-                swa_attn_metadata = self.swa_metadata_builder.build_for_graph_capture(
-                    common_attn_metadata, attn_state)
-                for layer_name in self.runner_only_attn_layers:
-                    attn_metadata[layer_name] = swa_attn_metadata
 
         return attn_metadata
 

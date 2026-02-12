@@ -139,8 +139,6 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             ).parallel_config.pipeline_parallel_size)
         ]
 
-        self.kv_state = [torch.tensor([])]
-
         self.use_sparse = True
 
         # Initialize q/k/v range constants.
