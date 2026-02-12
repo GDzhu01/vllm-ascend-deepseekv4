@@ -606,7 +606,6 @@ class NPUModelRunner(GPUModelRunner):
             num_scheduled_tokens[:num_reqs], self.arange_np[:num_reqs],
             self.use_compress,
             self.kv_cache_config.kv_cache_groups)
-        print(f"{len(positions_compressed_list)=}")
         self.input_batch.block_table.compute_slot_mapping(
             req_indices, positions_np, positions_compressed_list,
             req_indices_compressed_list)
@@ -1202,11 +1201,7 @@ class NPUModelRunner(GPUModelRunner):
 
                 for layer_name in attn_group.layer_names:
                     attn_metadata[layer_name].append(attn_metadata_i)
-        
-        for layer_name, attn_metadata_list in attn_metadata.items():       
-            print(f"{kv_cache_group_id=}")
-            print(f"{len(attn_metadata_list)=}")
-            # print(f"{common_attn_metadata.block_table_tensor=}")
+
         # update global cos, sin
         update_cos_sin(positions)
 
@@ -2172,7 +2167,7 @@ class NPUModelRunner(GPUModelRunner):
                                 layer_name] = attn_metadata_gdn_attention
                         else:
                             attn_metadata[
-                                layer_name] = attn_metadata_full_attention
+                                layer_name].append(attn_metadata_full_attention)
 
         return attn_metadata
 

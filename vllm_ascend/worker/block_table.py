@@ -288,9 +288,6 @@ class MultiGroupBlockTable:
                 f"block_sizes length ({len(block_sizes)})")
 
         # Use zip to pair block_sizes with kernel_sizes one-to-one
-        print(f"{block_sizes=}")
-        print(f"{kernel_sizes=}")
-        print(f"{kv_cache_groups=}")
         if kv_cache_groups is not None:
             self.block_tables = [
                 BlockTable(
