@@ -916,7 +916,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         decode_swa_slot_mapping = common_attn_metadata.swa_slot_mapping[:self.num_decode_tokens]
 
         max_seqlen_kv = torch.max(common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
-        max_seqlen_q = torch.max(query_start_loc_cpu).item()
+        max_seqlen_q = torch.max(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]).item()
         self.start_pos_decode.fill_(0)
         seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
         self.start_pos_decode[:self.num_decodes] = self.seq_lens[:self.num_decodes] - seq_lens_q
