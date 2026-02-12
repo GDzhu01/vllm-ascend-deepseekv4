@@ -369,7 +369,7 @@ class NPUPlatform(Platform):
             speculative_config.enforce_eager = False
 
         if model_config and hasattr(model_config.hf_config, "compress_ratios"):
-            cache_config.block_size = 64
+            cache_config.block_size = 32
         #     from vllm_ascend.core.kv_state_scheduler import KVStateSchedulerConfig
         #     kv_state_scheduler_config = KVStateSchedulerConfig.initialize_from_config(
         #         vllm_config)
@@ -381,7 +381,7 @@ class NPUPlatform(Platform):
         #         vllm_config.scheduler_config.enable_chunked_prefill = True
         #     else:
             vllm_config.scheduler_config.enable_chunked_prefill = False
-        #     vllm_config.cache_config.enable_prefix_caching = False
+            vllm_config.cache_config.enable_prefix_caching = False
 
     @classmethod
     def import_kernels(cls) -> None:

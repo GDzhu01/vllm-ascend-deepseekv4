@@ -185,7 +185,7 @@ class C4IndexerSpec(AttentionSpec):
     #   scale head_dim = 1      A3: fp16 A5: fp32
     compress_ratio: int = 4
     indexer_scale_dim: int = 0
-    indexer_scale_dtype: torch.dtype = torch.bfloat16
+    indexer_scale_dtype: torch.dtype = torch.float16
 
     @property
     def indexer_scale_size_bytes(self) -> int:

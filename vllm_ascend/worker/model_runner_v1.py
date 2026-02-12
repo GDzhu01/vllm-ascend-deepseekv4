@@ -370,7 +370,7 @@ class NPUModelRunner(GPUModelRunner):
             pin_memory=self.pin_memory,
             vocab_size=self.model_config.get_vocab_size(),
             block_sizes=[self.block_size],
-            kernel_block_sizes=[[self.cache_config.block_size]],
+            kernel_block_sizes=[self.cache_config.block_size],
             is_spec_decode=bool(self.vllm_config.speculative_config),
             logitsprocs=build_logitsprocs(
                 self.vllm_config, self.device, self.pin_memory,
@@ -1201,11 +1201,12 @@ class NPUModelRunner(GPUModelRunner):
                     **extra_attn_metadata_args)
 
                 for layer_name in attn_group.layer_names:
-                    print(f"{kv_cache_group_id=}")
-                    print(f"{layer_name=}")
-                    print(f"{common_attn_metadata.block_table_tensor=}")
                     attn_metadata[layer_name].append(attn_metadata_i)
-
+        
+        for layer_name, attn_metadata_list in attn_metadata.items():       
+            print(f"{kv_cache_group_id=}")
+            print(f"{len(attn_metadata_list)=}")
+            # print(f"{common_attn_metadata.block_table_tensor=}")
         # update global cos, sin
         update_cos_sin(positions)
 
@@ -2955,24 +2956,13 @@ class NPUModelRunner(GPUModelRunner):
             elif isinstance(kv_cache_spec, AttentionSpec):
                 # This is an attention backend that supports virtual
                 # block splitting. Get the supported block sizes from
-                # the backend.
-                try:
-                    attn_groups = self.attn_groups[kv_cache_group_id]
-                except IndexError:
-                    attn_groups = None
-                if attn_groups and self.use_hybrid_blocks:
-                    # Use the backend's supported block size list
-                    backend = attn_groups[0].backend
-                    supported_sizes = backend.get_supported_block_size()
-                    # If no specific sizes supported, use cache config
-                    # block_size
-                    kernel_block_size_list = (supported_sizes
-                                              if supported_sizes else
-                                              [self.cache_config.block_size])
-                else:
-                    # Fallback to cache config block_size if no backend found
-                    kernel_block_size_list = [self.cache_config.block_size]
-                kernel_block_sizes.append(kernel_block_size_list)
+                # all backends in the group.
+                attn_groups = self.attn_groups[kv_cache_group_id]
+                kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
+                selected_kernel_size = GPUModelRunner.select_common_block_size(
+                    kv_manager_block_size, attn_groups
+                )
+                kernel_block_sizes.append(selected_kernel_size)
             else:
                 # This is likely Mamba or other non-attention cache,
                 # no splitting.
@@ -3160,30 +3150,30 @@ class NPUModelRunner(GPUModelRunner):
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
             kv_cache_spec_list.append(C4AttnKVStateSpec(
-                block_size=64,
+                block_size=32,
                 num_kv_heads=1,
-                head_size=hf_config.head_dim,
+                head_size=hf_config.head_dim * 2,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
             kv_cache_spec_list.append(C4AttnScoreStateSpec(
-                block_size=64,
+                block_size=32,
                 num_kv_heads=1,
-                head_size=hf_config.head_dim,
+                head_size=hf_config.head_dim * 2,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
             kv_cache_spec_list.append(C4IndexerKVStateSpec(
-                block_size=256,
+                block_size=128,
                 num_kv_heads=1,
-                head_size=hf_config.index_head_dim,
+                head_size=hf_config.index_head_dim * 2,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
             kv_cache_spec_list.append(C4IndexerScoreStateSpec(
-                block_size=256,
+                block_size=128,
                 num_kv_heads=1,
-                head_size=hf_config.index_head_dim,
+                head_size=hf_config.index_head_dim * 2,
                 dtype=torch.float32,
                 pad_size=pad_size,
             ))
