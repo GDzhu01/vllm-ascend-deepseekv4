@@ -164,19 +164,6 @@ class AscendDSABackend(AttentionBackend):
 
 
 @dataclass
-class ChunkedContextMetadata:
-    # New for MLA (compared to FlashAttention)
-    # For handling chunked prefill
-    cu_seq_lens: torch.Tensor
-    starts: torch.Tensor
-    seq_tot: list[int]
-    max_seq_lens: list[int]
-    workspace: torch.Tensor
-    chunk_seq_lens: torch.Tensor
-    chunk_seq_lens_npu: torch.Tensor
-
-
-@dataclass
 class AscendDSAPrefillMetadata:
     """ Prefill Specific Metadata for Ascend"""
     attn_mask: torch.Tensor
@@ -190,7 +177,6 @@ class AscendDSAPrefillMetadata:
     max_query_len: int
     max_seq_lens: int
 
-    chunked_context: Optional[ChunkedContextMetadata] = None
     sin: torch.Tensor = None
     cos: torch.Tensor = None
     compress_sin: torch.Tensor = None
@@ -307,8 +293,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.block_size = vllm_config.cache_config.block_size
         self.max_blocks = (vllm_config.model_config.max_model_len +
                            self.block_size - 1) // self.block_size
-        # NOTE: For deepseek v4, this is disabled by default now in `check_and_update_config`
-        self.chunked_prefill_enabled = scheduler_config.enable_chunked_prefill
 
         self.speculative_config = vllm_config.speculative_config
         self.decode_threshold = 1
@@ -320,27 +304,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 got {self.decode_threshold}"
 
         self.reorder_batch_threshold = self.decode_threshold
-        if self.chunked_prefill_enabled:
-            self.chunked_prefill_workspace_size = min(
-                max(8 * self.model_config.max_model_len,
-                    4 * scheduler_config.max_num_seqs * self.block_size),
-                128 * 1024)
-            assert self.chunked_prefill_workspace_size >= \
-                   scheduler_config.max_num_seqs * self.block_size
-            self.chunked_prefill_workspace = torch.empty(
-                (self.chunked_prefill_workspace_size,
-                 self.model_config.get_head_size()),
-                dtype=self.model_config.dtype,
-                device=device,
-            )
         self.rope_dim = self.model_config.hf_text_config.rope_head_dim
         self.cos_cache = None
         self.sin_cache = None
 
-        self.chunk_seq_lens: torch.Tensor = None
         self.cu_seq_lens_cpu: torch.Tensor = None
-        self.num_chunks: torch.Tensor = None
-        self.max_context_chunk = 0
         self.num_decodes = 0
         self.num_prefills = 0
         self.num_decode_tokens = 0
@@ -454,56 +422,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     ):
         self.num_actual_tokens = common_attn_metadata.num_actual_tokens
 
-    def build_chunked_metadata(
-        self,
-        common_prefix_len: int,
-        common_attn_metadata: AscendCommonAttentionMetadata,
-    ):
-        if not self.chunked_prefill_enabled:
-            return None
-        num_reqs = common_attn_metadata.num_reqs
-
-        num_computed_tokens_cpu = (self.seq_lens - self.query_lens)
-        reqs_start = self.num_decodes
-
-        self.context_lens_cpu = num_computed_tokens_cpu[reqs_start:num_reqs]
-        max_context_len_cpu = self.context_lens_cpu.max().item()
-        if not max_context_len_cpu > 0:
-            return None
-        num_prefills_with_context_cpu = (self.context_lens_cpu
-                                         > 0).sum().item()
-        self.max_context_chunk = (self.chunked_prefill_workspace_size //
-                                  num_prefills_with_context_cpu)
-        self.max_context_chunk = round_down(self.max_context_chunk,
-                                            self.block_size)
-
-        assert self.max_context_chunk > 0
-        self.num_chunks = cdiv(max_context_len_cpu, self.max_context_chunk)
-        chunk_starts = torch.arange(self.num_chunks, dtype=torch.int32) \
-                           .unsqueeze(1).expand(-1, self.num_prefills) * self.max_context_chunk
-        chunk_ends = torch.min(self.context_lens_cpu.unsqueeze(0),
-                               chunk_starts + self.max_context_chunk)
-        self.chunk_seq_lens = (chunk_ends - chunk_starts).clamp(min=0)
-        self.cu_seq_lens_cpu = torch.zeros(self.num_chunks,
-                                           self.num_prefills + 1,
-                                           dtype=torch.int32,
-                                           pin_memory=True)
-        torch.cumsum(self.chunk_seq_lens,
-                     dim=1,
-                     out=self.cu_seq_lens_cpu[:, 1:],
-                     dtype=torch.int32)
-        return ChunkedContextMetadata(
-            cu_seq_lens=self.cu_seq_lens_cpu.pin_memory().to(
-                self.device, non_blocking=True),
-            starts=chunk_starts.pin_memory().to(self.device,
-                                                non_blocking=True),
-            seq_tot=self.chunk_seq_lens.sum(dim=1).tolist(),
-            max_seq_lens=self.chunk_seq_lens.max(dim=1).values.tolist(),
-            chunk_seq_lens=self.chunk_seq_lens,
-            chunk_seq_lens_npu=self.chunk_seq_lens.npu(),
-            workspace=self.chunked_prefill_workspace,
-        )
-
     def build(
         self,
         common_prefix_len: int,
@@ -592,8 +510,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                                                          num_actual_tokens].long(
                                                          )
 
-        chunked_context_metadata = self.build_chunked_metadata(
-            common_prefix_len, common_attn_metadata)
         # reqs_start: the start request position of prefill request
         reqs_start = self.num_decodes
         # reqs_start: the start token position of prefill request
@@ -777,7 +693,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,
-            chunked_context=chunked_context_metadata,
             sin=sin,
             cos=cos,
             compress_sin=compress_sin,
