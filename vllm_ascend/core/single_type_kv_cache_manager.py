@@ -127,15 +127,15 @@ class CompressAttentionManager(FullAttentionManager):
             # Need to drop the last matched block if eagle is enabled.
             for computed in computed_blocks:
                 computed.pop()
+        # NOTE: Div the compress ratio when finding the longest cache hit token length.
+        alignment_tokens = cdiv(alignment_tokens, kv_cache_spec.compress_ratio)
         while (
             block_size != alignment_tokens  # Faster for common case.
             and len(computed_blocks[0]) * block_size % alignment_tokens != 0
         ):
             for computed in computed_blocks:
                 computed.pop()
-        print(f"{kv_cache_spec=}")
-        print(f"{kv_cache_group_ids=}")
-        print(f"{computed_blocks=}")
+
         return computed_blocks
 
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from collections.abc import Sequence
+from math import lcm
 
 import vllm
 from vllm.v1.core.block_pool import BlockPool
@@ -16,8 +17,8 @@ from vllm.v1.core.kv_cache_utils import (
     BlockHashListWithBlockSize,
     KVCacheBlock,
 )
-from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttentionSpec
-
+from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttentionSpec, SlidingWindowSpec
+from vllm_ascend.core.kv_cache_spec import SWAAttentionSpec
 from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
@@ -77,6 +78,15 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         assert dcp_world_size == 1, "DCP not support hybrid attn now."
         assert pcp_world_size == 1, "PCP not support hybrid attn now."
         self.verify_and_split_kv_cache_groups()
+        # NOTE: `lcm_block_size` actually refers to alignment tokens. Thus we multiply the
+        # compress ratio when computing the alignment tokens, and div the compress ratio
+        # when finding the longest cache hit token length. This makes the actual number of
+        # hit tokens won't be enlarged.
+        block_sizes = [
+            spec.block_size * getattr(spec, "compress_ratio", 1) for spec, _, _ in self.attention_groups
+            ]
+        self.lcm_block_size = lcm(*block_sizes)
+        print(f"{self.lcm_block_size=}")
 
     def find_longest_cache_hit(
         self,
@@ -111,13 +121,14 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         num_groups = len(self.kv_cache_config.kv_cache_groups)
         hit_length = max_cache_hit_length
         hit_blocks_by_group: list[list[KVCacheBlock] | None] = [None] * num_groups
-
+        iter_time = 1
         while True:
             curr_hit_length = hit_length
-
+            print(60*"*")
+            print(f"开始第{iter_time}次迭代")
             for spec, group_ids, manager_cls in self.attention_groups:
                 is_full_attn = isinstance(spec, FullAttentionSpec)
-
+                is_swa_attn = isinstance(spec, SlidingWindowSpec)
                 # Full attention: reuse cached blocks (downward-closed property)
                 cached_blocks = hit_blocks_by_group[group_ids[0]]
                 if is_full_attn and cached_blocks is not None:
@@ -145,9 +156,17 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
                     # curr_hit_length need multipy compress_ratio to recover original len
                     compress_ratio = spec.compress_ratio if hasattr(spec, "compress_ratio") else 1
                     curr_hit_length = len(hit_blocks[0]) * spec.block_size * compress_ratio
+                    if is_swa_attn:
+                        new_block_size = 128 * 128
+                        curr_hit_length = len(hit_blocks[0]) * new_block_size * compress_ratio
                     for group_id, blocks in zip(group_ids, hit_blocks):
                         hit_blocks_by_group[group_id] = blocks
-
+                print(f"{spec=}")
+                print(f"{group_ids=}")
+                print(f"{compress_ratio=}")
+                print(f"{curr_hit_length=}")
+                print(60*"*")
+            iter_time += 1
             if curr_hit_length < hit_length:
                 hit_length = curr_hit_length
             else:

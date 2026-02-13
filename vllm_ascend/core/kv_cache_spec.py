@@ -84,7 +84,7 @@ class Compress4AttentionSpec(CompressAttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
 
 @dataclass(frozen=True)
 class Compress128AttentionSpec(CompressAttentionSpec):
@@ -128,7 +128,7 @@ class Compress128AttentionSpec(CompressAttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
 
 @dataclass(frozen=True)
 class SWAAttentionSpec(SlidingWindowSpec):
@@ -146,6 +146,30 @@ class SWAAttentionSpec(SlidingWindowSpec):
             assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
             return self.pad_size + page_size
         return page_size
+    
+    def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
+        assert vllm_config.parallel_config.decode_context_parallel_size == 1, (
+            "DCP not support sliding window."
+        )
+        max_model_len = vllm_config.model_config.max_model_len
+        max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+
+        # During chunked prefill, we allocate KV cache for the last
+        # `self.sliding_window-1` computed tokens plus the newly scheduled
+        # tokens. And we won't allocate KV cache for more than `max_model_len`
+        # tokens.
+        num_tokens = min(
+            self.sliding_window - 1 + max_num_batched_tokens, max_model_len
+        )
+
+        # +1 here because the sliding window may not start from the beginning
+        # of the block. For example, if the block size is 4 and num_token
+        # is 4, we need two blocks [XXCD] [EF] to store the sliding
+        # window [CDEF] of 6 tokens.
+        # NOTE(cmq): the least tokens that hit cache is 128*128 for new model,
+        # thus when calculating max_memory_usage_bytes, we only need to take the
+        # last window into account.
+        return (cdiv(num_tokens, 128 * 128) + 1) * self.page_size_bytes
 
 @dataclass(frozen=True)
 class C4AttnKVStateSpec(SWAAttentionSpec):
@@ -217,4 +241,4 @@ class C4IndexerSpec(AttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
