@@ -473,6 +473,8 @@ class KVStateScheduler(Scheduler):
                     # caused by current chunked prefill impl
                     if ori_num_new_tokens != num_new_tokens:
                         num_new_tokens = (num_new_tokens // self.block_size) * self.block_size
+                        if num_new_tokens == 0:
+                            break
                         if token_budget - num_new_tokens < self.block_size:
                             token_budget = num_new_tokens
                     assert num_new_tokens > 0
