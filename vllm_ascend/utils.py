@@ -1134,7 +1134,7 @@ def refresh_block_size(vllm_config):
             logger.info(
                 "Block size is set to 128 if prefix cache or chunked prefill is enabled."
             )
-            cache_config.block_size = 128
+            cache_config.block_size = 32
 
 
 def dispose_layer(layer: Any):
