@@ -475,7 +475,7 @@ __aicore__ inline void SASVectorBlock<SAST>::GetRealS2Idx(int64_t s2GmOffset, in
 {
     int64_t cmpS2Offset = s2GmOffset;
     int64_t topkGmIdx = cmpS2Offset / constInfo.sparseBlockSize;
-    if (unlikely(topkGmIdx >= constInfo.sparseBlockCount)) {
+    if (unlikely(topkGmIdx >= constInfo.sparseBlockCount || s2GmOffset >= runInfo.v0S2DealSize)) {
         realS2Idx = -1;
         return;
     }
