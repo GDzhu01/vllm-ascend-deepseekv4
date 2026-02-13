@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import itertools
 from collections.abc import Sequence
 
 from vllm.utils.math_utils import cdiv
@@ -99,36 +100,64 @@ class CompressAttentionManager(FullAttentionManager):
         dcp_world_size: int = 1,
         pcp_world_size: int = 1,
     ) -> tuple[list[KVCacheBlock], ...]:
-        assert isinstance(kv_cache_spec, AttentionSpec), (
-            "SFACompressRatio4Manager can only be used for C128")
-        assert dcp_world_size == 1, "DCP not support mamba now."
-        assert pcp_world_size == 1, "PCP not support mamba now."
+        assert isinstance(
+            kv_cache_spec, Compress4AttentionSpec | Compress128AttentionSpec | C4IndexerSpec
+        ), (
+            "FullAttentionManager can only be used for full attention "
+            "and chunked local attention groups"
+        )
         computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
-            [] for _ in range(len(kv_cache_group_ids)))
+            [] for _ in range(len(kv_cache_group_ids))
+        )
+        block_size = kv_cache_spec.block_size
+        if dcp_world_size * pcp_world_size > 1:
+            block_size *= dcp_world_size * pcp_world_size
+        max_num_blocks = max_length // block_size
+        for block_hash in itertools.islice(block_hashes, max_num_blocks):
+            # block_hashes is a chain of block hashes. If a block hash is not
+            # in the cached_block_hash_to_id, the following block hashes are
+            # not computed yet for sure.
+            if cached_block := block_pool.get_cached_block(
+                block_hash, kv_cache_group_ids
+            ):
+                for computed, cached in zip(computed_blocks, cached_block):
+                    computed.append(cached)
+            else:
+                break
+        if use_eagle and computed_blocks[0]:
+            # Need to drop the last matched block if eagle is enabled.
+            for computed in computed_blocks:
+                computed.pop()
+        while (
+            block_size != alignment_tokens  # Faster for common case.
+            and len(computed_blocks[0]) * block_size % alignment_tokens != 0
+        ):
+            for computed in computed_blocks:
+                computed.pop()
         return computed_blocks
 
-    def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
-        """
-        cascade attention is not supported by mamba
-        """
-        return 0
+    # def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+    #     """
+    #     cascade attention is not supported by mamba
+    #     """
+    #     return 0
 
-    def free(self, request_id: str) -> None:
-        """
-        Free the blocks for the request.
+    # def free(self, request_id: str) -> None:
+    #     """
+    #     Free the blocks for the request.
 
-        Args:
-            request_id: The request ID.
-        """
-        # Default to [] in case a request is freed (aborted) before alloc.
-        req_blocks = self.req_to_blocks.pop(request_id, [])
+    #     Args:
+    #         request_id: The request ID.
+    #     """
+    #     # Default to [] in case a request is freed (aborted) before alloc.
+    #     req_blocks = self.req_to_blocks.pop(request_id, [])
 
-        # Free blocks in reverse order so that the tail blocks are
-        # freed first.
-        ordered_blocks = reversed(req_blocks)
+    #     # Free blocks in reverse order so that the tail blocks are
+    #     # freed first.
+    #     ordered_blocks = reversed(req_blocks)
 
-        self.block_pool.free_blocks(ordered_blocks)
-        self.num_cached_block.pop(request_id, None)
+    #     self.block_pool.free_blocks(ordered_blocks)
+    #     self.num_cached_block.pop(request_id, None)
 
 def get_manager_for_kv_cache_spec(kv_cache_spec: KVCacheSpec,
                                   **kwargs) -> SingleTypeKVCacheManager:

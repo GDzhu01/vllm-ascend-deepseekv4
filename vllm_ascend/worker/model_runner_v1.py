@@ -606,7 +606,7 @@ class NPUModelRunner(GPUModelRunner):
             num_scheduled_tokens[:num_reqs], self.arange_np[:num_reqs],
             self.use_compress,
             self.kv_cache_config.kv_cache_groups)
-        print(f"{num_scheduled_tokens[:num_reqs]=}")
+        # print(f"{num_scheduled_tokens[:num_reqs]=}")
         self.input_batch.block_table.compute_slot_mapping(
             req_indices, positions_np, positions_compressed_list,
             req_indices_compressed_list)
@@ -1078,9 +1078,9 @@ class NPUModelRunner(GPUModelRunner):
 
             # Make AscendCommonAttentionMetadata
             if self.use_compress:
-                print(f"{kv_cache_group_id=}")
-                print(f"{blk_table_tensor[:num_reqs]=}")
-                print(f"{kv_cache_group_spec.kv_cache_spec=}")
+                # print(f"{kv_cache_group_id=}")
+                # print(f"{blk_table_tensor[:num_reqs]=}")
+                # print(f"{kv_cache_group_spec.kv_cache_spec=}")
                 common_attn_metadata = AscendCommonAttentionMetadata(
                     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
                     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
