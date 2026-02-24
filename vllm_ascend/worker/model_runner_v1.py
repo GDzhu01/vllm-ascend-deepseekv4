@@ -2066,7 +2066,6 @@ class NPUModelRunner(GPUModelRunner):
             # outperforms _npu_paged_attention on all cases.
             seq_lens = SEQ_LEN_WITH_MAX_PA_WORKSPACE if is_graph_capturing and using_paged_attention(
                 num_tokens, self.vllm_config) else max_query_len
-            
             self.seq_lens.np[:num_reqs] = seq_lens
             self.seq_lens.np[num_reqs:] = 0
             self.seq_lens.copy_to_gpu()
@@ -2567,6 +2566,12 @@ class NPUModelRunner(GPUModelRunner):
         window_size = hf_config.window_size
         head_dim = hf_config.head_dim
         indexer_head_dim = hf_config.index_head_dim
+        if get_ascend_device_type() == AscendDeviceType.A5:
+            kv_head_dim = 640
+            kv_dtype = torch.float8_e4m3fn
+        else:
+            kv_head_dim = hf_config.head_dim
+            kv_dtype = torch.bfloat16
         # Since compressor kernel need PA format input,
         # we initialize KV state buffer with the size of block_size
         # instead of its actual size.
@@ -2593,8 +2598,8 @@ class NPUModelRunner(GPUModelRunner):
             for layer_name in group.layer_names:
                 layer_index = extract_layer_index(layer_name)
                 sliding_window = _get_aligned_tensor(
-                    torch.Size([block_num, block_size, 640]),
-                    torch.float8_e4m3fn,
+                    torch.Size([block_num, block_size, kv_head_dim]),
+                    kv_dtype,
                     alignment,
                 )
                 if layer_index in c4_layers:
@@ -2642,8 +2647,8 @@ class NPUModelRunner(GPUModelRunner):
             layer_index = extract_layer_index(layer_name)
             assert layer_index in c1_layers, "layer_index out of range"
             sliding_window = _get_aligned_tensor(
-                torch.Size([block_num, block_size, 640]),
-                torch.float8_e4m3fn,
+                torch.Size([block_num, block_size, kv_head_dim]),
+                kv_dtype,
                 alignment,
             )
             kv_states[layer_name] = (sliding_window,)
