@@ -118,7 +118,8 @@ class MoECommMethod(ABC):
             need_trans: bool = False,
             dynamic_eplb: bool = False,
             mc2_mask: torch.Tensor = None,
-            pertoken_scale: Optional[torch.Tensor] = None):
+            pertoken_scale: Optional[torch.Tensor] = None,
+            use_mxfp_quant=False):
         # Check constraints
         assert hidden_states.dtype in [
             torch.float32, torch.float16, torch.bfloat16, torch.int8
@@ -164,7 +165,8 @@ class MoECommMethod(ABC):
                 with_quant=use_int8_w8a8 or use_int4_w4a8 or use_int4_w4a16,
                 fusion=use_int8_w8a8,
                 need_trans=need_trans,
-                dynamic_eplb=dynamic_eplb)
+                dynamic_eplb=dynamic_eplb,
+                use_mxfp_quant=True)
 
         before_combine_evt = torch.npu.current_stream().record_event()
         combine_results = self.token_dispatcher.token_combine(

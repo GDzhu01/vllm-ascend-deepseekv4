@@ -217,11 +217,11 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
             w2_scale=layer.w2_weight_scale.data,
             topk_weights=topk_weights,
             topk_ids=topk_ids,
-            use_int8_w8a8=True,
             expert_map=expert_map,
             log2phy=log2phy,
             dynamic_eplb=self.dynamic_eplb,
-            mc2_mask=kwargs.get("mc2_mask", None))
+            mc2_mask=kwargs.get("mc2_mask", None),
+            use_mxfp_quant=True,)
 
     def process_weights_after_loading(self, layer):
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.view(torch.int32) >> 23 & 0xFF

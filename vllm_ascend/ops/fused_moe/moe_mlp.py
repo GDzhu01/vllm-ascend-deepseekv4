@@ -400,8 +400,9 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
                       with_quant: bool = False,
                       fusion: bool = False,
                       need_trans: bool = True,
-                      dynamic_eplb: bool = False) -> torch.Tensor:
-    if with_quant and get_ascend_device_type() == AscendDeviceType.A5:
+                      dynamic_eplb: bool = False,
+                      use_mxfp_quant=True) -> torch.Tensor:
+    if use_mxfp_quant:
         return quant_apply_mlp_A5(hidden_states=hidden_states,
                                   w1=w1,
                                   w1_scale=w1_scale,
