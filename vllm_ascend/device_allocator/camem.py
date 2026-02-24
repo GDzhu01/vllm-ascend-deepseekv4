@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import torch
-# from acl.rt import memcpy  # type: ignore # noqa: F401
+from acl.rt import memcpy  # type: ignore # noqa: F401
 from vllm.logger import logger
 
 
