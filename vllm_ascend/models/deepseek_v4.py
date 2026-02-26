@@ -817,6 +817,8 @@ class DeepseekV2DecoderLayer(nn.Module):
             "llama_4_scaling": llama_4_scaling
         }
         hidden_states = self.self_attn(**attn_kwargs)
+        # print(f"{self.layer_idx=}")
+        # print(f"{hidden_states.shape=}")
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn,

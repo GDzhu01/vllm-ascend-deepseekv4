@@ -1078,9 +1078,18 @@ class NPUModelRunner(GPUModelRunner):
 
             # Make AscendCommonAttentionMetadata
             if self.use_compress:
-                # print(f"{kv_cache_group_id=}")
-                # print(f"{blk_table_tensor[:num_reqs]=}")
-                # print(f"{kv_cache_group_spec.kv_cache_spec=}")
+                if torch.distributed.get_rank() == 0:
+                    print(60*"=")
+                    print(f"{kv_cache_group_id=}")
+                    print(f"{blk_table_tensor[:num_reqs]=}")
+                    print(f"{kv_cache_group_spec.kv_cache_spec=}")
+                    print(f"{slot_mapping.shape=}")
+                    torch.set_printoptions(threshold=float(409600), edgeitems=102400)
+                    print(f"{slot_mapping=}")
+                    print(f"{self.input_batch.num_computed_tokens_cpu[:num_reqs]=}")
+                    print(f"{num_scheduled_tokens[:num_reqs]=}")
+                    print(f"{num_scheduled_tokens_compressed_list=}")
+
                 common_attn_metadata = AscendCommonAttentionMetadata(
                     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
                     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
@@ -1799,6 +1808,7 @@ class NPUModelRunner(GPUModelRunner):
         with ProfileExecuteDuration().capture_async("Sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
 
+        print(f"{sampler_output=}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         def propose_draft_token_ids(sampled_token_ids):
             assert self.spec_decode_common_attn_metadata is not None
             self._draft_token_ids = self.propose_draft_token_ids(

@@ -1257,6 +1257,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                 compressed_kv.view(-1, compressed_kv.shape[-1]))
 
+        print(60*"=", f"{self.enable_kv_tnd=}")
         sliding_window_kv = kv if self.enable_kv_tnd else swa_cache
 
         if self.compress_ratio == 1:
