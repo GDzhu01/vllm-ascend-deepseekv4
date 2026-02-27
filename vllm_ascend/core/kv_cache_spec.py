@@ -84,7 +84,7 @@ class Compress4AttentionSpec(CompressAttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
 
 @dataclass(frozen=True)
 class Compress128AttentionSpec(CompressAttentionSpec):
@@ -128,7 +128,7 @@ class Compress128AttentionSpec(CompressAttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
 
 @dataclass(frozen=True)
 class SWAAttentionSpec(SlidingWindowSpec):
@@ -217,4 +217,4 @@ class C4IndexerSpec(AttentionSpec):
             The KV cache size in bytes
         """
         max_model_len = vllm_config.model_config.max_model_len
-        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+        return cdiv(max_model_len, self.block_size * self.compress_ratio) * self.page_size_bytes
