@@ -49,7 +49,6 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
 from vllm.model_executor.models.utils import extract_layer_index
 from vllm.model_executor.model_loader import get_model
-from vllm.model_executor.models.utils import extract_layer_index
 from vllm.sequence import IntermediateTensors
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
@@ -983,6 +982,7 @@ class NPUModelRunner(GPUModelRunner):
             ]
             num_reqs_actual = num_reqs
 
+        ratio_to_sas_metadata = dict()
         for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
             encoder_seq_lens, encoder_seq_lens_cpu = self._get_encoder_seq_lens(
@@ -1193,11 +1193,13 @@ class NPUModelRunner(GPUModelRunner):
                     # TODO(zxr)
                     extra_attn_metadata_args = dict(
                         compress_ratio=compress_ratio,
-                        num_reqs_actual=num_reqs_actual)
+                        num_reqs_actual=num_reqs_actual,
+                        ratio_to_sas_metadata=ratio_to_sas_metadata,)
                 attn_metadata_i = builder.build(
                     common_prefix_len=common_prefix_len,
                     common_attn_metadata=common_attn_metadata,
                     **extra_attn_metadata_args)
+                ratio_to_sas_metadata = builder.ratio_to_sas_metadata
 
                 for layer_name in attn_group.layer_names:
                     attn_metadata[layer_name].append(attn_metadata_i)
