@@ -48,7 +48,7 @@ def hadamard_transform_ref(x: torch.Tensor, scale=1.0, attn_metadata=None):
     if dim != dim_padded:
         x = F.pad(x, (0, dim_padded - dim))
     out = F.linear(x, attn_metadata.hadamard)
-    out = x * scale
+    out = out * scale
     return out[..., :dim].reshape(*x_shape)
 
 def rotate_activation(x: torch.Tensor, attn_metadata) -> torch.Tensor:
