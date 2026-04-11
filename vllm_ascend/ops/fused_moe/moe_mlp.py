@@ -23,6 +23,8 @@ from vllm.forward_context import get_forward_context
 from vllm.triton_utils import HAS_TRITON
 
 from vllm_ascend.ascend_forward_context import MoECommType
+from vllm_ascend.mxfp_compat import (FLOAT4_E2M1FN_X2_DTYPE,
+                                     FLOAT8_E8M0FNU_DTYPE)
 from vllm_ascend.utils import (AscendDeviceType, dispose_tensor,
                                enable_custom_op, get_ascend_device_type,
                                get_weight_prefetch_method)
@@ -67,21 +69,38 @@ def cumsum_group_list(group_list: torch.Tensor,
         f"Conversion from src_list_type={src_list_type} to dst_list_type={dst_list_type} is not implemented yet. "
         "This feature is under development.")
 
+
+def _unwrap_single_tensor(name: str,
+                          tensor_or_list: torch.Tensor
+                          | list[torch.Tensor]) -> torch.Tensor:
+    if isinstance(tensor_or_list, list):
+        if len(tensor_or_list) != 1:
+            raise ValueError(
+                f"{name} must be a tensor or a single-element list, but got {len(tensor_or_list)}."
+            )
+        return tensor_or_list[0]
+    return tensor_or_list
+
+
 def get_a5_quant_extra_args(act_quant_type,
                     weight_quant_type,
                     scale_type,
                     per_token_scale_type):
-    x_dtype = act_quant_type if act_quant_type in [torch_npu.float4_e2m1fn_x2, torch_npu.hifloat8] else None
-    weight_dtype = weight_quant_type if weight_quant_type in [torch_npu.float4_e2m1fn_x2, torch_npu.hifloat8] else None
-    scale_dtype = scale_type if scale_type in [torch_npu.float8_e8m0fnu] else None
-    per_token_scale_dtype = per_token_scale_type if per_token_scale_type in [torch_npu.float8_e8m0fnu] else None
+    quant_dtypes = [dtype for dtype in [FLOAT4_E2M1FN_X2_DTYPE]
+                    if dtype is not None]
+    scale_dtypes = [dtype for dtype in [FLOAT8_E8M0FNU_DTYPE]
+                    if dtype is not None]
+    x_dtype = act_quant_type if act_quant_type in quant_dtypes else None
+    weight_dtype = weight_quant_type if weight_quant_type in quant_dtypes else None
+    scale_dtype = scale_type if scale_type in scale_dtypes else None
+    per_token_scale_dtype = per_token_scale_type if per_token_scale_type in scale_dtypes else None
     return x_dtype, weight_dtype, scale_dtype, per_token_scale_dtype
 
 def quant_apply_mlp_A5(hidden_states: torch.Tensor,
-                       w1: torch.Tensor,
-                       w1_scale: torch.Tensor,
-                       w2: torch.Tensor,
-                       w2_scale: torch.Tensor,
+                       w1: torch.Tensor | list[torch.Tensor],
+                       w1_scale: torch.Tensor | list[torch.Tensor],
+                       w2: torch.Tensor | list[torch.Tensor],
+                       w2_scale: torch.Tensor | list[torch.Tensor],
                        group_list: torch.Tensor,
                        group_list_type: int = 1,
                        dynamic_scale: torch.Tensor = None,
@@ -110,7 +129,13 @@ def quant_apply_mlp_A5(hidden_states: torch.Tensor,
         weight_prefetch_method.maybe_prefetch_moe_weight_postprocess(
             hidden_states)
 
-    x_dtype, weight_dtype, scale_dtype, per_token_scale_dtype = get_a5_quant_extra_args(act_quant_type, weight_quant_type, scale_type, per_token_scale_type)
+    w1 = _unwrap_single_tensor("w1", w1)
+    w1_scale = _unwrap_single_tensor("w1_scale", w1_scale)
+    w2 = _unwrap_single_tensor("w2", w2)
+    w2_scale = _unwrap_single_tensor("w2_scale", w2_scale)
+
+    x_dtype, weight_dtype, scale_dtype, per_token_scale_dtype = get_a5_quant_extra_args(
+        act_quant_type, weight_quant_type, scale_type, per_token_scale_type)
     hidden_states, swiglu_out_scale = torch_npu.npu_grouped_matmul_swiglu_quant_v2(
         x=hidden_states,
         weight=[w1],
@@ -120,9 +145,11 @@ def quant_apply_mlp_A5(hidden_states: torch.Tensor,
         dequant_mode=2,
         quant_mode=2,
         dequant_dtype=torch.float32,
-        quant_dtype=torch.float8_e4m3fn,
-        weight_scale_dtype=torch_npu.float8_e8m0fnu,
-        x_scale_dtype=torch_npu.float8_e8m0fnu
+        quant_dtype=act_quant_type,
+        x_dtype=x_dtype,
+        weight_dtype=weight_dtype,
+        weight_scale_dtype=FLOAT8_E8M0FNU_DTYPE,
+        x_scale_dtype=FLOAT8_E8M0FNU_DTYPE
     )
     
     hidden_states = torch_npu.npu_grouped_matmul(x=[hidden_states],
@@ -388,8 +415,8 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
                       w1: torch.Tensor | list[torch.Tensor],
                       w2: torch.Tensor | list[torch.Tensor],
                       group_list: torch.Tensor,
-                      w1_scale: Optional[list[torch.Tensor]] = None,
-                      w2_scale: Optional[list[torch.Tensor]] = None,
+                      w1_scale: Optional[list[torch.Tensor] | torch.Tensor] = None,
+                      w2_scale: Optional[list[torch.Tensor] | torch.Tensor] = None,
                       dynamic_scale: torch.Tensor = None,
                       group_list_type: int = 1,
                       w1_scale_bias: torch.Tensor = None,
@@ -400,7 +427,12 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
                       with_quant: bool = False,
                       fusion: bool = False,
                       need_trans: bool = True,
-                      dynamic_eplb: bool = False) -> torch.Tensor:
+                      dynamic_eplb: bool = False,
+                      act_quant_type: Optional[torch.dtype] = None,
+                      weight_quant_type: Optional[torch.dtype] = None,
+                      scale_type: Optional[torch.dtype] = None,
+                      per_token_scale_type: Optional[torch.dtype] = None,
+                      use_bf16: Optional[bool] = None) -> torch.Tensor:
     if with_quant and get_ascend_device_type() == AscendDeviceType.A5:
         return quant_apply_mlp_A5(hidden_states=hidden_states,
                                   w1=w1,
@@ -414,11 +446,16 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
                                   w2_scale_bias=w2_scale_bias,
                                   fusion=fusion,
                                   dynamic_eplb=dynamic_eplb,
-                                  act_quant_type=torch.float8_e4m3fn,
-                                  weight_quant_type=torch.float8_e4m3fn,
-                                  scale_type=torch_npu.float8_e8m0fnu,
-                                  per_token_scale_type=torch_npu.float8_e8m0fnu,
-                                  use_bf16=True)
+                                  act_quant_type=act_quant_type
+                                  or torch.float8_e4m3fn,
+                                  weight_quant_type=weight_quant_type
+                                  or torch.float8_e4m3fn,
+                                  scale_type=scale_type
+                                  or FLOAT8_E8M0FNU_DTYPE,
+                                  per_token_scale_type=per_token_scale_type
+                                  or FLOAT8_E8M0FNU_DTYPE,
+                                  use_bf16=True if use_bf16 is None else
+                                  use_bf16)
     elif with_quant:
         assert w1_scale is not None and w2_scale is not None
         return quant_apply_mlp(hidden_states=hidden_states,

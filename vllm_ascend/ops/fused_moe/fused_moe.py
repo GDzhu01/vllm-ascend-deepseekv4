@@ -44,6 +44,8 @@ from vllm_ascend.ops.fused_moe.moe_comm_method import (AllGatherCommImpl,
                                                        setup_moe_comm_method)
 from vllm_ascend.quantization.w4a8_dynamic import \
     AscendW4A8DynamicFusedMoEMethod
+from vllm_ascend.quantization.w4a4_mxfp4 import \
+    AscendW4A4MXFP4DynamicFusedMoEMethod
 from vllm_ascend.quantization.w8a8_dynamic import \
     AscendW8A8DynamicFusedMoEMethod
 from vllm_ascend.utils import (AscendDeviceType, enable_sp,
@@ -264,6 +266,55 @@ class AscendFusedMoE(FusedMoE):
         self.quant_type = self._get_quant_type()
         is_w8a8_dynamic(self.quant_type)
 
+    def weight_loader(
+            self,
+            param: torch.nn.Parameter,
+            loaded_weight: torch.Tensor,
+            weight_name: str,
+            shard_id: str,
+            expert_id: int,
+            return_success: bool = False) -> bool | None:
+        quant_method = getattr(self.quant_method, "quant_method", None)
+        if not isinstance(quant_method, AscendW4A4MXFP4DynamicFusedMoEMethod):
+            return super().weight_loader(param, loaded_weight, weight_name,
+                                         shard_id, expert_id, return_success)
+
+        global_expert_id = expert_id
+        expert_id = self._map_global_expert_id_to_local_expert_id(
+            global_expert_id)
+        if expert_id == -1:
+            return False if return_success else None
+
+        if shard_id not in ("w1", "w2", "w3"):
+            raise ValueError(
+                f"shard_id must be ['w1','w2','w3'] but got {shard_id}.")
+
+        is_mxfp4_weight = "weight" in weight_name and "scale" not in weight_name
+        is_mxfp4_scale = "weight_scale" in weight_name
+        if not (is_mxfp4_weight or is_mxfp4_scale):
+            return super().weight_loader(param, loaded_weight, weight_name,
+                                         shard_id, global_expert_id,
+                                         return_success)
+
+        shard_dim = 0 if shard_id in ("w1", "w3") else 1
+        full_load = loaded_weight.ndim == 3
+        if full_load:
+            shard_dim += 1
+
+        expert_data = param.data if full_load else param.data[expert_id]
+        if shard_id == "w2":
+            self._load_w2(shard_dim=shard_dim,
+                          loaded_weight=loaded_weight,
+                          expert_data=expert_data,
+                          tp_rank=self.tp_rank)
+        else:
+            self._load_w13(shard_id=shard_id,
+                           shard_dim=shard_dim,
+                           loaded_weight=loaded_weight,
+                           expert_data=expert_data,
+                           tp_rank=self.tp_rank)
+        return True if return_success else None
+
     def _get_quant_type(self) -> QuantType:
         quant_method = self.quant_method
         if not hasattr(quant_method,
@@ -272,7 +323,9 @@ class AscendFusedMoE(FusedMoE):
 
         method = quant_method.quant_method
 
-        if isinstance(method, AscendW8A8DynamicFusedMoEMethod):
+        if isinstance(method, AscendW4A4MXFP4DynamicFusedMoEMethod):
+            return QuantType.MXFP4
+        elif isinstance(method, AscendW8A8DynamicFusedMoEMethod):
             return QuantType.W8A8
         elif isinstance(method, AscendW4A8DynamicFusedMoEMethod):
             return QuantType.W4A8

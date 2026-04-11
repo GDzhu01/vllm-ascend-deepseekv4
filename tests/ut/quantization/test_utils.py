@@ -1,4 +1,5 @@
 import types
+from unittest.mock import MagicMock, patch
 
 from tests.ut.base import TestBase
 from vllm_ascend.quantization.utils import (ASCEND_QUANTIZATION_METHOD_MAP,
@@ -12,8 +13,12 @@ class TestGetQuantMethod(TestBase):
         )
         for quant_type, layer_map in ASCEND_QUANTIZATION_METHOD_MAP.items():
             for layer_type in layer_map.keys():
-                ASCEND_QUANTIZATION_METHOD_MAP[quant_type][
-                    layer_type] = types.new_class(f"{quant_type}_{layer_type}")
+                def exec_body(ns):
+                    ns["__init__"] = lambda self, *args, **kwargs: None
+
+                ASCEND_QUANTIZATION_METHOD_MAP[quant_type][layer_type] = (
+                    types.new_class(f"{quant_type}_{layer_type}", (),
+                                    exec_body=exec_body))
 
     def tearDown(self):
         # Restore original map
@@ -38,6 +43,19 @@ class TestGetQuantMethod(TestBase):
                 method = get_quant_method({"layer.weight": quant_type}, prefix,
                                           "moe")
                 self.assertIsInstance(method, cls)
+
+    @patch("vllm_ascend.quantization.utils.get_current_vllm_config")
+    def test_fp4_expert_dtype_overrides_moe_quant_type(self,
+                                                       mock_get_current_vllm_config):
+        mock_config = MagicMock()
+        mock_config.model_config.hf_text_config.expert_dtype = "fp4"
+        mock_get_current_vllm_config.return_value = mock_config
+
+        method = get_quant_method({"layer.weight": "W8A8_MXFP8"}, "layer",
+                                  "moe")
+        self.assertIsInstance(method,
+                              ASCEND_QUANTIZATION_METHOD_MAP["W4A4_MXFP4"]
+                              ["moe"])
 
     def test_invalid_layer_type(self):
         quant_description = {"linear_layer.weight": "W8A8"}

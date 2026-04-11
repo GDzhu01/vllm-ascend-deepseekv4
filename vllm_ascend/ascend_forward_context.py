@@ -242,6 +242,10 @@ def select_moe_comm_method(num_tokens: int,
     quant_type = getattr(
         vllm_config.model_config.hf_text_config, 'moe_quantize',
         getattr(vllm_config.model_config.hf_text_config, 'quantize', None))
+    expert_dtype = getattr(vllm_config.model_config.hf_text_config,
+                           'expert_dtype', None)
+    if isinstance(expert_dtype, str) and expert_dtype.lower() == "fp4":
+        quant_type = "mxfp4"
     if is_w8a8_dynamic():
         quant_type = 'w8a8_dynamic'
 

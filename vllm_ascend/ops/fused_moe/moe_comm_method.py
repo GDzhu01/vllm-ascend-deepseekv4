@@ -106,13 +106,19 @@ class MoECommMethod(ABC):
             use_int8_w8a8: bool = False,
             use_int4_w4a8: bool = False,
             use_int4_w4a16: bool = False,
+            use_mxfp4_moe: bool = False,
             expert_map: Optional[torch.Tensor] = None,
-            w1_scale: Optional[list[torch.Tensor]] = None,
-            w2_scale: Optional[list[torch.Tensor]] = None,
+            w1_scale: Optional[list[torch.Tensor] | torch.Tensor] = None,
+            w2_scale: Optional[list[torch.Tensor] | torch.Tensor] = None,
             w1_scale_bias: torch.Tensor = None,
             w2_scale_bias: torch.Tensor = None,
             w1_offset: Optional[torch.Tensor] = None,
             w2_offset: Optional[torch.Tensor] = None,
+            act_quant_type: Optional[torch.dtype] = None,
+            weight_quant_type: Optional[torch.dtype] = None,
+            scale_type: Optional[torch.dtype] = None,
+            per_token_scale_type: Optional[torch.dtype] = None,
+            use_bf16: Optional[bool] = None,
             # For load balance
             log2phy: torch.Tensor = None,
             need_trans: bool = False,
@@ -161,10 +167,16 @@ class MoECommMethod(ABC):
                 w1_offset=w1_offset,
                 w2_offset=w2_offset,
                 topk_scales=dispatch_results.topk_scales,
-                with_quant=use_int8_w8a8 or use_int4_w4a8 or use_int4_w4a16,
+                with_quant=use_int8_w8a8 or use_int4_w4a8 or use_int4_w4a16
+                or use_mxfp4_moe,
                 fusion=use_int8_w8a8,
                 need_trans=need_trans,
-                dynamic_eplb=dynamic_eplb)
+                dynamic_eplb=dynamic_eplb,
+                act_quant_type=act_quant_type,
+                weight_quant_type=weight_quant_type,
+                scale_type=scale_type,
+                per_token_scale_type=per_token_scale_type,
+                use_bf16=use_bf16)
 
         before_combine_evt = torch.npu.current_stream().record_event()
         combine_results = self.token_dispatcher.token_combine(

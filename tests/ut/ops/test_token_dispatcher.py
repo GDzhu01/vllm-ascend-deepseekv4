@@ -212,6 +212,28 @@ class TestTokenDispatcherWithAllGather(TestBase):
 
         self.assertEqual(results.group_list_type, 1)
 
+    @patch('torch_npu.npu_dynamic_mx_quant')
+    def test_token_dispatch_without_quant_skips_mx_quant(self,
+                                                         mock_dynamic_mx_quant):
+        kwargs = {
+            "apply_router_weight_on_input": False,
+            "top_k": 2,
+            "max_num_tokens": 100,
+            "ep_size": 2,
+            "num_experts": 128,
+        }
+        dispatcher = TokenDispatcherWithAllGather(**kwargs)
+
+        hidden_states = torch.randn(3, 128)
+        topk_weights = torch.tensor([[0.7, 0.3], [0.6, 0.4], [0.5, 0.5]])
+        topk_ids = torch.tensor([[0, 1], [1, 2], [2, 3]])
+
+        results = dispatcher.token_dispatch(hidden_states, topk_weights,
+                                            topk_ids, None, with_quant=False)
+
+        mock_dynamic_mx_quant.assert_not_called()
+        self.assertIsNone(results.dynamic_scale)
+
     def test_token_dispatch_with_quant(self):
         kwargs = {
             "apply_router_weight_on_input": False,

@@ -1,11 +1,13 @@
 from typing import Any, Dict, Optional, Type
 
 import torch
+from vllm.config import get_current_vllm_config
 from vllm.logger import logger
 
 from vllm_ascend.utils import COMPRESSED_TENSORS_METHOD, FP8_METHOD
 
 from .w4a4_flatquant_dynamic import AscendW4A4FlatQuantDynamicLinearMethod
+from .w4a4_mxfp4 import AscendW4A4MXFP4DynamicFusedMoEMethod
 from .w4a8_dynamic import (AscendW4A8DynamicFusedMoEMethod,
                            AscendW4A8DynamicLinearMethod)
 from .w4a16 import AscendW4A16FusedMoEMethod
@@ -27,6 +29,9 @@ ASCEND_QUANTIZATION_METHOD_MAP: Dict[str, Dict[str, Type[Any]]] = {
     },
     "W4A4_FLATQUANT_DYNAMIC": {
         "linear": AscendW4A4FlatQuantDynamicLinearMethod,
+    },
+    "W4A4_MXFP4": {
+        "moe": AscendW4A4MXFP4DynamicFusedMoEMethod,
     },
     "W8A8": {
         "linear": AscendW8A8LinearMethod,
@@ -126,8 +131,26 @@ def get_quant_method_modelslim(
     logger.info_once("Using the vLLM Ascend modelslim Quantization now!")
     if packed_modules_mapping is None:
         packed_modules_mapping = dict()
+
+    expert_dtype = None
+    if layer_type == "moe":
+        try:
+            vllm_config = get_current_vllm_config()
+        except Exception:
+            vllm_config = None
+        hf_text_config = getattr(getattr(vllm_config, "model_config", None),
+                                 "hf_text_config", None)
+        expert_dtype = getattr(hf_text_config, "expert_dtype", None)
+        if isinstance(expert_dtype, str) and expert_dtype.lower() == "fp4":
+            quant_type = "W4A4_MXFP4"
+        else:
+            quant_type = None
+    else:
+        quant_type = None
     # Attention
-    if '.attn' in prefix and 'fa_quant_type' in quant_description.keys():
+    if quant_type is not None:
+        pass
+    elif '.attn' in prefix and 'fa_quant_type' in quant_description.keys():
         quant_type = quant_description['fa_quant_type']
     # Linear
     else:
@@ -151,5 +174,6 @@ def get_quant_method_modelslim(
 
 def is_mx_quant_type(instance: Any) -> bool:
     """Checks if the quantization method is a mix-precision type."""
-    MX_QUANT_TYPES = (AscendW8A8MXFP8DynamicLinearMethod, )
+    MX_QUANT_TYPES = (AscendW8A8MXFP8DynamicLinearMethod,
+                      AscendW4A4MXFP4DynamicFusedMoEMethod)
     return isinstance(instance, MX_QUANT_TYPES)
