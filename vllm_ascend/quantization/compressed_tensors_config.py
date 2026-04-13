@@ -183,7 +183,7 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
             # Store scheme on layer for reference (optional, for debugging)
             layer.scheme = moe_scheme
             logger.info_once("Using the vLLM Ascend llmcompressor Quantization now!")
-            return AscendFusedMoEMethod(moe_scheme, layer.moe_config)
+            return AscendFusedMoEMethod(moe_scheme, layer.moe_config, tid2eid)
 
         return None
 

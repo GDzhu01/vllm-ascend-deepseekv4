@@ -85,6 +85,11 @@ packed_modules_model_mapping: dict[str, dict[str, list[str]]] = {
         "experts": ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
         "fused_qkv_a_proj": ["q_a_proj", "kv_a_proj_with_mqa"],
     },
+    "deepseek_v4": {
+        "gate_up_proj": ["gate_proj", "up_proj"],
+        "experts":
+        ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"]
+    },
     "pangu_ultra_moe": {
         "gate_up_proj": ["gate_proj", "up_proj"],
         "experts": ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
@@ -241,6 +246,28 @@ packed_modules_model_mapping: dict[str, dict[str, list[str]]] = {
             "gate_proj",
             "up_proj",
         ],
+    },
+}
+
+
+QUANT_MODEL_PREFIX_MAPPINGS = {
+    "deepseek_v4": {
+        "layers.": "model.layers.",
+        "embed.": "model.embed_tokens.",
+        "head.": "lm_head.",
+    },
+}
+
+
+QUANT_MODEL_SUBSTR_MAPPINGS = {
+    "deepseek_v4": {
+        ".attn.": ".sefl_attn.",
+        ".w1.": ".gate_proj.",
+        ".w2.": ".down_proj.",
+        ".w3.": ".up_proj.",
+        ".ffn.": ".mlp.",
+        ".ffn_norm.": ".post_attention_layernorm.",
+        ".attn_norm.": ".input_layernorm.",
     },
 }
 
@@ -446,6 +473,13 @@ class AscendModelSlimConfig(QuantizationConfig):
 
     def quant_prefix_mapper(self, model_type: str, prefix: str) -> str:
         self.model_type = model_type
+        prefix_mapping = QUANT_MODEL_PREFIX_MAPPINGS.get(model_type)
+        substr_mapping = QUANT_MODEL_SUBSTR_MAPPINGS.get(model_type)
+        if prefix_mapping:
+            hf_to_vllm_mapper = WeightsMapper(
+                orig_to_new_prefix=prefix_mapping,
+                orig_to_new_substr=substr_mapping)
+            return hf_to_vllm_mapper._map_name(prefix)
         return prefix
 
     def get_quant_method(self, layer: torch.nn.Module, prefix: str, tid2eid=None) -> Optional["QuantizeMethodBase"]:
@@ -502,7 +536,7 @@ class AscendModelSlimConfig(QuantizationConfig):
 
                 return AscendUnquantizedFusedMoEMethod(layer.moe_config)
             scheme = create_scheme_for_layer(self.quant_description, prefix, "moe", self.packed_modules_mapping)
-            return AscendFusedMoEMethod(scheme, layer.moe_config)
+            return AscendFusedMoEMethod(scheme, layer.moe_config, tid2eid)
         elif isinstance(layer, VocabParallelEmbedding):
             if self.is_layer_skipped_ascend(prefix, self.packed_modules_mapping):
                 return UnquantizedEmbeddingMethod()
@@ -715,6 +749,7 @@ class AscendModelSlimConfig(QuantizationConfig):
                     new_name = name.replace('embed', 'embed_tokens')
                 extra_quant_dict[new_name] = self.quant_description[name]
             self.quant_description.update(extra_quant_dict)
+            
         extra_quant_dict = {}
         for k in self.quant_description:
             if "shared_head" in k:
