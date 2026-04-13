@@ -35,7 +35,7 @@ on:
 jobs:
   build:
     name: Build nightly-${{ inputs.target }} image
-    runs-on: ubuntu-22.04-arm
+    runs-on: [ARM64, self-hosted]
     steps:
       - uses: actions/checkout@v6
 

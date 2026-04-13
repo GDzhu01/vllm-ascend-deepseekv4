@@ -36,10 +36,10 @@ jobs:
       matrix:
         include:
           - arch: linux/amd64
-            runner: ubuntu-latest
+            runner: [X64, self-hosted]
             tag: amd64
           - arch: linux/arm64
-            runner: ubuntu-22.04-arm
+            runner: [ARM64, self-hosted]
             tag: arm64
     steps:
     - uses: actions/checkout@v6
@@ -56,11 +56,6 @@ jobs:
         persist-credentials: false
         ref: ${{ inputs.workflow_dispatch_tag }}
 
-    - name: Free up disk space
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-      with:
-        tool-cache: true
-        docker-images: false
 
     - name: Publish - Login to Quay Container Registry
       if: ${{ inputs.should_push }}
@@ -108,7 +103,7 @@ jobs:
 
 
   merge-image:
-    runs-on: ubuntu-latest
+    runs-on: [ARM64, self-hosted]
     needs: build-push-digest
     if: ${{ inputs.should_push }}
     steps:
