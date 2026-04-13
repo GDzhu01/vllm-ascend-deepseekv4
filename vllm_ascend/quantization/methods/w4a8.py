@@ -348,6 +348,7 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
         activation: str = "silu",
         apply_router_weight_on_input: bool = False,
         mc2_mask: torch.Tensor | None = None,
+        tid2eid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         assert router_logits.shape[1] == global_num_experts - global_redundant_expert_num, (
             "Number of global experts mismatch (excluding redundancy)"
