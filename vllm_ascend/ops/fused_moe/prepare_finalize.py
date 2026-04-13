@@ -26,6 +26,7 @@ from vllm.distributed.parallel_state import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
+from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.fused_moe import FusedMoEConfig
 
 from vllm_ascend.ascend_config import get_ascend_config
@@ -174,7 +175,21 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
             padded_hidden_states_shape=padded_hidden_states_shape,
             pertoken_scale=None,
         )
+    
+    def pad_and_split_input_ids(
+        self,
+        input_ids,
+    ):
+        if not (self.replace_allreduce or self.enable_shared_expert_dp):
+            pad_size = self.tp_size - self.num_tokens
+            if pad_size > 0:
+                input_ids = nn.functional.pad(input_ids, (0, pad_size))
 
+            if self.tp_size > 1:
+                input_ids = torch.tensor_split(input_ids, self.tp_size, dim=0)
+                input_ids = input_ids[self.tp_rank]
+        return input_ids
+    
     def finalize(
         self,
         hidden_states: torch.Tensor,
@@ -285,6 +300,22 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
             padded_hidden_states_shape=padded_hidden_states_shape,
             pertoken_scale=None,
         )
+    
+    def pad_and_split_input_ids(
+        self,
+        input_ids,
+    ):
+        if not self.replace_allreduce:
+            forward_context = get_forward_context()
+            target_pad_length = forward_context.padded_num_tokens
+            pad_size = target_pad_length - self.num_tokens
+            if pad_size > 0 and not self.enable_shared_expert_dp:
+                input_ids = nn.functional.pad(input_ids, (0, pad_size))
+
+            if self.tp_size > 1 and not self.enable_shared_expert_dp:
+                input_ids = torch.tensor_split(input_ids, self.tp_size, dim=0)
+                input_ids = input_ids[self.tp_rank]
+        return input_ids
 
 
 class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
@@ -419,6 +450,19 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             padded_hidden_states_shape=None,
             pertoken_scale=None,
         )
+    
+    def all_gather_input_id_with_dp_group(
+            self, input_ids: torch.Tensor) -> torch.Tensor:
+        if self.moe_config.dp_size > 1:
+            forward_context = get_forward_context()
+            max_tokens_across_dp = forward_context.max_tokens_across_dp
+            pad_size = max_tokens_across_dp - self.num_tokens
+            if pad_size > 0:
+                input_ids = nn.functional.pad(input_ids, (0, 0, 0, pad_size))
+
+            # All-gather across DP group
+            input_ids = self.moe_config.dp_group.all_gather(input_ids, 0)
+        return input_ids
 
     def finalize(
         self,
