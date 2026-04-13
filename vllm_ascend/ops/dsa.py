@@ -173,10 +173,9 @@ def dsa_forward(
     else:
         attn_metadata = forward_context.attn_metadata
     kv_cache = self.dsa_attn.kv_cache[forward_context.virtual_engine]
-    kv_state = self.dsa_attn.kv_state[0]  # TODO support PP
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,
                                kv_cache, attn_metadata, need_gather_q_kv,
-                               output, kv_state)
+                               output)
     return
 
 

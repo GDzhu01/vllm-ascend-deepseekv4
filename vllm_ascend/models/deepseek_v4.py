@@ -522,7 +522,6 @@ class Compressor(nn.Module):
         start_pos: int,
         cos: torch.Tensor,
         sin: torch.Tensor,
-        kv_state=None,
     ) -> torch.Tensor:
         pass
 

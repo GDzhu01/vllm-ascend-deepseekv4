@@ -47,8 +47,8 @@ from vllm.forward_context import get_forward_context
 from vllm.logger import logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.layers.mamba.abstract import MambaBase
-from vllm.model_executor.model_loader import get_model
 from vllm.model_executor.models.utils import extract_layer_index
+from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
@@ -93,9 +93,20 @@ from vllm_ascend.compilation.acl_graph import (ACLGraphWrapper,
                                                update_attn_params,
                                                update_mla_attn_dcp_pcp_params,
                                                update_mla_attn_params)
-from vllm_ascend.core.kv_cache_spec import (Compress4AttentionSpec,
+from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
+                                            Compress4AttentionSpec,
                                             Compress128AttentionSpec,
-                                            CompressAttentionSpec)
+                                            # ------------- state -------------
+                                            C128AttnKVStateSpec,
+                                            C128AttnScoreStateSpec,
+                                            C4AttnKVStateSpec,
+                                            C4AttnScoreStateSpec,
+                                            C4IndexerKVStateSpec,
+                                            C4IndexerScoreStateSpec,
+                                            # ---------------------------------
+                                            C4IndexerSpec,
+                                            SWAAttentionSpec,
+                                            )
 # yapf: enable
 from vllm_ascend.eplb.adaptor.vllm_adaptor import VllmEplbAdaptor
 from vllm_ascend.eplb.core.eplb_device_transfer_loader import \
@@ -358,7 +369,7 @@ class NPUModelRunner(GPUModelRunner):
             pin_memory=self.pin_memory,
             vocab_size=self.model_config.get_vocab_size(),
             block_sizes=[self.block_size],
-            kernel_block_sizes=[[self.cache_config.block_size]],
+            kernel_block_sizes=[self.cache_config.block_size],
             is_spec_decode=bool(self.vllm_config.speculative_config),
             logitsprocs=build_logitsprocs(
                 self.vllm_config, self.device, self.pin_memory,
@@ -386,38 +397,6 @@ class NPUModelRunner(GPUModelRunner):
         self.intermediate_tensors: IntermediateTensors | None = None
         self.reorder_batch_threshold: int | None = None
         self.long_seq_metadata = None
-        self.kv_states: list[tuple[torch.Tensor]] = []
-        # Since compressor kernel need PA format input,
-        # and write backward blocks instead of overwrite in one block,
-        # we need to initialize three blocks and simulate writing backward
-        # by exchanging order of these blocks.
-        # (Two for swa, one extra reserved for mtp)
-        self.state_block_multiple = 3
-        self.swa_slot_mapping = self._make_buffer(self.max_num_tokens,
-                                                  dtype=torch.int32)
-        self.swa_block_table = self._make_buffer(
-            (self.max_num_reqs, self.state_block_multiple), dtype=torch.int32)
-        self.state_block_table = self._make_buffer(
-            (self.max_num_reqs,
-             cdiv(self.model_config.max_model_len, self.block_size)),
-            dtype=torch.int32,
-        )
-
-        if self.use_compress:
-            kv_cache_spec = AttentionSpec(
-                block_size=self.block_size,
-                num_kv_heads=1,
-                head_size=512,
-                dtype=torch.bfloat16,
-            )
-            self.swa_metadata_builder = self.attn_backend.get_builder_cls()(
-                kv_cache_spec,
-                list(self.runner_only_attn_layers),
-                self.vllm_config,
-                self.device,
-                AscendDSAMetadata,
-                supports_dcp_with_varlen=False,
-            )
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -624,8 +603,9 @@ class NPUModelRunner(GPUModelRunner):
         positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list = get_compressed_pos_and_indices(
             self.input_batch.num_computed_tokens_cpu[:num_reqs],
             num_scheduled_tokens[:num_reqs], self.arange_np[:num_reqs],
-            self.use_compress)
-
+            self.use_compress,
+            self.kv_cache_config.kv_cache_groups)
+        # print(f"{num_scheduled_tokens[:num_reqs]=}")
         self.input_batch.block_table.compute_slot_mapping(
             req_indices, positions_np, positions_compressed_list,
             req_indices_compressed_list)
@@ -686,20 +666,6 @@ class NPUModelRunner(GPUModelRunner):
         )
         num_input_tokens = batch_descriptor.num_tokens
         self.query_lens = torch.from_numpy(num_scheduled_tokens)
-
-        # compute slot_mapping and block_table of sliding window
-        if self.use_compress:
-            state_ids_np = np.array(
-                [self.requests[req_id].state_id for req_id in req_ids], )
-            swa_slot_mapping, swa_block_table, state_block_table = \
-                self._compute_swa_meta(state_ids_np, positions_np, num_scheduled_tokens)
-            self.swa_slot_mapping.np[:
-                                     total_num_scheduled_tokens] = swa_slot_mapping
-            self.swa_slot_mapping.copy_to_gpu(total_num_scheduled_tokens)
-            self.swa_block_table.np[:num_reqs] = swa_block_table
-            self.swa_block_table.copy_to_gpu(num_reqs)
-            self.state_block_table.np[:num_reqs] = state_block_table
-            self.state_block_table.copy_to_gpu(num_reqs)
 
         # Get info across DP ranks.
         # NOTE: maybe_padded_num_tokens is only used when using TorchAir with DP,
@@ -816,7 +782,7 @@ class NPUModelRunner(GPUModelRunner):
                                 cu_num_tokens)
         self.positions.cpu[total_num_scheduled_tokens:num_input_tokens].zero_()
         self.positions.copy_to_gpu()
-        attn_metadata: dict[str, Any] = {}
+        attn_metadata: dict[str, Any] = defaultdict(list)
 
         # Record the index of requests that should not be sampled,
         # so that we could clear the sampled tokens before returning
@@ -1016,6 +982,7 @@ class NPUModelRunner(GPUModelRunner):
             ]
             num_reqs_actual = num_reqs
 
+        ratio_to_sas_metadata = dict()
         for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
             encoder_seq_lens, encoder_seq_lens_cpu = self._get_encoder_seq_lens(
@@ -1072,14 +1039,6 @@ class NPUModelRunner(GPUModelRunner):
                     slot_mapping = blk_table.slot_mapping.gpu[:self.
                                                               pcp_manager.
                                                               num_actual_tokens_pcp_padded]
-            if self.use_compress:
-                # get kv_state id
-                state_ids_cpu = torch.tensor(
-                    [self.requests[req_id].state_id for req_id in req_ids],
-                    dtype=torch.int32,
-                    device="cpu",
-                ).pin_memory()
-                state_ids = state_ids_cpu.to(self.device, non_blocking=True)
 
             # NOTE: This is a temporary hack, now in GPUModelRunner, this prepare_inputs
             # has been split to multiple parts, and there are 3 parts that is related to this
@@ -1112,10 +1071,6 @@ class NPUModelRunner(GPUModelRunner):
                         self.query_start_loc.copy_to_gpu(num_reqs_padded + 1)
                         self.seq_lens.np[num_reqs:].fill(0)
                         self.seq_lens.copy_to_gpu(num_reqs_padded)
-                        self.swa_slot_mapping.np[
-                            total_num_scheduled_tokens:num_input_tokens +
-                            1].fill(-1)
-                        self.swa_slot_mapping.copy_to_gpu(num_input_tokens + 1)
 
                     # So we are trying to simulate the behavior of GPUModelRunner's
                     # prepare_inputs for uniform decode mode by padding query_start_loc
@@ -1123,6 +1078,9 @@ class NPUModelRunner(GPUModelRunner):
 
             # Make AscendCommonAttentionMetadata
             if self.use_compress:
+                # print(f"{kv_cache_group_id=}")
+                # print(f"{blk_table_tensor[:num_reqs]=}")
+                # print(f"{kv_cache_group_spec.kv_cache_spec=}")
                 common_attn_metadata = AscendCommonAttentionMetadata(
                     query_start_loc=self.query_start_loc.gpu[:num_reqs + 1],
                     query_start_loc_cpu=self.query_start_loc.cpu[:num_reqs +
@@ -1136,11 +1094,6 @@ class NPUModelRunner(GPUModelRunner):
                     # TODO: change this to the right block table for linear attn
                     block_table_tensor=blk_table_tensor[:num_reqs],
                     slot_mapping=slot_mapping,
-                    state_ids=state_ids,
-                    swa_slot_mapping=self.swa_slot_mapping.
-                    gpu[:total_num_scheduled_tokens],
-                    swa_block_table=self.swa_block_table.gpu[:num_reqs],
-                    state_block_table=self.state_block_table.gpu[:num_reqs],
                     num_computed_tokens_cpu=self.input_batch.
                     num_computed_tokens_cpu_tensor[:num_reqs],
                     positions=self.positions.gpu,
@@ -1214,8 +1167,6 @@ class NPUModelRunner(GPUModelRunner):
                 self.long_seq_metadata.max_query_len_pcp_full = \
                     ori_query_lens_cpu.max().item()
 
-
-
             if self.speculative_config and \
                 self.spec_decode_common_attn_metadata is None:
                 self.spec_decode_common_attn_metadata = common_attn_metadata
@@ -1238,27 +1189,20 @@ class NPUModelRunner(GPUModelRunner):
                             num_decode_draft_tokens.cpu[:num_reqs],
                         )
                 if isinstance(builder, AscendDSAMetadataBuilder):
-                    compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                    compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
                     # TODO(zxr)
                     extra_attn_metadata_args = dict(
                         compress_ratio=compress_ratio,
-                        num_reqs_actual=num_reqs_actual)
+                        num_reqs_actual=num_reqs_actual,
+                        ratio_to_sas_metadata=ratio_to_sas_metadata,)
                 attn_metadata_i = builder.build(
                     common_prefix_len=common_prefix_len,
                     common_attn_metadata=common_attn_metadata,
                     **extra_attn_metadata_args)
+                ratio_to_sas_metadata = builder.ratio_to_sas_metadata
 
                 for layer_name in attn_group.layer_names:
-                    attn_metadata[layer_name] = attn_metadata_i
-
-        # ------------- make swa metadata -----------------
-        if self.use_compress:
-            common_prefix_len = 0
-            swa_attn_metadata = self.swa_metadata_builder.build(
-                common_prefix_len=common_prefix_len,
-                common_attn_metadata=common_attn_metadata)
-            for layer_name in self.runner_only_attn_layers:
-                attn_metadata[layer_name] = swa_attn_metadata
+                    attn_metadata[layer_name].append(attn_metadata_i)
 
         # update global cos, sin
         update_cos_sin(positions)
@@ -2115,7 +2059,8 @@ class NPUModelRunner(GPUModelRunner):
             assert with_prefill is False, \
                 "Full decode graph only supports uniform batch now."
 
-            attn_metadata = {}
+            # attn_metadata = {}
+            attn_metadata: dict[str, Any] = defaultdict(list)
 
             # The reason why we use a fixed seq_len rather than max_query_len is that
             # _npu_paged_attention_get_workspace only returns max workspace with specific
@@ -2171,9 +2116,6 @@ class NPUModelRunner(GPUModelRunner):
                     actual_seq_lengths_q=self.actual_seq_lengths_q,
                     block_table_tensor=block_table_tensor,
                     slot_mapping=slot_mapping,
-                    swa_slot_mapping=self.swa_slot_mapping.gpu,
-                    swa_block_table=self.swa_block_table.gpu,
-                    state_block_table=self.state_block_table.gpu,
                     num_computed_tokens_cpu=num_computed_tokens_cpu,
                     positions=self.positions.gpu,
                     positions_cpu=self.positions.cpu,
@@ -2216,7 +2158,7 @@ class NPUModelRunner(GPUModelRunner):
                             common_metadata)
                     else:
                         if isinstance(builder, AscendDSAMetadataBuilder):
-                            compress_ratio = attn_group.kv_cache_spec.compress_ratio
+                            compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
                             extra_attn_metadata_args = dict(
                                 compress_ratio=compress_ratio)
                         attn_metadata_full_attention = builder.build_for_graph_capture(
@@ -2228,14 +2170,7 @@ class NPUModelRunner(GPUModelRunner):
                                 layer_name] = attn_metadata_gdn_attention
                         else:
                             attn_metadata[
-                                layer_name] = attn_metadata_full_attention
-
-                # ------------- make swa metadata -----------------
-            if self.use_compress:
-                swa_attn_metadata = self.swa_metadata_builder.build_for_graph_capture(
-                    common_attn_metadata, attn_state)
-                for layer_name in self.runner_only_attn_layers:
-                    attn_metadata[layer_name] = swa_attn_metadata
+                                layer_name].append(attn_metadata_full_attention)
 
         return attn_metadata
 
@@ -2603,123 +2538,9 @@ class NPUModelRunner(GPUModelRunner):
         self.may_reinitialize_input_batch(kv_cache_config)
         kv_caches = self.initialize_kv_cache_tensors(kv_cache_config)
 
-        kv_states = self.initialize_kv_state()
-
         if has_kv_transfer_group():
-            if self.use_compress:
-                get_kv_transfer_group().register_kv_caches(
-                    kv_caches, kv_states)
-            else:
-                get_kv_transfer_group().register_kv_caches(kv_caches)
+            get_kv_transfer_group().register_kv_caches(kv_caches)
 
-    def initialize_kv_state(self):
-        hf_config = self.model_config.hf_config
-        if hf_config.model_type != 'deepseek_v4':
-            return
-        kv_states: Dict[str, tuple[torch.Tensor]] = {}
-        compress_ratio_to_layers = {}
-        for layer_index, compress_ratio in enumerate(
-                hf_config.compress_ratios):
-            if compress_ratio not in compress_ratio_to_layers:
-                compress_ratio_to_layers[compress_ratio] = []
-            compress_ratio_to_layers[compress_ratio].append(layer_index)
-        c1_layers = compress_ratio_to_layers[1]
-        c4_layers = compress_ratio_to_layers[4]
-        c128_layers = compress_ratio_to_layers[128]
-        head_dim = hf_config.head_dim
-        indexer_head_dim = hf_config.index_head_dim
-        # Since compressor kernel need PA format input,
-        # we initialize KV state buffer with the size of block_size
-        # instead of its actual size.
-        block_size = self.vllm_config.cache_config.block_size
-        block_num = (self.max_num_reqs + 1) * self.state_block_multiple
-
-        def _get_aligned_tensor(size: torch.Size,
-                                dtype: torch.dtype,
-                                alignment: int = 1):
-            tensor_size = size.numel() * dtype.itemsize
-            original_tensor = torch.zeros(tensor_size + alignment,
-                                          dtype=torch.int8,
-                                          device=self.device)
-            aligned_tensor = self._align_memory(original_tensor,
-                                                alignment)[:tensor_size]
-            return aligned_tensor.view(dtype).view(size)
-
-        # initialize kv cache tensors
-        # prefill disaggregation need the addr of cache tensor be aligned with 2M
-        alignment = 2 * 1024 * 1024
-        for group in self._kv_cache_spec_attn_group_iterator():
-            for layer_name in group.layer_names:
-                layer_index = extract_layer_index(layer_name)
-                sliding_window = _get_aligned_tensor(
-                    torch.Size([block_num, block_size, head_dim]),
-                    torch.bfloat16,
-                    alignment,
-                )
-                if layer_index in c4_layers:
-                    coff = 2
-                    compress_ratio = 4
-                    c4_kv_state = _get_aligned_tensor(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_score_state = _get_aligned_tensor(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_indexer_kv_state = _get_aligned_tensor(
-                        torch.Size(
-                            [block_num, block_size, coff * indexer_head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    c4_indexer_score_state = _get_aligned_tensor(
-                        torch.Size(
-                            [block_num, block_size, coff * indexer_head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    kv_states[layer_name] = (sliding_window, c4_kv_state,
-                                             c4_score_state,
-                                             c4_indexer_kv_state,
-                                             c4_indexer_score_state)
-                elif layer_index in c128_layers:
-                    coff = 1
-                    compress_ratio = 128
-                    c128_kv_state = _get_aligned_tensor(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    c128_score_state = _get_aligned_tensor(
-                        torch.Size([block_num, block_size, coff * head_dim]),
-                        torch.float32,
-                        alignment,
-                    )
-                    kv_states[layer_name] = (sliding_window, c128_kv_state,
-                                             c128_score_state)
-
-        # layer 0,1 are removed from kv spec groups,
-        # get them from runner_only_attn_layers to init sliding window.
-        for layer_name in self.runner_only_attn_layers:
-            layer_index = extract_layer_index(layer_name)
-            assert layer_index in c1_layers, "layer_index out of range"
-            sliding_window = _get_aligned_tensor(
-                torch.Size([block_num, block_size, head_dim]),
-                torch.bfloat16,
-                alignment,
-            )
-            kv_states[layer_name] = (sliding_window, )
-
-        # bind kv cache to layers
-        # TODO maybe move this to bind_kv_states in utils
-        forward_context = self.compilation_config.static_forward_context
-        for layer_name, kv_state in kv_states.items():
-            self.kv_states.append(kv_states[layer_name])
-            forward_context[layer_name].kv_state = [kv_state]
-        return kv_states
 
     def _align_memory(self, tensor: torch.Tensor,
                       alignment: int) -> torch.Tensor:
@@ -2818,60 +2639,14 @@ class NPUModelRunner(GPUModelRunner):
                         # shared the kvcache between the self_attn specs in the same group
                         if "linear_attn" in layer_name_inner:
                             kv_cache_raw_tensors[layer_name_inner] = tensor
-                elif "attn" in layer_name and self.use_compress:
-                    c4_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
-                    num_blocks = kv_cache_config.num_blocks
-                    exact_layer_id = extract_layer_index(layer_name)
-
-                    if exact_layer_id % 2 == 0:
-                        if self.vllm_config.kv_transfer_config is None:
-                            c4_kv_tensor = torch.zeros(
-                                num_blocks * c4_spec.compress_kv_size_bytes,
-                                dtype=torch.int8,
-                                device=self.device,
-                            )
-                            indexer_k_tensor = torch.zeros(
-                                num_blocks * c4_spec.indexer_k_size_bytes,
-                                dtype=torch.int8,
-                                device=self.device,
-                            )
-                            indexer_scale_tensor = torch.zeros(
-                                num_blocks * c4_spec.indexer_scale_size_bytes,
-                                dtype=torch.int8,
-                                device=self.device,
-                            )
-                        else:
-                            c4_kv_tensor = _get_aligned_tensor(
-                                torch.Size([
-                                    num_blocks * c4_spec.compress_kv_size_bytes
-                                ]), torch.int8, alignment)
-                            indexer_k_tensor = _get_aligned_tensor(
-                                torch.Size([
-                                    num_blocks * c4_spec.indexer_k_size_bytes
-                                ]), torch.int8, alignment)
-                            indexer_scale_tensor = _get_aligned_tensor(
-                                torch.Size([
-                                    num_blocks *
-                                    c4_spec.indexer_scale_size_bytes
-                                ]), torch.int8, alignment)
-
-                        kv_cache_raw_tensors[layer_name] = (
-                            c4_kv_tensor, indexer_k_tensor,
-                            indexer_scale_tensor)
-
-                    elif exact_layer_id % 2 != 0:
-                        if self.vllm_config.kv_transfer_config is None:
-                            c128_kv_tensor = torch.zeros(
-                                kv_cache_tensor.size,
-                                dtype=torch.int8,
-                                device=self.device,
-                            )
-                        else:
-                            c128_kv_tensor = _get_aligned_tensor(
-                                torch.Size([kv_cache_tensor.size]), torch.int8,
-                                alignment)
-                        kv_cache_raw_tensors[layer_name] = c128_kv_tensor
-
+                elif "attn" in layer_name and self.use_compress and layer_name not in kv_cache_raw_tensors.keys(
+                ):
+                    tensor = torch.zeros(kv_cache_tensor.size,
+                                            dtype=torch.int8,
+                                            device=self.device)
+                    for layer_name_inner in kv_cache_tensor.shared_by:
+                        # shared the kvcache between the self_attn specs in the same group
+                        kv_cache_raw_tensors[layer_name_inner] = tensor
                 elif "attn" in layer_name and layer_name not in kv_cache_raw_tensors.keys(
                 ):
                     # NOTE: We need to init k cache tensor (nope cache tensor in mla) and
@@ -2977,14 +2752,7 @@ class NPUModelRunner(GPUModelRunner):
             Dict[str, torch.Tensor]: A map between layer names to their
             corresponding memory buffer for KV cache.
         """
-        c4_layers: list[int] | None = None
-        c128_layers: list[int] | None = None
-        if hasattr(self.model_config.hf_config, "num_hidden_layers"):
-            num_hidden_layers = self.model_config.hf_config.num_hidden_layers
-            c4_layers = list(range(0, num_hidden_layers, 2))
-            c128_layers = list(range(1, num_hidden_layers, 2))
-
-        kv_caches: Dict[str, torch.Tensor] = {}
+        kv_caches: Dict[str, list[torch.Tensor]] = defaultdict(list)
         for group in self._kv_cache_spec_attn_group_iterator():
             kv_cache_spec = group.kv_cache_spec
             attn_backend = group.backend
@@ -2992,56 +2760,52 @@ class NPUModelRunner(GPUModelRunner):
                 if layer_name in self.runner_only_attn_layers:
                     continue
 
-                if isinstance(kv_cache_spec, CompressAttentionSpec):
+                if isinstance(kv_cache_spec, SWAAttentionSpec) or \
+                    isinstance(kv_cache_spec, CompressAttentionSpec):
                     dtype = kv_cache_spec.dtype
-                    layer_index = extract_layer_index(layer_name)
-                    assert c4_layers is not None
-                    assert c128_layers is not None
-                    if layer_index in c4_layers:
-                        c4_kv_tensor, indexer_k_tensor, indexer_scale_tensor = kv_cache_raw_tensors[
-                            layer_name]
-                        sum_page_size_bytes = c4_kv_tensor.numel(
-                        ) + indexer_k_tensor.numel(
-                        ) + indexer_scale_tensor.numel()
 
-                        num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
-                        assert num_blocks == kv_cache_config.num_blocks, f"num_blocks: {num_blocks} kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
-                        c4_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-                            num_blocks // 4, kv_cache_spec.block_size,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.head_size)
-                        indexer_k_cache_shape = self.attn_backend.get_kv_cache_shape(
-                            num_blocks // 4, kv_cache_spec.block_size,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.indexer_head_size)
-                        indexer_scale_shape = self.attn_backend.get_scale_shape(
-                            num_blocks // 4,
-                            kv_cache_spec.block_size,
-                            scale_size=1)
+                    kv_tensor = kv_cache_raw_tensors[layer_name]
+                    sum_page_size_bytes = kv_tensor.numel()
 
-                        c4_kv_cache = c4_kv_tensor.view(
-                            kv_cache_spec.nope_dtype).view(c4_kv_cache_shape)
-                        indexer_k_cache = indexer_k_tensor.view(
-                            kv_cache_spec.indexer_dtype).view(
-                                indexer_k_cache_shape)
-                        indexer_scale_cache = indexer_scale_tensor.view(
-                            kv_cache_spec.indexer_scale_dtype).view(
-                                indexer_scale_shape)
+                    num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                    assert num_blocks == kv_cache_config.num_blocks, \
+                        f"num_blocks: {num_blocks} should be equal to " \
+                        f"kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
+                    kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
+                    kv_size = sum_page_size_bytes - num_blocks * kv_cache_spec.pad_size
+                    kv_cache = kv_tensor[:kv_size].view(kv_cache_spec.dtype).view(kv_cache_shape)
+                    # TODO(cmq): refactor me to dict, we need to differ the spec type
+                    kv_caches[layer_name].append(kv_cache)
+                elif isinstance(kv_cache_spec, C4IndexerSpec):
+                    dtype = kv_cache_spec.dtype
+                    indexer_scale_dtype = kv_cache_spec.indexer_scale_dtype
 
-                        kv_caches[layer_name] = (c4_kv_cache, indexer_k_cache,
-                                                 indexer_scale_cache)
-                    elif layer_index in c128_layers:
-                        c128_kv_tensor = kv_cache_raw_tensors[layer_name]
-                        sum_page_size_bytes = c128_kv_tensor.numel()
-                        num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
-                        # TODO: now the block size of c128 layer is 16. Adapt me later
-                        c128_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-                            num_blocks // 128, kv_cache_spec.block_size,
-                            kv_cache_spec.num_kv_heads,
-                            kv_cache_spec.head_size)
-                        c128_kv_cache = c128_kv_tensor.view(dtype).view(
-                            c128_kv_cache_shape)
-                        kv_caches[layer_name] = (c128_kv_cache, )
+                    kv_tensor = kv_cache_raw_tensors[layer_name]
+                    sum_page_size_bytes = kv_tensor.numel()
+
+                    num_blocks = sum_page_size_bytes // kv_cache_spec.page_size_bytes
+                    assert num_blocks == kv_cache_config.num_blocks, \
+                        f"num_blocks: {num_blocks} should be equal to " \
+                        f"kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
+                    indexer_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.head_size)
+                    indexer_scale_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        num_blocks, kv_cache_spec.block_size,
+                        kv_cache_spec.num_kv_heads,
+                        kv_cache_spec.indexer_scale_dim)
+                    indexer_kv_size = sum_page_size_bytes - kv_cache_spec.indexer_scale_size_bytes * num_blocks
+                    indexer_kv_cache = kv_tensor[:indexer_kv_size].view(dtype).view(indexer_kv_cache_shape)
+                    indexer_scale_cache = kv_tensor[indexer_kv_size:].view(indexer_scale_dtype).view(indexer_scale_cache_shape)
+
+                    # TODO(cmq): refactor me to dict, we need to differ the spec type
+                    kv_caches[layer_name].extend([indexer_kv_cache, indexer_scale_cache])
+
 
                 # TODO: remove this after the OOM issue is located and fixed, otherwise, some model may
                 # encounter OOM issue
@@ -3190,24 +2954,13 @@ class NPUModelRunner(GPUModelRunner):
             elif isinstance(kv_cache_spec, AttentionSpec):
                 # This is an attention backend that supports virtual
                 # block splitting. Get the supported block sizes from
-                # the backend.
-                try:
-                    attn_groups = self.attn_groups[kv_cache_group_id]
-                except IndexError:
-                    attn_groups = None
-                if attn_groups and self.use_hybrid_blocks:
-                    # Use the backend's supported block size list
-                    backend = attn_groups[0].backend
-                    supported_sizes = backend.get_supported_block_size()
-                    # If no specific sizes supported, use cache config
-                    # block_size
-                    kernel_block_size_list = (supported_sizes
-                                              if supported_sizes else
-                                              [self.cache_config.block_size])
-                else:
-                    # Fallback to cache config block_size if no backend found
-                    kernel_block_size_list = [self.cache_config.block_size]
-                kernel_block_sizes.append(kernel_block_size_list)
+                # all backends in the group.
+                attn_groups = self.attn_groups[kv_cache_group_id]
+                kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
+                selected_kernel_size = GPUModelRunner.select_common_block_size(
+                    kv_manager_block_size, attn_groups
+                )
+                kernel_block_sizes.append(selected_kernel_size)
             else:
                 # This is likely Mamba or other non-attention cache,
                 # no splitting.
@@ -3316,11 +3069,8 @@ class NPUModelRunner(GPUModelRunner):
         self._check_and_update_cudagraph_mode(attention_backend_list,
                                               kv_cache_config.kv_cache_groups)
 
-        for i, kv_cache_group_spec in enumerate(
-                kv_cache_config.kv_cache_groups):
-            attn_backends = get_attn_backends_for_group(  # type: ignore
-                kv_cache_group_spec)
-            self.attn_groups.append(create_attn_groups(attn_backends[0], i))
+        for i, attn_backend_map in enumerate(attention_backend_maps):
+            self.attn_groups.append(create_attn_groups(attn_backend_map, i))
 
         # Calculate reorder batch threshold (if needed)
         self.calculate_reorder_batch_threshold()
@@ -3350,7 +3100,122 @@ class NPUModelRunner(GPUModelRunner):
                     else:
                         self.reorder_batch_threshold = reorder_batch_threshold_i  # noqa
 
-    def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
+
+    def _get_kv_cache_spec_for_dsv4(self, layer_id, layer_name):
+        kv_cache_spec_list=[]
+        hf_config = self.model_config.hf_config
+        # NOTE: `pad_size` refers to `block_size * num_heads * head_dim * sizeof(dtype)`
+        # of indexer scale kvcache spec
+        pad_size = 1024 * 1 * 1 * 2
+        if layer_id in [0, 1] or "mtp" in layer_name:
+            # TODO(cmq): DON'T use magic number for the block size and pad_size
+            kv_cache_spec_list.append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=pad_size,
+            ))
+        elif layer_id % 2 == 0:
+            # TODO(cmq): DON'T use magic number for the block size
+            kv_cache_spec_list.append(Compress4AttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                nope_dim=hf_config.head_dim -
+                hf_config.rope_head_dim,
+                rope_dim=hf_config.rope_head_dim,
+                scale_dim=0,
+                dtype=torch.bfloat16,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(C4IndexerSpec(
+                block_size=1024,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim,
+                indexer_scale_dim=1,
+                dtype=torch.int8,
+                pad_size=0
+            ))
+            # TODO(cmq): get window size from hf_config, instead of hard code in spec class
+            kv_cache_spec_list.append(C4AttnKVStateSpec(
+                block_size=32,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim * 2,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(C4AttnScoreStateSpec(
+                block_size=32,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim * 2,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(C4IndexerKVStateSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim * 2,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(C4IndexerScoreStateSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.index_head_dim * 2,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+
+        elif layer_id % 2 != 0:
+            # TODO(cmq): DON'T use magic number for the block size
+            kv_cache_spec_list.append(Compress128AttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                nope_dim=hf_config.head_dim -
+                hf_config.rope_head_dim,
+                rope_dim=hf_config.rope_head_dim,
+                scale_dim=0,
+                dtype=torch.bfloat16,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.bfloat16,
+                sliding_window=hf_config.window_size,
+                pad_size=pad_size,
+            ))
+            # TODO(cmq): get window size from hf_config, instead of hard code in spec class
+            kv_cache_spec_list.append(C128AttnKVStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+            kv_cache_spec_list.append(C128AttnScoreStateSpec(
+                block_size=64,
+                num_kv_heads=1,
+                head_size=hf_config.head_dim,
+                dtype=torch.float32,
+                pad_size=pad_size,
+            ))
+        return kv_cache_spec_list
+
+
+    def get_kv_cache_spec(self) -> dict[str, list[KVCacheSpec]]:
         """
         Generates the KVCacheSpec by parsing the kv cache format from each
         Attention module in the static forward context.
@@ -3364,7 +3229,7 @@ class NPUModelRunner(GPUModelRunner):
 
         block_size = self.vllm_config.cache_config.block_size
         use_mla = self.vllm_config.model_config.use_mla
-        kv_cache_spec: dict[str, KVCacheSpec] = {}
+        kv_cache_spec_list: dict[str, list[KVCacheSpec]] = defaultdict(list)
         attn_layers = get_layers_from_vllm_config(self.vllm_config,
                                                   AttentionLayerBase)
         for layer_id, (layer_name,
@@ -3386,110 +3251,47 @@ class NPUModelRunner(GPUModelRunner):
                 # TODO(lucas): move the attention specs into the model layers like
                 # the attention backends
                 if attn_module.attn_type == AttentionType.DECODER:
-                    kv_cache_spec[layer_name] = FullAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [FullAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=attn_module.num_kv_heads,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        dtype=self.kv_cache_dtype)]
                 elif attn_module.attn_type in (AttentionType.ENCODER,
                                                AttentionType.ENCODER_ONLY):
                     # encoder-only attention does not need KV cache.
                     continue
                 elif attn_module.attn_type == AttentionType.ENCODER_DECODER:
-                    kv_cache_spec[layer_name] = CrossAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [CrossAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=attn_module.num_kv_heads,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
+                        dtype=self.kv_cache_dtype)]
                 else:
                     raise ValueError(
                         f"Unknown attention type: {attn_module.attn_type}")
 
             elif isinstance(attn_module, MLAAttention):
                 if use_mla and not self.use_sparse:
-                    kv_cache_spec[layer_name] = MLAAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [MLAAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
                         dtype=self.kv_cache_dtype,
-                        cache_dtype_str=self.cache_config.cache_dtype)
+                        cache_dtype_str=self.cache_config.cache_dtype)]
                 else:
                     # TODO(cmq): This is a hack way to fix deepseek kvcache when
                     # using DSA. Fix the spec in vLLM is a finnal way.
-                    kv_cache_spec[layer_name] = FullAttentionSpec(
+                    kv_cache_spec_list[layer_name] = [FullAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=1,
                         head_size=attn_module.head_size,
-                        dtype=self.kv_cache_dtype)
-            elif isinstance(attn_module, DSAAttention):
-                hf_config = self.model_config.hf_config
-                if layer_id in [0, 1] or "mtp" in layer_name:
-                    self.runner_only_attn_layers.add(layer_name)
-                elif layer_id % 2 == 0:
-                    if get_ascend_device_type() == AscendDeviceType.A5:
-                        kv_cache_spec[layer_name] = Compress4AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
-                            scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
-                            dtype=torch.float8_e4m3fn,
-                            compress_ratio=4,
-                            indexer_head_size=hf_config.index_head_dim,
-                            indexer_dtype=torch.float8_e4m3fn,
-                            indexer_scale_dim=1,
-                            indexer_scale_dtype=torch.float32,
-                        )
-                    else:
-                        kv_cache_spec[layer_name] = Compress4AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            rope_dim=hf_config.rope_head_dim,
-                            scale_dim=0,
-                            dtype=torch.bfloat16,
-                            compress_ratio=4,
-                            indexer_head_size=hf_config.index_head_dim,
-                            indexer_dtype=torch.int8,
-                            indexer_scale_dim=1,
-                            indexer_scale_dtype=torch.float16,
-                        )
-                elif layer_id % 2 != 0:
-                    if get_ascend_device_type() == AscendDeviceType.A5:
-                        kv_cache_spec[layer_name] = Compress128AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
-                            rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
-                            scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
-                            dtype=torch.bfloat16,
-                            compress_ratio=128,
-                        )
-                    else:
-                        kv_cache_spec[layer_name] = Compress128AttentionSpec(
-                            block_size=block_size,
-                            num_kv_heads=1,
-                            head_size=hf_config.head_dim,
-                            nope_dim=hf_config.head_dim -
-                            hf_config.rope_head_dim,
-                            rope_dim=hf_config.rope_head_dim,
-                            scale_dim=0,
-                            dtype=torch.bfloat16,
-                            compress_ratio=128,
-                        )
+                        dtype=self.kv_cache_dtype)]
 
+            elif isinstance(attn_module, DSAAttention):
+                kv_cache_spec_list[layer_name] = self._get_kv_cache_spec_for_dsv4(
+                    layer_id=layer_id,
+                    layer_name=layer_name,
+                )
         mamba_layers = get_layers_from_vllm_config(self.vllm_config, MambaBase)
         if len(mamba_layers) > 0:
             if (self.vllm_config.speculative_config is not None
@@ -3508,7 +3310,7 @@ class NPUModelRunner(GPUModelRunner):
             # Set block_size to max_model_len, so that mamba model will always
             # have only one block in the KV cache.
             for layer_name, mamba_module in mamba_layers.items():
-                kv_cache_spec[layer_name] = MambaSpec(
+                kv_cache_spec_list[layer_name] = [MambaSpec(
                     shapes=mamba_module.get_state_shape(),
                     dtypes=mamba_module.get_state_dtype(),
                     block_size=max_model_len,
@@ -3517,9 +3319,9 @@ class NPUModelRunner(GPUModelRunner):
                     num_speculative_blocks=(
                         self.speculative_config.num_speculative_tokens
                         if self.speculative_config else 0),
-                )
+                )]
 
-        return kv_cache_spec
+        return kv_cache_spec_list
 
     def _check_and_update_cudagraph_mode(
         self,
@@ -3575,160 +3377,6 @@ class NPUModelRunner(GPUModelRunner):
                             tensor,
                             torch.Tensor) and tensor.device.type != 'cpu':
                         mm_data[field] = tensor.cpu()
-
-    def _compute_swa_meta(
-        self,
-        state_ids: np.ndarray,
-        positions: np.ndarray,
-        query_lens: np.ndarray,
-    ):
-        """
-        sliding_window: [(max_num_reqs + 1) * window_multiple(3), window_size(128), dim(512)]
-        Each request will be allocated to one state containing three continuous blocks.
-        Similar to kv_cache blocks, state 0 (block 0, 1, 2) keeps empty.
-        For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
-        [req0 -> state 2 (block 6, 7, 8), req1 -> state 4 (block 12, 13, 14)]
-
-                    |<-------- 128 -------->|<-------- 128 -------->|<-------- 128 -------->|
-                    -------------------------------------------------------------------------
-        (state_0)   | block_0 (keeps empty) | block_1 (keeps empty) | block_2 (keeps empty) |
-                    -------------------------------------------------------------------------
-        (state_1)   | block_3               | block_4               | block_5               |
-                    -------------------------------------------------------------------------
-        (state_2)   | block_6  req0         | block_7  req0         | block_8  req0         |
-                    -------------------------------------------------------------------------
-        (state_3)   | block_9               | block_10              | block_11              |
-                    -------------------------------------------------------------------------
-        (state_4)   | block_12 req1         | block_13 req1         | block_14 req1         |
-                    -------------------------------------------------------------------------
-
-        """
-        num_reqs = state_ids.shape[0]
-        block_size = self.vllm_config.cache_config.block_size
-        block_multiple = self.state_block_multiple  # currently 3 blocks for each req
-
-        # similar to kv_cache slot_mapping,
-        # slot = base (of block_id) + offset (inside block)
-        base = state_ids.repeat(query_lens) * block_size * block_multiple
-        offset = positions % (block_size * block_multiple)
-        swa_slot_mapping = base + offset
-
-        # set slot of out of window tokens of prefill to -1
-        # if kernel support overwrite, we can remove this
-        out_of_window_mask_list = []
-        for query_len in query_lens:
-            if query_len <= block_size:
-                out_of_window_mask_list.append(np.repeat(0, query_len))
-            else:
-                out_of_window_mask_list.append(
-                    np.repeat(1, query_len - block_size))
-                out_of_window_mask_list.append(np.repeat(0, block_size))
-        out_of_window_mask = np.concatenate(out_of_window_mask_list)
-        swa_slot_mapping = np.where(out_of_window_mask, -1, swa_slot_mapping)
-
-        # generate swa and state block_table
-        # TODO implement in np batch processing, and in-place compute in block_table buffer
-        query_end_index = query_lens.cumsum() - 1
-        query_end_position = positions[query_end_index]
-        swa_block_table = np.zeros([num_reqs, block_multiple], dtype=np.int32)
-        state_block_table = np.zeros(
-            [num_reqs,
-             cdiv(self.model_config.max_model_len, block_size)],
-            dtype=np.int32)
-        for i in range(num_reqs):
-            base_block = state_ids[i] * block_multiple
-            block_num_total = query_end_position[i] // block_size + 1
-            if query_end_position[i] < block_size * (block_multiple - 1):
-                block_num_in_use = block_num_total
-                for j in range(block_num_in_use):
-                    swa_block_table[i][j] = base_block + j
-            else:
-                block_num_in_use = block_multiple
-                tail_block_offset = query_end_position[
-                    i] // block_size % block_multiple
-                head_block_offset = (tail_block_offset + 1) % block_multiple
-                for j in range(block_multiple):
-                    swa_block_table[i][j] = base_block + (head_block_offset +
-                                                          j) % block_multiple
-            # state block_id needs padding in front to actual seq_len
-            # according to requirement of compressor kernel
-            block_num_pad = block_num_total - block_num_in_use
-            state_block_table[i][block_num_pad : block_num_pad + block_num_in_use] = \
-                swa_block_table[i][:block_num_in_use]
-
-        return swa_slot_mapping, swa_block_table, state_block_table
-
-    def _compute_swa_meta_mtp(
-        self,
-        state_ids: torch.Tensor,
-        positions: torch.Tensor,
-        query_lens: torch.Tensor,
-    ):
-        """
-        sliding_window: [(max_num_reqs + 1) * window_multiple(3), window_size(128), dim(512)]
-        Each request will be allocated to one state containing three continuous blocks.
-        Similar to kv_cache blocks, state 0 (block 0, 1, 2) keeps empty.
-        For example, max_num_reqs=4, num_reqs=2, state_ids = [2, 4]:
-        [req0 -> state 2 (block 6, 7, 8), req1 -> state 4 (block 12, 13, 14)]
-
-                    |<-------- 128 -------->|<-------- 128 -------->|<-------- 128 -------->|
-                    -------------------------------------------------------------------------
-        (state_0)   | block_0 (keeps empty) | block_1 (keeps empty) | block_2 (keeps empty) |
-                    -------------------------------------------------------------------------
-        (state_1)   | block_3               | block_4               | block_5               |
-                    -------------------------------------------------------------------------
-        (state_2)   | block_6  req0         | block_7  req0         | block_8  req0         |
-                    -------------------------------------------------------------------------
-        (state_3)   | block_9               | block_10              | block_11              |
-                    -------------------------------------------------------------------------
-        (state_4)   | block_12 req1         | block_13 req1         | block_14 req1         |
-                    -------------------------------------------------------------------------
-
-        """
-        num_reqs = state_ids.shape[0]
-        block_size = self.vllm_config.cache_config.block_size
-        block_multiple = self.state_block_multiple  # currently 3 blocks for each req
-
-        # similar to kv_cache slot_mapping,
-        # slot = base (of block_id) + offset (inside block)
-        base = torch.repeat_interleave(
-            state_ids, query_lens) * block_size * block_multiple
-        offset = positions % (block_size * block_multiple)
-        swa_slot_mapping = base + offset
-
-        # generate swa and state block_table
-        # TODO implement in np batch processing, and in-place compute in block_table buffer
-        # query_end_index = query_lens.cumsum() - 1
-        query_end_index = torch.cumsum(query_lens, dim=0) - 1
-        query_end_position = positions[query_end_index]
-        swa_block_table = torch.zeros([num_reqs, block_multiple],
-                                      dtype=torch.int32,
-                                      device=self.device)
-        for i in range(num_reqs):
-            base_block = state_ids[i] * block_multiple
-            block_num_total = query_end_position[i] // block_size + 1
-            if query_end_position[i] < block_size * (block_multiple - 1):
-                block_num_in_use = block_num_total
-                for j in range(block_num_in_use):
-                    swa_block_table[i][j] = base_block + j
-            else:
-                block_num_in_use = block_multiple
-                tail_block_offset = query_end_position[
-                    i] // block_size % block_multiple
-                head_block_offset = (tail_block_offset + 1) % block_multiple
-                for j in range(block_multiple):
-                    swa_block_table[i][j] = base_block + (head_block_offset +
-                                                          j) % block_multiple
-
-        return swa_slot_mapping, swa_block_table
-
-    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
-        super()._update_states(scheduler_output)
-        if self.use_compress:
-            for new_req_data in scheduler_output.scheduled_new_reqs:
-                req_id = new_req_data.req_id
-                self.requests[req_id].state_id = new_req_data.state_id
-
 
 @contextmanager
 def _torch_cuda_wrapper():

@@ -17,7 +17,7 @@ class BlockTable:
                  max_num_batched_tokens: int,
                  pin_memory: bool,
                  device: torch.device,
-                 kernel_sizes: Union[list[int], None] = None,
+                 kernel_size: Union[int, None] = None,
                  cp_kv_cache_interleave_size: int = 1,
                  num_speculative_tokens: int = 0,
                  kv_cache_group: KVCacheGroupSpec = None):
@@ -29,8 +29,7 @@ class BlockTable:
             compress_ratio = kv_cache_group.kv_cache_spec.compress_ratio
         self.max_num_blocks_per_req = max(
             cdiv(max_num_blocks_per_req, compress_ratio), 1)
-        self.max_num_batched_tokens = cdiv(max_num_batched_tokens,
-                                           compress_ratio)
+        self.max_num_batched_tokens = max_num_batched_tokens
         max_num_blocks_per_req = max(
             cdiv(max_num_blocks_per_req, compress_ratio), 1)
         self.pin_memory = pin_memory
@@ -51,7 +50,7 @@ class BlockTable:
             self.pcp_rank = 0
 
         # If kernel_sizes is None or [0], use physical block size (no splitting)
-        if kernel_sizes is None or kernel_sizes == [0]:
+        if kernel_size is None or kernel_size == 0:
             self.block_size = block_size
             self.logical_block_size = block_size
             self.blocks_per_phys_block = 1
@@ -59,15 +58,13 @@ class BlockTable:
         else:
             # Find the first kernel size that divides physical_block_size evenly
             selected_kernel_size = None
-            for kernel_size in kernel_sizes:
-                if kernel_size > 0 \
-                    and self.physical_block_size % kernel_size == 0:
-                    selected_kernel_size = kernel_size
-                    break
+            if kernel_size > 0 \
+                and self.physical_block_size % kernel_size == 0:
+                selected_kernel_size = kernel_size
 
             if selected_kernel_size is None:
                 raise ValueError(
-                    f"None of the kernel sizes {kernel_sizes} can divide "
+                    f"None of the kernel sizes {kernel_size} can divide "
                     f"physical block size {self.physical_block_size} evenly")
 
             self.block_size = selected_kernel_size
@@ -97,7 +94,7 @@ class BlockTable:
             2 * self.pcp_world_size * self.max_num_reqs,
             dtype=torch.int32)
 
-        self.kernel_sizes = kernel_sizes
+        self.kernel_size = kernel_size
         self.cp_kv_cache_interleave_size = cp_kv_cache_interleave_size
 
     def append_row(
@@ -183,8 +180,8 @@ class BlockTable:
             self.slot_mapping.np[:req_indices.shape[0]] = np.where(
                 mask, slot_mapping, -1)
         else:
-            assert self.kernel_sizes is not None
-            if self.block_size == self.kernel_sizes[0]:
+            assert self.kernel_size is not None
+            if self.block_size == self.kernel_size:
                 # IMPORTANT: In hybrid mode, positions are in logical block space,
                 # but we need to map them to the correct logical block table indices
                 logical_block_idx = positions // self.block_size
@@ -281,7 +278,7 @@ class MultiGroupBlockTable:
             pcp_world_size = 1
 
         if kernel_sizes is None:
-            kernel_sizes = [[0]] * len(block_sizes)
+            kernel_sizes = [0] * len(block_sizes)
         # Ensure kernel_sizes matches block_sizes length
         elif len(kernel_sizes) == 1 and len(block_sizes) > 1:
             kernel_sizes = kernel_sizes * len(block_sizes)
@@ -292,7 +289,6 @@ class MultiGroupBlockTable:
 
         # Use zip to pair block_sizes with kernel_sizes one-to-one
         if kv_cache_groups is not None:
-            kv_cache_group_size = len(kv_cache_groups)
             self.block_tables = [
                 BlockTable(
                     block_size, max_num_reqs,
@@ -300,12 +296,11 @@ class MultiGroupBlockTable:
                         cdiv(max_model_len,
                              block_size * dcp_world_size * pcp_world_size),
                         1 + num_speculative_tokens), max_num_batched_tokens,
-                    pin_memory, device, kernel_size_list,
+                    pin_memory, device, kernel_size,
                     cp_kv_cache_interleave_size, num_speculative_tokens,
                     kv_cache_group)
-                for block_size, kernel_size_list, kv_cache_group in zip(
-                    block_sizes * kv_cache_group_size, kernel_sizes *
-                    kv_cache_group_size, kv_cache_groups)
+                for block_size, kernel_size, kv_cache_group in zip(
+                    block_sizes, kernel_sizes, kv_cache_groups)
             ]
         else:
             self.block_tables = [
@@ -315,9 +310,9 @@ class MultiGroupBlockTable:
                         cdiv(max_model_len,
                              block_size * dcp_world_size * pcp_world_size),
                         1 + num_speculative_tokens), max_num_batched_tokens,
-                    pin_memory, device, kernel_size_list,
+                    pin_memory, device, kernel_size,
                     cp_kv_cache_interleave_size, num_speculative_tokens)
-                for block_size, kernel_size_list in zip(
+                for block_size, kernel_size in zip(
                     block_sizes, kernel_sizes)
             ]
 

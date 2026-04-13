@@ -94,18 +94,12 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
 
     graph_pad_size: int = -1
 
-    state_block_table: torch.Tensor = None
-
     # num_input_tokens refers to total number of tokens including
     # padding tokens. It is used to handle some padding operations.
     num_input_tokens: int = 0
 
     prefill_context_parallel_metadata: Optional[
         AscendPrefillContextParallelMetadata] = None
-
-    state_ids: torch.Tensor | None = None
-    swa_slot_mapping: torch.Tensor = None
-    swa_block_table: torch.Tensor = None
 
     # TODO: Remove it when vLLM no longer uses this function.
     def unpadded(self, num_actual_tokens: int,
@@ -136,14 +130,7 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
             num_input_tokens=self.num_input_tokens,
             prefill_context_parallel_metadata=self.
             prefill_context_parallel_metadata,
-            max_seq_len=self.max_seq_len,
-            state_ids=self.state_ids,
-            swa_slot_mapping=self.swa_slot_mapping[:num_actual_tokens]
-            if self.swa_slot_mapping is not None else None,
-            swa_block_table=self.swa_block_table[:num_actual_reqs]
-            if self.swa_block_table is not None else None,
-            state_block_table=self.state_block_table[:num_actual_reqs]
-            if self.state_block_table is not None else None)
+            max_seq_len=self.max_seq_len)
 
 
 def filter_chunked_req_indices(
