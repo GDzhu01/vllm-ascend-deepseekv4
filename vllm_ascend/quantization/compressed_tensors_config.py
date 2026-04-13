@@ -149,6 +149,7 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
         self,
         layer: torch.nn.Module,
         prefix: str,
+        tid2eid: Optional[dict[int, int]] = None,
     ) -> Optional["QuantizeMethodBase"]:
         from .method_adapters import AscendFusedMoEMethod, AscendLinearMethod
 
