@@ -23,7 +23,7 @@ on:
       runner:
         required: false
         type: string
-        default: linux-aarch64-a2b3-0
+        default: linux-aarch64-a2-0
     outputs:
       run:
         description: "Whether nightly tests should run"
