@@ -39,6 +39,13 @@ jobs:
         path: ./vllm-empty
         ref: ${{ inputs.vllm }}
 
+    - name: Set PTA from file
+      run: |
+        TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+        TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+        git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
     - uses: dorny/paths-filter@v3
       id: filter
       with:

@@ -30,7 +30,7 @@ jobs:
   e2e-light:
     name: singlecard-light
     if: ${{ inputs.type == 'light' }}
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     strategy:
       fail-fast: false
       matrix:
@@ -56,7 +56,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -80,6 +79,13 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
+
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -136,7 +142,7 @@ jobs:
   e2e-full:
     name: singlecard-full
     if: ${{ inputs.type == 'full' }}
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     strategy:
       fail-fast: false
       matrix:
@@ -188,6 +194,13 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
+
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -294,6 +307,13 @@ jobs:
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
 
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Install vllm-project/vllm-ascend
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
@@ -398,6 +418,13 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
+
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -523,6 +550,13 @@ jobs:
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
 
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Install vllm-project/vllm-ascend
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
@@ -621,6 +655,13 @@ jobs:
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
 
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Install vllm-project/vllm-ascend
         env:
           PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
@@ -697,6 +738,13 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
+
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:

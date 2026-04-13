@@ -134,7 +134,7 @@ checkout_src() {
 }
 
 install_vllm() {
-    echo "====> Install vllm and vllm-ascend"
+    echo "====> Install vllm-ascend"
     pip install -r "$WORKSPACE/vllm-ascend/requirements-dev.txt"
     pip install -e "$WORKSPACE/vllm-ascend"
 }

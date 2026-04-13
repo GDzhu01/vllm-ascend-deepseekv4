@@ -42,7 +42,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt-get install -y python3-pip git vim wget net-tools gcc g++ cmake libnuma-dev curl gnupg2
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
           pip install uv
 
       - name: Checkout vllm-project/vllm repo
@@ -57,6 +56,13 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install . --extra-index-url https://download.pytorch.org/whl/cpu/
           uv pip uninstall triton
+
+      - name: Set PTA from file
+        run: |
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
@@ -96,14 +102,3 @@ jobs:
             --step-name "Run unit test" \
             --log-file /tmp/unit-test.log \
             --output "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage to Codecov
-        # only upload coverage when commits merged
-        if: ${{ inputs.type == 'schedule' }}
-        uses: codecov/codecov-action@v5
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          flags: unittests
-          name: vllm-ascend
-          verbose: true

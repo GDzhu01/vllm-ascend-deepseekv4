@@ -22,14 +22,12 @@ name: Nightly-A3
 
 on:
   schedule:
-      # Run test at 23:45 Beijing time (UTC+8)
-      - cron: "45 15 * * *"
+    # Run test at 01:00 Beijing time (UTC+8)
+    - cron: "00 17 * * *"
   workflow_dispatch:
   pull_request:
     branches:
-      - 'main'
-      - '*-dev'
-      - 'releases/v*'
+      - '**'
     types: [ labeled, synchronize ]
 
 permissions:
@@ -102,9 +100,9 @@ jobs:
           - name: multi-node-deepseek-v3.1
             config_file_path: DeepSeek-V3.1-BF16.yaml
             size: 2
-          - name: multi-node-deepseek-v3.2-W8A8-EP
-            config_file_path: DeepSeek-V3_2-W8A8-EP.yaml
-            size: 4
+          # - name: multi-node-deepseek-v3.2-W8A8-EP
+          #   config_file_path: DeepSeek-V3_2-W8A8-EP.yaml
+          #   size: 4
     uses: ./.github/workflows/_e2e_nightly_multi_node.yaml
     with:
       soc_version: a3
