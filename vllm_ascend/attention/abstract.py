@@ -34,7 +34,7 @@ class DSAAttentionImpl(AttentionImpl[T], Generic[T]):
         window_size: int,
         compress_ratio: int,
     ) -> None:
-        raise NotImplementedErrors
+        raise NotImplementedError
 
     @abstractmethod
     def forward(

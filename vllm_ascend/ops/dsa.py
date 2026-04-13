@@ -194,4 +194,8 @@ direct_register_custom_op(
     mutates_args=["output"],
     fake_impl=dsa_forward_fake,
     dispatch_key="PrivateUse1",
+<<<<<<< HEAD
 )
+=======
+)
+>>>>>>> d952d868 (kv cache)
