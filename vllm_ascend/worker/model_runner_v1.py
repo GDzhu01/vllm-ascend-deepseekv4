@@ -2161,13 +2161,15 @@ class NPUModelRunner(GPUModelRunner):
                 self.cpu_slot_mapping = slot_mapping.cpu().numpy()
             return blk_table_tensor, slot_mapping
 
-        if self.use_compress:
-            assert num_scheduled_tokens_compressed_list is not None
+        if self.use_compress and num_scheduled_tokens_compressed_list is not None:
             total_num_scheduled_tokens_compressed_list = [
                 sum(num_scheduled_tokens_compressed)
                 for num_scheduled_tokens_compressed in
                 num_scheduled_tokens_compressed_list
             ]
+            num_reqs_actual = num_reqs
+        else:
+            total_num_scheduled_tokens_compressed_list = None
             num_reqs_actual = num_reqs
 
         block_table_gid_0, slot_mapping_gid_0 = _get_block_table_and_slot_mapping(0, total_num_scheduled_tokens_compressed_list)
