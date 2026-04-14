@@ -11,9 +11,9 @@
 #   - Publish when tag with v* (pep440 version)  ===>  vllm-ascend:v1.2.3 / vllm-ascend:v1.2.3rc1
 name: Image Build and Push
 on:
-  schedule:
-    # UTC+8: 12pm, 21pm
-    - cron: '0 13 * * *'
+  # schedule:
+  #   # UTC+8: 12pm, 21pm
+  #   - cron: '0 13 * * *'
   pull_request:
     branches:
       - 'releases/*'
@@ -60,6 +60,5 @@ jobs:
       # should_push: ${{ github.event_name != 'pull_request' }}
       # just for test
       should_push: ${{ github.event_name == 'workflow_dispatch' }}
-      workflow_dispatch_tag: ${{ inputs.tag }}
     secrets:
       QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
