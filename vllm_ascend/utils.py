@@ -74,6 +74,7 @@ _SUBSCRIBED_COMPUTE_STREAMS = set()
 _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
+_ATNN_CALCULATION_STREAM = None
 _CUSTOM_OP_VENDOR_DIR = "custom_transformer"
 _CUSTOM_OP_BASE_DIR = (
     os.path.dirname(__file__) if os.path.isabs(__file__) else os.path.abspath(os.path.dirname(__file__))
@@ -801,6 +802,9 @@ def embedding_tp_enable() -> bool:
 def oproj_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.oproj_tensor_parallel_size > 0
 
+def olora_tp_enable() -> bool:
+    return get_ascend_config(
+    ).finegrained_tp_config.olora_tensor_parallel_size > 1
 
 def mlp_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.mlp_tensor_parallel_size > 0

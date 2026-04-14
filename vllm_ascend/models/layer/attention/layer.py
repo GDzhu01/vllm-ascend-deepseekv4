@@ -7,8 +7,8 @@ from typing import cast
 import torch
 import torch.nn as nn
 import vllm.envs as envs
-from vllm.attention.backends.abstract import AttentionBackend
-from vllm.attention.layer import _init_kv_cache_quant
+from vllm.v1.attention.backend import AttentionBackend
+from vllm.model_executor.layers.attention.attention import _init_kv_cache_quant
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.config.vllm import VllmConfig
 from vllm.logger import init_logger
@@ -83,8 +83,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             calculate_kv_scales = False
 
         # Initialize KV cache quantization attributes
-        _init_kv_cache_quant(self, quant_config, prefix, kv_cache_dtype,
-                             calculate_kv_scales)
+        _init_kv_cache_quant(self, quant_config, prefix)
 
         dtype = torch.get_default_dtype()
         self.attn_backend = get_attn_backend(

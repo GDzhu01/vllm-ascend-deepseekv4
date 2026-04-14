@@ -6,15 +6,15 @@ import torch
 import torch.nn.functional as F
 import torch_npu
 import vllm.envs as envs_vllm
-from vllm.attention.backends.abstract import AttentionBackend
+from vllm.v1.attention.backend import AttentionBackend
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.forward_context import get_forward_context
 from vllm.logger import logger
 from vllm.triton_utils import HAS_TRITON
 from vllm.utils.math_utils import cdiv, round_down
-from vllm.v1.attention.backends.utils import (AttentionCGSupport,
-                                              AttentionMetadataBuilder)
+from vllm.v1.attention.backend import (AttentionCGSupport,
+                                        AttentionMetadataBuilder)
 from vllm.v1.kv_cache_interface import AttentionSpec, MLAAttentionSpec
 from vllm.model_executor.models.utils import extract_layer_index
 
@@ -26,7 +26,7 @@ from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
                                          split_decodes_and_prefills)
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
-from vllm_ascend.quantization.w8a8_dynamic import AscendW8A8DynamicLinearMethod
+from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinearMethod
 from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream,
                                get_ascend_device_type, npu_stream_switch,
                                olora_tp_enable)

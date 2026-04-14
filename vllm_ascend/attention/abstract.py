@@ -5,7 +5,7 @@ from abc import abstractmethod
 from typing import Generic, TypeVar
 
 import torch
-from vllm.attention.backends.abstract import AttentionImpl, AttentionLayer
+from vllm.v1.attention.backend import AttentionImpl, AttentionLayer
 
 
 class AttentionMetadata:
