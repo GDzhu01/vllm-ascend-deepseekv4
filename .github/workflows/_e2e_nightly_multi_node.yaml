@@ -42,7 +42,7 @@ on:
         description: used for pr level tests
       vllm_ascend_ref:
         required: false
-        default: main
+        default: releases/v0.18.0
         type: string
         description: used for pr level tests
       should_run:
