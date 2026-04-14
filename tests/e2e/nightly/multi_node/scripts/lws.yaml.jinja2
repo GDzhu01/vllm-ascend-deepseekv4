@@ -19,19 +19,19 @@ spec:
             image: {{ image | default("swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-a3") }}
             env:
               - name: CONFIG_YAML_PATH
-                value: {{ config_file_path | default("DeepSeek-V3.yaml") }}
+                value: "{{ config_file_path | default('DeepSeek-V3.yaml') }}"
               - name: WORKSPACE
                 value: "/vllm-workspace"
               - name: FAIL_TAG
-                value: {{ fail_tag | default("FAIL_TAG") }}
+                value: "{{ fail_tag | default('FAIL_TAG') }}"
               - name: IS_PR_TEST
-                value: "{{ is_pr_test | default("false") }}"
+                value: "{{ is_pr_test | default('false') }}"
               - name: VLLM_VERSION
-                value: {{ vllm_version | default("latest") }}
+                value: "{{ vllm_version | default('latest') }}"
               - name: VLLM_ASCEND_REF
-                value: {{ vllm_ascend_ref | default("main") }}
+                value: "{{ vllm_ascend_ref | default('main') }}"
               - name: VLLM_ASCEND_REMOTE_URL
-                value: {{ vllm_ascend_remote_url | default("https://github.com/vllm-project/vllm-ascend.git") }}
+                value: "{{ vllm_ascend_remote_url | default('https://github.com/vllm-project/vllm-ascend.git') }}"
             command:
               - sh
               - -c
@@ -79,19 +79,19 @@ spec:
             image: {{ image | default("swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-a3") }}
             env:
               - name: CONFIG_YAML_PATH
-                value: {{ config_file_path | default("DeepSeek-V3.yaml") }}
+                value: "{{ config_file_path | default('DeepSeek-V3.yaml') }}"
               - name: WORKSPACE
                 value: "/vllm-workspace"
               - name: FAIL_TAG
-                value: {{ fail_tag | default("FAIL_TAG") }}
+                value: "{{ fail_tag | default('FAIL_TAG') }}"
               - name: IS_PR_TEST
-                value: "{{ is_pr_test | default("false") }}"
+                value: "{{ is_pr_test | default('false') }}"
               - name: VLLM_VERSION
-                value: {{ vllm_version | default("latest") }}
+                value: "{{ vllm_version | default('latest') }}"
               - name: VLLM_ASCEND_REF
-                value: {{ vllm_ascend_ref | default("main") }}
+                value: "{{ vllm_ascend_ref | default('main') }}"
               - name: VLLM_ASCEND_REMOTE_URL
-                value: {{ vllm_ascend_remote_url | default("https://github.com/vllm-project/vllm-ascend.git") }}
+                value: "{{ vllm_ascend_remote_url | default('https://github.com/vllm-project/vllm-ascend.git') }}"
             command:
               - sh
               - -c

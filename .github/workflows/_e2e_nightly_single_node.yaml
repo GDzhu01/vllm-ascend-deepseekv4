@@ -84,18 +84,8 @@ jobs:
       - name: uninstall vlm vllm-ascend and remove code (if pr test)
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          pip uninstall -y vllm vllm-ascend || true
-          cp -r /vllm-workspace/vllm-ascend/benchmark /tmp/aisbench-backup || true
-          rm -rf /vllm-workspace/vllm /vllm-workspace/vllm-ascend
+          pip uninstall -y vllm-ascend || true
 
-      - name: Checkout vllm-project/vllm repo
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@v6
-        with:
-          repository: vllm-project/vllm
-          ref: ${{ inputs.vllm_version }}
-          path: ./temp-vllm 
-          fetch-depth: 1
 
       - name: Checkout vllm-project/vllm-ascend repo
         if: ${{ github.event_name == 'pull_request' }}
