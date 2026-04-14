@@ -65,7 +65,6 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
             get_manager_for_kv_cache_spec(
                 kv_cache_spec=kv_cache_group.kv_cache_spec,
                 block_pool=self.block_pool,
-                enable_caching=enable_caching,
                 kv_cache_group_id=i,
                 dcp_world_size=dcp_world_size,
                 pcp_world_size=pcp_world_size,
