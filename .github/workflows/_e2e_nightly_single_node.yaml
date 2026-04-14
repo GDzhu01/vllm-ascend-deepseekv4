@@ -104,7 +104,7 @@ jobs:
               git fetch --depth 1 dpsk_v4 "${{ inputs.vllm_ascend_ref }}"
           fi
           git checkout FETCH_HEAD
-          pip install -r requirements-dev.txt"
+          pip install -r requirements-dev.txt
           pip install -e .
 
       - name: Show vLLM and vLLM-Ascend version
