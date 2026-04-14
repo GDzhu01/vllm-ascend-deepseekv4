@@ -11,7 +11,11 @@ from vllm.v1.core.kv_cache_utils import (create_kv_cache_group_specs,
                                          _report_kv_cache_config,
                                          get_kv_cache_config_from_groups,
                                          _check_enough_kv_cache_memory,
+                                         _auto_fit_max_model_len,
+                                         _max_memory_usage_bytes_from_groups,
+                                         _estimate_max_model_len_from_groups
                                          )
+from functools import partial
 from vllm.v1.kv_cache_interface import (
     ChunkedLocalAttentionSpec,
     FullAttentionSpec,
@@ -22,7 +26,6 @@ from vllm.v1.kv_cache_interface import (
     SlidingWindowSpec,
     UniformTypeKVCacheSpecs,
 )
-from vllm.utils.mem_constants import GiB_bytes
 from vllm.logger import init_logger
 from vllm.utils.math_utils import cdiv
 from dataclasses import replace
@@ -512,6 +515,41 @@ def get_kv_cache_groups_with_multi_groups(
     # size.
     return _get_kv_cache_groups_uniform_page_size_with_multi_groups(kv_cache_spec_list)
 
+def _project_kv_cache_groups_to_worker(
+    global_kv_cache_groups: list[KVCacheGroupSpec],
+    worker_spec_list: dict[str, list[KVCacheSpec]],
+) -> list[KVCacheGroupSpec]:
+    """
+    Projects global KV cache groups onto a single worker's assigned layers.
+
+    In pipeline parallelism, each worker only owns a subset of layers. This
+    function filters the global groups to include only layers present on the
+    given worker, adjusting UniformTypeKVCacheSpecs accordingly.
+
+    Args:
+        global_kv_cache_groups: The global KV cache groups for the whole model.
+        worker_spec_list: The KV cache spec list of each layer on this worker.
+
+    Returns:
+        The projected KV cache groups containing only this worker's layers.
+    """
+    projected_groups: list[KVCacheGroupSpec] = []
+    for group in global_kv_cache_groups:
+        worker_layer_names = [
+            layer_name for layer_name in group.layer_names if layer_name in worker_spec_list
+        ]
+        group_spec = group.kv_cache_spec
+        if worker_layer_names and isinstance(group_spec, UniformTypeKVCacheSpecs):
+            group_spec = UniformTypeKVCacheSpecs(
+                block_size=group_spec.block_size,
+                kv_cache_specs={
+                    layer_name: group_spec.kv_cache_specs[layer_name]
+                    for layer_name in worker_layer_names
+                },
+            )
+        projected_groups.append(KVCacheGroupSpec(worker_layer_names, group_spec))
+    return projected_groups
+
 def get_kv_cache_configs_with_multi_groups(
     vllm_config: VllmConfig,
     kv_cache_specs: list[dict[str, list[KVCacheSpec]]],
@@ -564,13 +602,11 @@ def get_kv_cache_configs_with_multi_groups(
     # Get global KV cache groups. This also handles spec unification for
     # hybrid models when disable_hybrid_kv_cache_manager is enabled.
     # After this call, merged_kv_cache_specs_list may be modified in-place.
-    # TODO
-    global_kv_cache_groups = get_kv_cache_groups(vllm_config, merged_kv_cache_specs_list)
+    global_kv_cache_groups = get_kv_cache_groups_with_multi_groups(vllm_config, merged_kv_cache_specs_list)
 
     # If original_max_model_len was -1, automatically
     # determine the maximum model length that fits in available GPU memory.
     # We use per-worker projected groups to account for PP sharding.
-    # TODO
     projected_groups_per_worker = [
         _project_kv_cache_groups_to_worker(global_kv_cache_groups, worker_spec_list)
         for worker_spec_list in kv_cache_specs
