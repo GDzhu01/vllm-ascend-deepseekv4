@@ -122,7 +122,7 @@ int64_t GetDivRem(int64_t value1, int64_t value2)
     return value1 % value2;
 }
 void InplacePartialRotaryMulTiling::FillTilingData()
-{
+{   
     tilingData_.set_usedCoreNum(usedCoreNum_);
     tilingData_.set_numHead(numHead_);
     tilingData_.set_headDim(headDim_);
@@ -210,7 +210,7 @@ ge::graphStatus InplacePartialRotaryMulTiling::CalTilingData()
     if (coreTUbLoopTail_ == 0) {
         coreTUbLoopTail_ = ubFactor_;
     }
-
+    
     return ge::GRAPH_SUCCESS;
 }
 ge::graphStatus InplacePartialRotaryMulTiling::Init()
@@ -250,7 +250,7 @@ ge::graphStatus InplacePartialRotaryMulTiling::CheckInput()
         dtypeSize_ = FP32_DTYPE_SIZE;
         oneBlockSize_ = ALIGN_32;
     }
-
+     
     OPS_ERR_IF(xInput == nullptr || inputR1 == nullptr || inputR2 == nullptr, OPS_LOG_E(context_->GetNodeName(), "get input nullptr."),
         return ge::GRAPH_FAILED);
     gert::Shape xShape = xInput->GetStorageShape();
@@ -515,7 +515,7 @@ ge::graphStatus InplacePartialRotaryMulTiling::DoTiling()
         PrintTilingData();
         context_->SetBlockDim(usedCoreNum_);
         context_->SetTilingKey(tilingKey_);
-
+        
         size_t* workspaces = context_->GetWorkspaceSizes(1);
         workspaces[0] = static_cast<size_t>(16 * 1024 * 1024);
         tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
@@ -549,7 +549,7 @@ ge::graphStatus InplacePartialRotaryMulTiling::DoTiling()
         PrintInfo();
         return ge::GRAPH_SUCCESS;
     }
-
+    
 }
 ge::graphStatus Tiling4InplacePartialRotaryMul(gert::TilingContext* context)
 {

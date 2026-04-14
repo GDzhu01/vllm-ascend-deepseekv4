@@ -34,7 +34,7 @@ namespace detail {
         uint32_t ldBN2Idx[MAX_LD_NUM];                // 每个归约任务的BN2索引，脚标为归约任务的序号，最大为核数-1
         uint32_t ldMIdx[MAX_LD_NUM];                  // 每个归约任务的GS1索引，脚标为归约任务的序号
         uint32_t ldS2SplitNum[MAX_LD_NUM];            // 每个归约任务的S2核间切分份数，脚标为归约任务的序号
-
+        
         // 2、FD负载均衡阶段，归约任务的分核（vec）信息
         uint32_t ldUsedVecNum = 0U;                 // 归约过程使用的vector数量
         uint32_t ldBalanceMBaseSize = 0U;           //  规约过程中，m方向基本块大小
@@ -44,9 +44,9 @@ namespace detail {
         uint32_t ldBalanceEndIdx2[AIV_CORE_NUM];    // FD负载均衡阶段，每个vector的二级索引，脚标为vector ID，值为归约任务的m轴切分ID
     };
 
-    struct LiqMetaData { // __attribute__((aligned(8)))
+    struct LiqMetaData { // __attribute__((aligned(8))) 
         uint32_t usedCoreNum = 0U;                  // 使用的核数量
-        uint32_t mBaseSize = 0U;
+        uint32_t mBaseSize = 0U;                    
         uint32_t s2BaseSize = 0U;
         uint32_t bN2End[AIC_CORE_NUM];                  // 每个核处理数据的BN2结束点
         uint32_t mEnd[AIC_CORE_NUM];                    // 每个核处理数据的M结束点

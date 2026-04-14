@@ -16,10 +16,7 @@
 #ifndef VF_TOP_K_H
 #define VF_TOP_K_H
 
-#define DIV(x, y) (((x + y - 1) / y))
-
-namespace topk {
-
+namespace topkb32 {
 template<typename T>
 __simd_vf__ void HistogramsFirstVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__ uint32_t* inputBuf, uint16_t vfLoop, bool init)
 {
@@ -27,7 +24,7 @@ __simd_vf__ void HistogramsFirstVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf_
     MicroAPI::MaskReg pregB16 = MicroAPI::CreateMask<uint16_t, MicroAPI::MaskPattern::ALL>();
     MicroAPI::MaskReg pregB8 = MicroAPI::CreateMask<uint8_t, MicroAPI::MaskPattern::ALL>();
 
-    // 计算直方图cout0 0-127 cout1 128-255
+    // 计算直方图cout0 0-127 cout1 128-255 
     MicroAPI::RegTensor<uint16_t> cout0;
     MicroAPI::RegTensor<uint16_t> cout1;
     MicroAPI::Duplicate(cout0, 0);
@@ -73,7 +70,7 @@ __simd_vf__ void HistogramsFirstVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf_
     MicroAPI::Cast<uint32_t, uint16_t, CAST_TRAIT_UINT16_TOUINT32_EVEN>(cout1U32Even, cout1, pregB16);
     MicroAPI::Cast<uint32_t, uint16_t, CAST_TRAIT_UINT16_TOUINT32_ODD>(cout1U32Odd, cout1, pregB16);
 
-
+    
     MicroAPI::StoreAlign<uint32_t, MicroAPI::StoreDist::DIST_INTLV_B32>(histogramsBuf, cout0U32Even, cout0U32Odd, pregB32);
     MicroAPI::StoreAlign<uint32_t, MicroAPI::StoreDist::DIST_INTLV_B32>(histogramsBuf + 128, cout1U32Even, cout1U32Odd, pregB32);
 }
@@ -137,7 +134,7 @@ __simd_vf__ void HistogramsSecondVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf
     MicroAPI::MaskReg pregB16 = MicroAPI::CreateMask<uint16_t, MicroAPI::MaskPattern::ALL>();
     MicroAPI::MaskReg pregB8 = MicroAPI::CreateMask<uint8_t, MicroAPI::MaskPattern::ALL>();
 
-    // 计算直方图0-127 128-255
+    // 计算直方图0-127 128-255 
     MicroAPI::RegTensor<uint16_t> cout0;
     MicroAPI::RegTensor<uint16_t> cout1;
     MicroAPI::Duplicate(cout0, 0);
@@ -216,7 +213,7 @@ __simd_vf__ void FindSecondTargetBinVFImpl(__ubuf__ uint32_t* idx1Buf, __ubuf__ 
         MicroAPI::Compare<uint32_t, CMPMODE::GE>(pregGE, cout, btmK1, pregB32);
         MicroAPI::Squeeze<uint32_t, MicroAPI::GatherMaskMode::STORE_REG>(sqzIdx1, (MicroAPI::RegTensor<uint32_t>&)idxC, pregGE);
         MicroAPI::StoreUnAlign<uint32_t, MicroAPI::PostLiteral::POST_MODE_UPDATE>(idx1Buf, sqzIdx1, alignIdx1);
-    }
+    } 
     MicroAPI::StoreUnAlignPost(idx1Buf, alignIdx1);
 
     MicroAPI::LocalMemBar<AscendC::MicroAPI::MemType::VEC_STORE, AscendC::MicroAPI::MemType::VEC_LOAD>();
@@ -252,7 +249,7 @@ __simd_vf__ void HistogramsThirdVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf_
     MicroAPI::MaskReg pregB16 = MicroAPI::CreateMask<uint16_t, MicroAPI::MaskPattern::ALL>();
     MicroAPI::MaskReg pregB8 = MicroAPI::CreateMask<uint8_t, MicroAPI::MaskPattern::ALL>();
 
-    // 计算直方图0-127 128-255
+    // 计算直方图0-127 128-255 
     MicroAPI::RegTensor<uint16_t> cout0;
     MicroAPI::RegTensor<uint16_t> cout1;
     MicroAPI::Duplicate(cout0, 0);
@@ -375,7 +372,7 @@ __simd_vf__ void HistogramsLastVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__
     MicroAPI::MaskReg pregB16 = MicroAPI::CreateMask<uint16_t, MicroAPI::MaskPattern::ALL>();
     MicroAPI::MaskReg pregB8 = MicroAPI::CreateMask<uint8_t, MicroAPI::MaskPattern::ALL>();
 
-    // 计算直方图0-127 128-255
+    // 计算直方图0-127 128-255 
     MicroAPI::RegTensor<uint16_t> cout0;
     MicroAPI::RegTensor<uint16_t> cout1;
     MicroAPI::Duplicate(cout0, 0);
@@ -509,7 +506,7 @@ __simd_vf__ void FindIdxGTOutputVFImpl(__ubuf__ uint32_t* outputIdxBuf, __ubuf__
     for (uint16_t i = 0; i < (uint16_t)(vfLoop); ++i) {
         MicroAPI::RegTensor<int32_t> idxC;
         MicroAPI::Arange(idxC, beginIdx + i * 64);
-
+        
         MicroAPI::LoadAlign<uint32_t, MicroAPI::LoadDist::DIST_NORM>(vregInput, inputBuf + i * 64);
 
         MicroAPI::MaskReg poutGT = MicroAPI::CreateMask<uint32_t, MicroAPI::MaskPattern::ALL>();
@@ -604,10 +601,10 @@ __aicore__ inline void LiTopKVF(const LocalTensor<uint32_t>& outputIdxLocal,
                                 const LocalTensor<uint32_t>& inputLocal,
                                 const LocalTensor<uint32_t>& tmpIdxLocal,
                                 const LocalTensor<uint32_t>& tmpValueLocal,
-                                const LocalTensor<uint32_t>& histogramsLocal,
-                                const LocalTensor<uint32_t>& idx0Local,
-                                const LocalTensor<uint32_t>& idx1Local,
-                                const LocalTensor<uint32_t>& idx2Local,
+                                const LocalTensor<uint32_t>& histogramsLocal, 
+                                const LocalTensor<uint32_t>& idx0Local, 
+                                const LocalTensor<uint32_t>& idx1Local, 
+                                const LocalTensor<uint32_t>& idx2Local, 
                                 const LocalTensor<uint32_t>& idx3Local,
                                 const LocalTensor<uint32_t>& nkValueLocal,
                                 uint32_t topK,
@@ -632,9 +629,9 @@ __aicore__ inline void LiTopKVF(const LocalTensor<uint32_t>& outputIdxLocal,
     const uint16_t repeatSize8 = 256;
     const uint16_t repeatSize32 = 64;
 
-    uint16_t histogramsLoopNum = (s2SeqLen + repeatSize8 - 1) / repeatSize8;
+    uint16_t histogramsLoopNum = (s2SeqLen + repeatSize8 - 1) / repeatSize8; 
     uint16_t inputLoopNum = (s2SeqLen + repeatSize32 - 1) / repeatSize32;
-    uint16_t topkLoopNum = DIV(topK, 64);
+    uint16_t topkLoopNum = (topK + 64 - 1) / 64;
 
     // find kth-value
     HistogramsFirstVFImpl<uint32_t>(histogramsBuf, inputBuf, histogramsLoopNum, flag);

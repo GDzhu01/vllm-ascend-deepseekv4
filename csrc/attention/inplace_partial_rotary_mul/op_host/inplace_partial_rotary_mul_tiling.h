@@ -242,32 +242,32 @@ public:
     ge::graphStatus GetPlatformInfo();
     ge::graphStatus GetShapeAttrsInfo();
     ge::graphStatus JudgeSliceInfo();
-    virtual ge::graphStatus GetWorkspaceSize()
+    virtual ge::graphStatus GetWorkspaceSize() 
     {
         return ge::GRAPH_SUCCESS;
     }
 
-    virtual ge::graphStatus DoLibApiTiling()
+    virtual ge::graphStatus DoLibApiTiling() 
     {
         return ge::GRAPH_SUCCESS;
     }
 
-    virtual ge::graphStatus DoOpTiling()
+    virtual ge::graphStatus DoOpTiling() 
     {
         return ge::GRAPH_SUCCESS;
     }
 
-    virtual uint64_t GetTilingKey() const
+    virtual uint64_t GetTilingKey() const 
     {
         return 0;
     }
 
-    virtual ge::graphStatus PostTiling()
+    virtual ge::graphStatus PostTiling() 
     {
         return ge::GRAPH_SUCCESS;
     }
 
-    virtual bool IsCapable()
+    virtual bool IsCapable() 
     {
         return true;
     }
@@ -489,3 +489,4 @@ private:
 
 } // namespace optiling
 #endif // OPS_BUILD_IN_OP_TILING_RUNTIME_ROTARY_POSITION_EMBEDDING_H
+

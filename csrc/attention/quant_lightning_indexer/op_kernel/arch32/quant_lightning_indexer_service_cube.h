@@ -207,7 +207,7 @@ __aicore__ inline void QLIMatmul<QLIT>::ProcessQk(uint64_t s1gL0RealSize, uint64
         } else {
             KeyNd2Nz(mmInfo.s2L0RealSize, mmInfo, runInfo);
         }
-
+        
         SetFlag<HardEvent::MTE2_MTE1>(MTE2_MTE1_EVENT);
         WaitFlag<HardEvent::MTE2_MTE1>(MTE2_MTE1_EVENT);
     }

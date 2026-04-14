@@ -80,7 +80,7 @@ private:
 
     const gert::Shape *xShape_ = nullptr;
     const gert::Shape *yShape_ = nullptr;
-
+    
     float eps_ = 1e-6f;
     int64_t A_ = 0;
     int64_t R_ = 0;
@@ -113,7 +113,7 @@ ge::graphStatus HcPreInvRmsTilingRegbase::CheckInputShape()
         A_ = xShape_->GetDim(0);
         R_ = xShape_->GetDim(1) * xShape_->GetDim(2);
     }
-
+    
     invRmsTilingData_.set_A(A_);
     invRmsTilingData_.set_R(R_);
 

@@ -48,7 +48,7 @@ extern "C" __global__ __aicore__ void inplace_partial_rotary_mul(GM_ADDR x, GM_A
                                                                  GM_ADDR workspace, GM_ADDR tiling)
 {
     AscendC::TPipe pipe;
-    #if defined(__DAV_C310__)
+    #if defined(__DAV_C310__) 
         if (TILING_KEY_IS(TILING_KEY_ABA))
         {
             GET_TILING_DATA_WITH_STRUCT(RopeRegbaseTilingData, tiling_data_in, tiling);
@@ -188,3 +188,4 @@ extern "C" __global__ __aicore__ void inplace_partial_rotary_mul(GM_ADDR x, GM_A
         }
     #endif
 }
+
