@@ -71,9 +71,9 @@ class Compress4AttentionSpec(CompressAttentionSpec):
             self.scale_dim * get_dtype_size(self.scale_dtype)
         )
         page_size = pad_to_128(page_size)
-        if self.pad_size is not None:
-            assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
-            return self.pad_size + page_size
+        if self.page_size_padded is not None:
+            assert self.page_size_padded + page_size >= page_size, f"pad_size >= 0 is required, however got {self.page_size_padded}"
+            return self.page_size_padded + page_size
         return page_size
 
     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
@@ -114,9 +114,9 @@ class Compress128AttentionSpec(CompressAttentionSpec):
 
         page_size = self.block_size * self.head_size * get_dtype_size(
             self.dtype)
-        if self.pad_size is not None:
-            assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
-            return self.pad_size + page_size
+        if self.page_size_padded is not None:
+            assert self.page_size_padded + page_size >= page_size, f"pad_size >= 0 is required, however got {self.page_size_padded}"
+            return self.page_size_padded + page_size
         return page_size
 
 
@@ -142,9 +142,9 @@ class SWAAttentionSpec(SlidingWindowSpec):
             * self.head_size
             * get_dtype_size(self.dtype)
         )
-        if self.pad_size is not None:
-            assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
-            return self.pad_size + page_size
+        if self.page_size_padded is not None:
+            assert self.page_size_padded + page_size >= page_size, f"pad_size >= 0 is required, however got {self.page_size_padded}"
+            return self.page_size_padded + page_size
         return page_size
 
 @dataclass(frozen=True)
@@ -204,9 +204,9 @@ class C4IndexerSpec(AttentionSpec):
         page_size = self.block_size * self.head_size * get_dtype_size(
             self.dtype)
         page_size += self.indexer_scale_size_bytes
-        if self.pad_size is not None:
-            assert self.pad_size + page_size >= page_size, f"pad_size >= 0 is required, however got {self.pad_size}"
-            return self.pad_size + page_size
+        if self.page_size_padded is not None:
+            assert self.page_size_padded + page_size >= page_size, f"pad_size >= 0 is required, however got {self.page_size_padded}"
+            return self.page_size_padded + page_size
         return page_size
 
     def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:

@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+from typing import Optional
 from collections.abc import Callable
 
 import torch
@@ -301,7 +302,7 @@ def _native_select_experts(
     scoring_func: str = "softmax",
     e_score_correction_bias: torch.Tensor | None = None,
     global_num_experts: torch.Tensor | None = None,
-    use_hash: bool | False = False,
+    use_hash: bool = False,
     tid2eid: dict[int, int] | None = None,
     input_ids: torch.Tensor | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:

@@ -707,7 +707,7 @@ class AscendModelSlimConfig(QuantizationConfig):
         This handles known key transformations such as shared_head and
         weight_packed mappings.
         """
-        if "hc_head_fn" in self.quant_config.keys():
+        if "hc_head_fn" in self.quant_description.keys():
             # TODO
             extra_quant_dict = {}
             for name in self.quant_description.keys():

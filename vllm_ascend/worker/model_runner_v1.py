@@ -50,7 +50,7 @@ from vllm.utils.torch_utils import get_dtype_size
 from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadataBuilder
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
-# from vllm.v1.attention.selector import get_attn_backend  # type: ignore
+from vllm.v1.attention.selector import get_attn_backend  # type: ignore
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
@@ -118,7 +118,6 @@ from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec,
                                             )
 from vllm_ascend.models.layer.attention.layer import DSAAttention
 from vllm_ascend.attention.dsa_v1 import AscendDSAMetadataBuilder
-from vllm_ascend.attention.selector import get_attn_backend
 from vllm_ascend.eplb.adaptor.vllm_adaptor import VllmEplbAdaptor
 from vllm_ascend.eplb.core.eplb_device_transfer_loader import D2DExpertWeightLoader
 from vllm_ascend.eplb.core.eplb_worker import EplbProcess
@@ -2065,7 +2064,7 @@ class NPUModelRunner(GPUModelRunner):
         num_scheduled_tokens: dict[str, int] | None = None,
         num_scheduled_tokens_np: np.ndarray | None = None,
         cascade_attn_prefix_lens: list[list[int]] | None = None,
-        num_scheduled_tokens_compressed_list: list[np.ndarrary] | None = None
+        num_scheduled_tokens_compressed_list: list[np.ndarray] | None = None
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         """
         :return: tuple[attn_metadata, spec_decode_common_attn_metadata]
@@ -2983,7 +2982,7 @@ class NPUModelRunner(GPUModelRunner):
                         current_kv_cache_spec.num_kv_heads,
                         current_kv_cache_spec.head_size)
                     # TODO(cmq): CompressIndexerAttentionSpec has no attr nope_dtype
-                    kv_size = sum_page_size_bytes - num_blocks * current_kv_cache_spec.pad_size
+                    kv_size = sum_page_size_bytes - num_blocks * current_kv_cache_spec.page_size_padded
                     kv_cache = kv_tensor[:kv_size].view(current_kv_cache_spec.dtype).view(kv_cache_shape)
                     # TODO(cmq): refactor me to dict, we need to differ the spec type
                     kv_caches[layer_name].append(kv_cache)
@@ -3395,7 +3394,7 @@ class NPUModelRunner(GPUModelRunner):
                 head_size=hf_config.head_dim,
                 dtype=torch.bfloat16,
                 sliding_window=hf_config.window_size,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
         elif layer_id % 2 == 0:
             # TODO(cmq): DON'T use magic number for the block size
@@ -3408,7 +3407,7 @@ class NPUModelRunner(GPUModelRunner):
                 rope_dim=hf_config.rope_head_dim,
                 scale_dim=0,
                 dtype=torch.bfloat16,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
@@ -3416,7 +3415,7 @@ class NPUModelRunner(GPUModelRunner):
                 head_size=hf_config.head_dim,
                 dtype=torch.bfloat16,
                 sliding_window=hf_config.window_size,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(C4IndexerSpec(
                 block_size=1024,
@@ -3424,7 +3423,7 @@ class NPUModelRunner(GPUModelRunner):
                 head_size=hf_config.index_head_dim,
                 indexer_scale_dim=1,
                 dtype=torch.int8,
-                pad_size=0
+                page_size_padded=0
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
             kv_cache_spec_list.append(C4AttnKVStateSpec(
@@ -3432,28 +3431,28 @@ class NPUModelRunner(GPUModelRunner):
                 num_kv_heads=1,
                 head_size=hf_config.head_dim * 2,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(C4AttnScoreStateSpec(
                 block_size=32,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim * 2,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(C4IndexerKVStateSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim * 2,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(C4IndexerScoreStateSpec(
                 block_size=128,
                 num_kv_heads=1,
                 head_size=hf_config.index_head_dim * 2,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
         elif layer_id % 2 != 0:
             # TODO(cmq): DON'T use magic number for the block size
@@ -3466,7 +3465,7 @@ class NPUModelRunner(GPUModelRunner):
                 rope_dim=hf_config.rope_head_dim,
                 scale_dim=0,
                 dtype=torch.bfloat16,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
@@ -3474,7 +3473,7 @@ class NPUModelRunner(GPUModelRunner):
                 head_size=hf_config.head_dim,
                 dtype=torch.bfloat16,
                 sliding_window=hf_config.window_size,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             # TODO(cmq): get window size from hf_config, instead of hard code in spec class
             kv_cache_spec_list.append(C128AttnKVStateSpec(
@@ -3482,14 +3481,14 @@ class NPUModelRunner(GPUModelRunner):
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
             kv_cache_spec_list.append(C128AttnScoreStateSpec(
                 block_size=64,
                 num_kv_heads=1,
                 head_size=hf_config.head_dim,
                 dtype=torch.float32,
-                pad_size=pad_size,
+                page_size_padded=pad_size,
             ))
         return kv_cache_spec_list
 

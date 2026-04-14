@@ -24,7 +24,7 @@ from typing import Optional
 
 import torch
 from torch import nn
-from vllm.attention.backends.abstract import AttentionMetadata
+from vllm.v1.attention.backend import AttentionMetadata
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
@@ -194,8 +194,4 @@ direct_register_custom_op(
     mutates_args=["output"],
     fake_impl=dsa_forward_fake,
     dispatch_key="PrivateUse1",
-<<<<<<< HEAD
 )
-=======
-)
->>>>>>> d952d868 (kv cache)
