@@ -37,18 +37,21 @@ class CompressAttentionManager(FullAttentionManager):
         request_id: str,
         num_tokens: int,
         new_computed_blocks: Sequence[KVCacheBlock],
+        total_computed_tokens: int,
+        num_tokens_main_model: int,
     ) -> int:
         # Allocate extra `num_speculative_blocks` blocks for
         # speculative decoding (MTP/EAGLE) with linear attention.
         assert isinstance(self.kv_cache_spec, (CompressAttentionSpec, C4IndexerSpec))
 
         num_tokens //= self.compress_ratio
-
+        # TODO new params need to be processed: total_computed_tokens: int, num_tokens_main_model: int,
         return super().get_num_blocks_to_allocate(request_id, num_tokens,
-                                                  new_computed_blocks)
+                                                  new_computed_blocks, total_computed_tokens, num_tokens_main_model)
 
     def allocate_new_blocks(self, request_id: str,
-                            num_tokens: int) -> list[KVCacheBlock]:
+                            # TODO new params need to be processed: num_tokens_main_model
+                            num_tokens: int, num_tokens_main_model) -> list[KVCacheBlock]:
         """
         Allocate new blocks for the request to give it at least `num_tokens`
         token slots.
