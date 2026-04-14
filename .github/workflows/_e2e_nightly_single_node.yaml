@@ -92,6 +92,7 @@ jobs:
           echo "====> Checkout source code"
           pip uninstall -y vllm-ascend || true
 
+          # shellcheck disable=SC2002
           TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
           TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
