@@ -48,9 +48,9 @@ jobs:
   changes:
     runs-on: linux-aarch64-a2-0
     outputs:
-      e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
-      ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
-      _310_tracker: ${{ steps.filter.outputs._310_tracker }}
+      e2e_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.e2e_tracker || 'true' }}
+      ut_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.ut_tracker || 'true' }}
+      _310_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs._310_tracker || 'true' }}
     steps:
       - name: Set PTA from file
         run: |
@@ -64,6 +64,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
         id: filter
+        continue-on-error: true
         with:
           filters: |
             e2e_tracker:
