@@ -7,9 +7,9 @@
  * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
  */
-
+ 
 /*!
- * \file sparse_wincmp_attn_sharedkv_def.cpp
+ * \file sparse_attn_sharedkv_def.cpp
  * \brief
  */
 
@@ -100,9 +100,9 @@ public:
             .Format({ge::FORMAT_ND, ge::FORMAT_ND});
         this->Attr("softmax_scale").AttrType(REQUIRED).Float(1.0);
         this->Attr("cmp_ratio").AttrType(REQUIRED).Int(1);
-        this->Attr("ori_mask_mode").AttrType(REQUIRED).Int(3);
-        this->Attr("cmp_mask_mode").AttrType(REQUIRED).Int(3);
-        this->Attr("ori_win_left").AttrType(OPTIONAL).Int(128);
+        this->Attr("ori_mask_mode").AttrType(REQUIRED).Int(4); // ori_mask_mode默认值4
+        this->Attr("cmp_mask_mode").AttrType(REQUIRED).Int(3); // cmp_mask_mode默认值3
+        this->Attr("ori_win_left").AttrType(OPTIONAL).Int(127); // ori_win_left默认值127
         this->Attr("ori_win_right").AttrType(OPTIONAL).Int(0);
         this->Attr("layout_q").AttrType(OPTIONAL).String("BSND");
         this->Attr("layout_kv").AttrType(OPTIONAL).String("PA_ND");

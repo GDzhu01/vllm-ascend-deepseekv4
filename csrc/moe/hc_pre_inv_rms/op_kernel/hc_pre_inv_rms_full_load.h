@@ -44,7 +44,7 @@ public:
 
 private:
     TPipe* pipe_;
-
+    
     TQue<QuePosition::VECIN, 1> inQueueX;
     TQue<QuePosition::VECOUT, 1> outQueueY;
     TBuf<TPosition::VECCALC> castBuf;
@@ -127,7 +127,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::Process()
 template <typename T>
 __aicore__ inline void HcPreInvRmsFullLoad<T>::CopyIn(uint64_t idx, uint64_t curUbFactorA)
 {
-
+    
     LocalTensor<T> xLocal = inQueueX.AllocTensor<T>();
 
     DataCopyPadExtParams<T> dataCopyPadParams{false, 0, 0, 0};
@@ -135,7 +135,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::CopyIn(uint64_t idx, uint64_t cur
     DataCopyExtParams dataCopyParams{
         static_cast<uint16_t>(curUbFactorA), static_cast<uint32_t>(R * sizeof(T)), 0, 0, 0};
     DataCopyPad(xLocal, xGm[xGmStartAddr], dataCopyParams, dataCopyPadParams);
-
+    
     inQueueX.EnQue<T>(xLocal);
 }
 
@@ -166,23 +166,23 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB16(uint64_t curUbFactorA)
     AscendC::Mul(castLocal, castLocal, castLocal, R);
 
     for (int idx = 0; idx < curUbFactorA; idx++) {
-
+        
         for (int j = 0; j < FOUR_FOLD; j++) {
             PipeBarrier<PIPE_V>();
-            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], castLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime,
+            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], castLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime, 
                 DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
         }
 
-        PipeBarrier<PIPE_V>();
+        PipeBarrier<PIPE_V>(); 
         WholeReduceSum(reduceLocal, reduceLocal, PER_REPEAT_LEN_B32, FOUR_FOLD, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        PipeBarrier<PIPE_V>();
+        PipeBarrier<PIPE_V>(); 
         WholeReduceSum(yLocal[idx], reduceLocal, FOUR_FOLD, 1, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
     }
 
     float meanCof = 1.0f / R;
-    PipeBarrier<PIPE_V>();
+    PipeBarrier<PIPE_V>(); 
     AscendC::Muls(yLocal, yLocal, meanCof, curUbFactorA);
-    PipeBarrier<PIPE_V>();
+    PipeBarrier<PIPE_V>(); 
     AscendC::Adds(yLocal, yLocal, epsilon, curUbFactorA);
     PipeBarrier<PIPE_V>();
     AscendC::Duplicate(reduceLocal, 1.0f, curUbFactorA);
@@ -211,19 +211,19 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB32(uint64_t curUbFactorA)
     for (int idx = 0; idx < curUbFactorA; idx++) {
         for (int j = 0; j < FOUR_FOLD; j++) {
             PipeBarrier<PIPE_V>();
-            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], xLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime,
+            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], xLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime, 
                 DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
         }
-        PipeBarrier<PIPE_V>();
+        PipeBarrier<PIPE_V>(); 
         WholeReduceSum(reduceLocal, reduceLocal, PER_REPEAT_LEN_B32, FOUR_FOLD, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        PipeBarrier<PIPE_V>();
+        PipeBarrier<PIPE_V>(); 
         WholeReduceSum(yLocal[idx], reduceLocal, FOUR_FOLD, 1, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
     }
 
     float meanCof = 1.0f / R;
-    PipeBarrier<PIPE_V>();
+    PipeBarrier<PIPE_V>(); 
     AscendC::Muls(yLocal, yLocal, meanCof, curUbFactorA);
-    PipeBarrier<PIPE_V>();
+    PipeBarrier<PIPE_V>(); 
     AscendC::Adds(yLocal, yLocal, epsilon, curUbFactorA);
     PipeBarrier<PIPE_V>();
     AscendC::Duplicate(reduceLocal, 1.0f, curUbFactorA);
@@ -247,3 +247,4 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::CopyOut(uint64_t idx, uint64_t cu
 
 } // namespace HcPreInvRms
 #endif // ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_H_
+

@@ -13,7 +13,6 @@
  * \brief
  */
 #include "moe_gating_top_k_hash_tiling.h"
-// FIXME
 #include "moe_gating_top_k_hash_tiling_arch35.h"
 #include <graph/utils/type_utils.h>
 

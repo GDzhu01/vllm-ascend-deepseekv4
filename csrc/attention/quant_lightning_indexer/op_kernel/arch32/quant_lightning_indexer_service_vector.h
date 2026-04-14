@@ -29,6 +29,9 @@ using namespace QLIServiceVec;
 constexpr uint32_t BASE_TOPK = 2048;
 constexpr uint32_t BASE_TOPK_VALUE_IDX_SIZE = 4096;
 constexpr uint32_t LD_PARAM_NUM = 16;
+constexpr uint32_t ELE_NUM_32 = 32;
+constexpr uint32_t ELE_NUM_128 = 128;
+constexpr uint32_t ELE_NUM_512 = 512;
 
 template <typename QLIT>
 class QLIVector {
@@ -53,6 +56,7 @@ public:
                                               GlobalTensor<half> kScaleGm, GlobalTensor<int32_t> indiceOutGm,
                                               GlobalTensor<int32_t> blockTableGm);
     __aicore__ inline void CleanInvalidOutput(int64_t invalidS1offset);
+    __aicore__ inline int32_t AlignS2(int32_t cuS2Len);
     __aicore__ inline void AllocEventID();
     __aicore__ inline void FreeEventID();
     __aicore__ inline void InitLDBuffers(TPipe *pipe);
@@ -321,6 +325,20 @@ __aicore__ inline void QLIVector<QLIT>::ProcessVec0(const QLICommon::RunInfo &in
 }
 
 template <typename QLIT>
+__aicore__ inline int32_t QLIVector<QLIT>::AlignS2(int32_t cuS2Len)
+{
+    // 限制：当前cuS2Len最大为2048，暂不考虑更长
+    // 该函数目的是将cuS2Len对齐到形如 32*(4^n)*m 的形式 (m ∈ [1, 3])，方便后续sort/merge
+    if (cuS2Len <= ELE_NUM_128) {
+        return Align(cuS2Len, ELE_NUM_32);
+    } else if (cuS2Len <= ELE_NUM_512) {
+        return Align(cuS2Len, ELE_NUM_128);
+    } else {
+        return Align(cuS2Len, ELE_NUM_512);
+    }
+}
+
+template <typename QLIT>
 __aicore__ inline void QLIVector<QLIT>::ProcessVec1(const QLICommon::RunInfo &info)
 {
     int32_t cuBaseS1Idx = info.gS1Idx * s1BaseSize_;
@@ -366,7 +384,7 @@ __aicore__ inline void QLIVector<QLIT>::ProcessVec1(const QLICommon::RunInfo &in
         int32_t cuS2Len = cuBaseS2Idx + s2BaseSize_ >= cuRealAcSeq ? cuRealAcSeq - cuBaseS2Idx : s2BaseSize_;
         int32_t cuS1Idx = cuS1BeginIdxPerAiv + innerS1Idx;
         if (cuRealAcSeq > 0 && cuS2Len > 0) {
-            int32_t cuS2LenVecAlign = CeilDiv(cuS2Len, s2BaseSize_) * s2BaseSize_;
+            int32_t cuS2LenVecAlign = AlignS2(cuS2Len);
             LocalTensor<float> mmInUb = inQueue_.AllocTensor<float>();
             LocalTensor<float> kScaleUb = mmInUb[cuS2LenVecAlign];
             LocalTensor<half> kScaleTUb = kScaleUb.template ReinterpretCast<half>()[cuS2LenVecAlign];
@@ -413,6 +431,7 @@ __aicore__ inline void QLIVector<QLIT>::ProcessVec1(const QLICommon::RunInfo &in
             bool needCopyOutGm = blockS2StartIdx_ == 0 && isS2End;
             // 中间结果保存
             bool needCopyWsGm = info.isAllLoopEnd || isS2End;
+            needCopyWsGm = false;  // 暂时关闭LD
             if (needCopyOutGm) {
                 LocalTensor<uint32_t> idxULocal = outQueue_.AllocTensor<uint32_t>();
                 ExtractIndex(idxULocal,

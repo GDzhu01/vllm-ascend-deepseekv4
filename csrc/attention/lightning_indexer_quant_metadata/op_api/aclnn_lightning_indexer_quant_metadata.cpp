@@ -92,7 +92,7 @@ aclnnStatus aclnnLightningIndexerQuantMetadataGetWorkspaceSize(
              keyQuantMode, batchSizeOptional, maxSeqlenQOptional, maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional,
              sparseCountOptional, sparseModeOptional, isFdOptional, preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData);
   CHECK_RET(ret == ACLNN_SUCCESS, ret);
-
+  
   const op::PlatformInfo &npuInfo = op::GetCurrentPlatformInfo();
   uint32_t aicCoreNum = npuInfo.GetCubeCoreNum();
   uint32_t aivCoreNum = npuInfo.GetVectorCoreNum();
@@ -100,7 +100,7 @@ aclnnStatus aclnnLightningIndexerQuantMetadataGetWorkspaceSize(
 
   auto output = l0op::LightningIndexerQuantMetadata(
                          actualSeqLengthsQueryOptional, actualSeqLengthsKeyOptional, aicCoreNum, aivCoreNum, socVersion,
-                         numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode, batchSizeOptional, maxSeqlenQOptional,
+                         numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode, batchSizeOptional, maxSeqlenQOptional,  
                          maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional, sparseCountOptional, sparseModeOptional,
                          isFdOptional, preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData, uniqueExecutor.get());
   CHECK_RET(output != nullptr, ACLNN_ERR_INNER_NULLPTR);

@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 #include <graph/utils/type_utils.h>
 #include <register/op_impl_registry.h>
@@ -39,9 +39,18 @@ namespace ops {
     constexpr uint32_t COFF_ATTR_INDEX = 2;
     constexpr uint32_t NORM_EPS_ATTR_INDEX = 3;
     constexpr uint32_t ROTARY_MODE_ATTR_INDEX = 4;
+    constexpr uint32_t ENABLE_GRAD_ATTR_INDEX = 5;
 
     // OUTPUT
     constexpr uint32_t CMP_KV_OUTPUT_INDEX = 0;
+    constexpr uint32_t WKV_PROJ_OUTPUT_INDEX = 1;
+    constexpr uint32_t SOFTMAX_RES_OUTPUT_INDEX = 2;
+    constexpr uint32_t NORM_X_OUTPUT_INDEX = 3;
+    constexpr uint32_t NORM_RSTD_OUTPUT_INDEX = 4;
+
+    // ATTR DEFAULT VALUE
+    constexpr uint32_t CMP_RATIO_VALUE = 4;
+    constexpr uint32_t COFF_VALUE = 1;
 
 struct CompressorProtoShapeParam {
     bool isBsMerge { false };
@@ -94,7 +103,6 @@ ge::graphStatus GetCompressorShapeDim(const gert::InferShapeContext* context, Co
     auto startPosShape = context->GetRequiredInputShape(START_POS_INPUT_INDEX);    // (B,)
     OPS_LOG_E_IF_NULL(context, startPosShape, return ge::GRAPH_FAILED)
 
-
     if (xShape->GetDimNum() == DIM_NUM_3) {                // BS
         shapeParam.isBsMerge = false;
         shapeParam.B = xShape->GetDim(DIM_INDEX_0);
@@ -117,17 +125,93 @@ ge::graphStatus SetCompressorShapeDim(const CompressorProtoShapeParam &shapePara
 {
     auto cmpKvShape = context->GetOutputShape(CMP_KV_OUTPUT_INDEX);                 // query: (B, S, N, Hckv) | (T, N, Hckv)
     OPS_LOG_E_IF_NULL(context, cmpKvShape, return ge::GRAPH_FAILED)
-
+    auto wkvProjShape = context->GetOutputShape(WKV_PROJ_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, wkvProjShape, return ge::GRAPH_FAILED)
+    auto softmaxResShape = context->GetOutputShape(SOFTMAX_RES_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, softmaxResShape, return ge::GRAPH_FAILED)
+    auto normXShape = context->GetOutputShape(NORM_X_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, normXShape, return ge::GRAPH_FAILED)
+    auto normRstdShape = context->GetOutputShape(NORM_RSTD_OUTPUT_INDEX);
+    OPS_LOG_E_IF_NULL(context, normRstdShape, return ge::GRAPH_FAILED)
+    auto attr = context->GetAttrs();
+    const uint32_t *cmpRatioPtr = attr->GetAttrPointer<uint32_t>(CMP_RATIO_ATTR_INDEX);
+    uint32_t cmpRatio = (cmpRatioPtr != nullptr) ? *cmpRatioPtr : CMP_RATIO_VALUE;
+    const uint32_t *coffPtr = attr->GetAttrPointer<uint32_t>(COFF_ATTR_INDEX);
+    uint32_t coff = (coffPtr != nullptr) ? *coffPtr : COFF_VALUE;
+    const bool *enableGradPtr = attr->GetAttrPointer<bool>(ENABLE_GRAD_ATTR_INDEX);
+    bool enableGrad = (enableGradPtr != nullptr) ? *enableGradPtr : false;
     // Set output shape
     if (!shapeParam.isBsMerge) {
         cmpKvShape->SetDimNum(DIM_NUM_3);                   // (B, Sr, H)
         cmpKvShape->SetDim(DIM_INDEX_0, shapeParam.B);
         cmpKvShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
         cmpKvShape->SetDim(DIM_INDEX_2, shapeParam.H);
+        if (enableGrad) {
+            wkvProjShape->SetDimNum(DIM_NUM_3);
+            wkvProjShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            wkvProjShape->SetDim(DIM_INDEX_1, shapeParam.S);
+            wkvProjShape->SetDim(DIM_INDEX_2, coff * shapeParam.D);
+            softmaxResShape->SetDimNum(DIM_NUM_4);
+            softmaxResShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            softmaxResShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+            softmaxResShape->SetDim(DIM_INDEX_2, coff * cmpRatio);
+            softmaxResShape->SetDim(DIM_INDEX_3, shapeParam.D);
+            normXShape->SetDimNum(DIM_NUM_3);
+            normXShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            normXShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+            normXShape->SetDim(DIM_INDEX_2, coff * shapeParam.D);
+            normRstdShape->SetDimNum(DIM_NUM_2);
+            normRstdShape->SetDim(DIM_INDEX_0, shapeParam.B);
+            normRstdShape->SetDim(DIM_INDEX_1, shapeParam.Sr);
+        } else {
+            wkvProjShape->SetDimNum(DIM_NUM_3);
+            wkvProjShape->SetDim(DIM_INDEX_0, 0);
+            wkvProjShape->SetDim(DIM_INDEX_1, 0);
+            wkvProjShape->SetDim(DIM_INDEX_2, 0);
+            softmaxResShape->SetDimNum(DIM_NUM_4);
+            softmaxResShape->SetDim(DIM_INDEX_0, 0);
+            softmaxResShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDim(DIM_INDEX_2, 0);
+            softmaxResShape->SetDim(DIM_INDEX_3, 0);
+            normXShape->SetDimNum(DIM_NUM_3);
+            normXShape->SetDim(DIM_INDEX_0, 0);
+            normXShape->SetDim(DIM_INDEX_1, 0);
+            normXShape->SetDim(DIM_INDEX_2, 0);
+            normRstdShape->SetDimNum(DIM_NUM_2);
+            normRstdShape->SetDim(DIM_INDEX_0, 0);
+            normRstdShape->SetDim(DIM_INDEX_1, 0);
+        }
     } else {
         cmpKvShape->SetDimNum(DIM_NUM_2);                   // (T, N, Hckv)
         cmpKvShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
         cmpKvShape->SetDim(DIM_INDEX_1, shapeParam.H);
+        if (enableGrad) {
+            wkvProjShape->SetDimNum(DIM_NUM_2);
+            wkvProjShape->SetDim(DIM_INDEX_0, shapeParam.T);
+            wkvProjShape->SetDim(DIM_INDEX_1, coff * shapeParam.D);
+            softmaxResShape->SetDimNum(DIM_NUM_3);
+            softmaxResShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+            softmaxResShape->SetDim(DIM_INDEX_1, coff * cmpRatio);
+            softmaxResShape->SetDim(DIM_INDEX_2, shapeParam.D);
+            normXShape->SetDimNum(DIM_NUM_2);
+            normXShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+            normXShape->SetDim(DIM_INDEX_1, coff * shapeParam.D);
+            normRstdShape->SetDimNum(DIM_NUM_1);
+            normRstdShape->SetDim(DIM_INDEX_0, shapeParam.Sr);
+        } else {
+            wkvProjShape->SetDimNum(DIM_NUM_2);
+            wkvProjShape->SetDim(DIM_INDEX_0, 0);
+            wkvProjShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDimNum(DIM_NUM_3);
+            softmaxResShape->SetDim(DIM_INDEX_0, 0);
+            softmaxResShape->SetDim(DIM_INDEX_1, 0);
+            softmaxResShape->SetDim(DIM_INDEX_2, 0);
+            normXShape->SetDimNum(DIM_NUM_2);
+            normXShape->SetDim(DIM_INDEX_0, 0);
+            normXShape->SetDim(DIM_INDEX_1, 0);
+            normRstdShape->SetDimNum(DIM_NUM_1);
+            normRstdShape->SetDim(DIM_INDEX_0, 0);
+        }
     }
 
     return GRAPH_SUCCESS;
@@ -135,15 +219,19 @@ ge::graphStatus SetCompressorShapeDim(const CompressorProtoShapeParam &shapePara
 
 ge::graphStatus InferDataTypeCompressor(gert::InferDataTypeContext* context)
 {
+    OP_CHECK_IF(context == nullptr, OPS_REPORT_VECTOR_INNER_ERR("Compressor", "Context is nullptr."),
+               return ge::GRAPH_FAILED);
     OPS_LOG_I(context->GetNodeName(), "Enter Compressor inferDataType impl.");
 
-     context->SetOutputDataType(CMP_KV_OUTPUT_INDEX, context->GetRequiredInputDataType(TOKEN_X_INPUT_INDEX));
+    context->SetOutputDataType(CMP_KV_OUTPUT_INDEX, context->GetRequiredInputDataType(TOKEN_X_INPUT_INDEX));
 
     return GRAPH_SUCCESS;
 }
 
 ge::graphStatus InferShapeCompressor(gert::InferShapeContext* context)
 {
+    OP_CHECK_IF(context == nullptr, OPS_REPORT_VECTOR_INNER_ERR("Compressor", "Context is nullptr."),
+               return ge::GRAPH_FAILED);
     OPS_LOG_I(context->GetNodeName(), "Enter Compressor infershape impl.");
 
     CompressorProtoShapeParam shapeParam {};

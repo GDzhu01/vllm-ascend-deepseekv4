@@ -52,7 +52,7 @@ graphStatus InferShape4HcPreSinkhorn(gert::InferShapeContext* context)
         combFragShape->SetDim(0, mixShape->GetDim(0));
         combFragShape->SetDim(1, *hcMult);
         combFragShape->SetDim(2, *hcMult);
-
+        
     } else {
         yShape->SetDim(0, mixShape->GetDim(0));
         yShape->SetDim(1, mixShape->GetDim(1));

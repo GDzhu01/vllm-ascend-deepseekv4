@@ -16,8 +16,8 @@
 #include "moe_gating_top_k_hash_e_k_fullload.h"
 #include "moe_gating_top_k_hash_without_group.h"
 #include "moe_gating_top_k_hash_generalized.h"
-#if defined(__DAV_C310__)
-  #include "arch35/moe_gating_top_k_hash_regbase.h"
+#if defined(__DAV_C310__) 
+  #include "moe_gating_top_k_hash_regbase.h"
   using namespace MoeGatingTopKHashRegbaseNS;
 #endif
 #define TILING_KEY_PER_GROUP_COUNT_32 0
@@ -42,7 +42,7 @@ extern "C" __global__ __aicore__ void moe_gating_top_k_hash(GM_ADDR x, GM_ADDR b
     if (g_coreType == AIC) {
         return;
     }
-
+    
     if (workspace == nullptr) {
         return;
     }
@@ -96,7 +96,7 @@ extern "C" __global__ __aicore__ void moe_gating_top_k_hash(GM_ADDR x, GM_ADDR b
         op.Init(x, bias, y, expertIdx, out, userWS, t, &tPipe);
         op.Process();
     }
-    #if defined(__DAV_C310__)
+    #if defined(__DAV_C310__) 
       else if (TILING_KEY_IS(TILING_KEY_REGBASE)) {
           GET_TILING_DATA_WITH_STRUCT(MoeGatingTopKHashRegbaseTilingData, tiling_data_in, tiling);
           const MoeGatingTopKHashRegbaseTilingData *__restrict tilingData = &tiling_data_in;
