@@ -186,6 +186,7 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
         activation: str = "silu",
         apply_router_weight_on_input: bool = False,
         mc2_mask: torch.Tensor | None = None,
+        tid2eid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
@@ -213,6 +214,7 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
                 routed_scaling_factor=routed_scaling_factor,
                 e_score_correction_bias=e_score_correction_bias,
                 global_num_experts=global_num_experts,
+                tid2eid=tid2eid,
             )
         assert topk_ids is not None
         assert topk_weights is not None

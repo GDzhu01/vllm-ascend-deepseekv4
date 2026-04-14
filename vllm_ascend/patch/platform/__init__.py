@@ -40,6 +40,12 @@ import vllm_ascend.patch.platform.patch_sched_yield  # noqa
 import vllm_ascend.patch.platform.patch_torch_accelerator  # noqa
 import vllm_ascend.patch.platform.patch_minimax_usage_accounting  # noqa
 import vllm_ascend.patch.platform.patch_glm_tool_call_parser  # noqa
+import vllm_ascend.patch.platform.patch_transformers  # noqa
+import vllm_ascend.patch.platform.patch_selector # noqa
 
 if envs.VLLM_ASCEND_BALANCE_SCHEDULING:
     import vllm_ascend.patch.platform.patch_balance_schedule  # noqa
+
+if envs.USE_MULTI_BLOCK_POOL:
+    import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
+    # import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa
