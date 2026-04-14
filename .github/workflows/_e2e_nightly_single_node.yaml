@@ -40,6 +40,10 @@ on:
         required: false
         type: string
         default: "v0.18.0"
+      vllm_ascend_ref:
+        required: false
+        type: string
+        default: "releases/v0.18.0"
       should_run:
         required: true
         type: boolean
@@ -92,13 +96,12 @@ jobs:
           TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
 
-          # When IS_PR_TEST is true, VLLM_ASCEND_REF is a PR number; otherwise it is a branch/tag name.
           git clean -fd csrc/**
           git remote add dpsk_v4 https://github.com/GDzhu01/vllm-ascend-deepseekv4.git
           if [[ "$IS_PR_TEST" == "true" ]]; then
-              git fetch --depth 1 dpsk_v4 "refs/pull/${VLLM_ASCEND_REF}/head"
+              git fetch --depth 1 dpsk_v4 "refs/pull/${{ inputs.vllm_ascend_ref }}/head"
           else
-              git fetch --depth 1 dpsk_v4 "$VLLM_ASCEND_REF"
+              git fetch --depth 1 dpsk_v4 "${{ inputs.vllm_ascend_ref }}"
           fi
           git checkout FETCH_HEAD
           pip install -r requirements-dev.txt"

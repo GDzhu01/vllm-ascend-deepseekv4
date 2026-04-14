@@ -216,6 +216,7 @@ jobs:
       image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-a3'
       tests: ${{ matrix.test_config.tests }}
       config_file_path: ${{ matrix.test_config.config_file_path }}
+      vllm_ascend_ref: ${{ needs.parse-trigger.outputs.ref }}
       name: ${{ matrix.test_config.name }}
       should_run: >-
         ${{
