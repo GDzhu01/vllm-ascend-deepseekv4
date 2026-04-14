@@ -1,14 +1,13 @@
 import os
+import time
 
+import vllm
 from vllm.config import ParallelConfig
 from vllm.logger import logger
-from vllm.v1.engine.core import DPEngineCoreProc, EngineCoreProc
 
 from vllm.config import VllmConfig
 from vllm.v1.kv_cache_interface import KVCacheConfig
 
-import time
-import vllm
 from vllm.v1.core.kv_cache_utils import generate_scheduler_kv_cache_config
 from vllm_ascend.patch.platform.patch_kv_cache_coordinator import USE_MULTI_GROUPS_KV_CACHE
 from vllm_ascend.patch.platform.patch_kv_cache_utils import get_kv_cache_configs_with_multi_groups as get_kv_cache_configs
@@ -65,5 +64,5 @@ def _initialize_kv_caches_with_multi_groups(
     return num_gpu_blocks, num_cpu_blocks, scheduler_kv_cache_config
 
 if USE_MULTI_GROUPS_KV_CACHE:
-    EngineCoreProc._initialize_kv_caches = _initialize_kv_caches_with_multi_groups
+    # EngineCoreProc._initialize_kv_caches = _initialize_kv_caches_with_multi_groups
     vllm.v1.engine.core.get_kv_cache_configs = get_kv_cache_configs
