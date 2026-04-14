@@ -2229,7 +2229,8 @@ class NPUModelRunner(GPUModelRunner):
                 compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
                 if for_cudagraph_capture:
                     extra_attn_metadata_args = dict(
-                        compress_ratio=compress_ratio)
+                        compress_ratio=compress_ratio,
+                        ratio_to_sas_metadata=dict())
                 else:
                     # TODO(zxr)
                     extra_attn_metadata_args = dict(
