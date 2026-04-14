@@ -313,7 +313,7 @@ __aicore__ inline void MoeGatingTopKHashWithoutGroup<T, U1, U2>::SelectExpertIdx
 }
 
 template <typename T, typename U1, typename U2>
-__aicore__ inline void MoeGatingTopKHashWithoutGroup<T, U1, U2>::Init(GM_ADDR x, GM_ADDR bias, GM_ADDR inputIds, GM_ADDR tid2eid,
+__aicore__ inline void MoeGatingTopKHashWithoutGroup<T, U1, U2>::Init(GM_ADDR x, GM_ADDR bias, GM_ADDR inputIds, GM_ADDR tid2eid, 
                                                           GM_ADDR y, GM_ADDR expertIdx, GM_ADDR out, GM_ADDR workspace,
                                                           const MoeGatingTopKHashTilingData *tilingData, TPipe *tPipe)
 {

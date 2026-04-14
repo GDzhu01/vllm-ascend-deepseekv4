@@ -50,7 +50,7 @@ private:
     int64_t xNum_= 0;
     int64_t r1Num_= 0;
     int64_t count_ = 0;
-
+    
     static constexpr int32_t ONE_BLOCK_SIZE = 32;
     int32_t perBlock32 = ONE_BLOCK_SIZE / sizeof(float);
 
@@ -99,7 +99,7 @@ __aicore__ inline void InplacePartialRotaryMulABA<T, isBrc>::Init(GM_ADDR x, GM_
     ubFactor_ = tiling_->ubFactor;
     blockFactor_ =  tiling_->blockFactor;
     start_ = tiling_->start;
-
+    
     xGm_.SetGlobalBuffer((__gm__ T *)x);
     r1Gm_.SetGlobalBuffer((__gm__ T *)r1);
     r2Gm_.SetGlobalBuffer((__gm__ T *)r2);
@@ -149,7 +149,7 @@ __aicore__ inline void InplacePartialRotaryMulABA<T, isBrc>::SetGatherSrcOffset(
     WaitFlag<HardEvent::S_V>(eventIdSToV);
     int32_t scalarValue = 8;
     int32_t onceNum = 8;
-
+    
     while (scalarValue < count) {
         int32_t nextValue = scalarValue * 2;
         if (nextValue < count) {
@@ -199,7 +199,7 @@ __aicore__ inline void InplacePartialRotaryMulABA<T, isBrc>::InterleavedInversio
     int64_t fp32Mask = 64;
     int64_t repeatTimes = count / 64;
     int64_t remain = count % 64;
-    uint64_t fullMask = 0x5555555555555555; //0101010101010101
+    uint64_t fullMask = 0x5555555555555555; //0101010101010101  
     uint64_t tailMask = 0x55;
     SetVectorMask<float, MaskMode::NORMAL>(0, fullMask);
     Muls<float, false>(ub, ub, -1.0f, MASK_PLACEHOLDER, repeatTimes, {1,1,8,8});

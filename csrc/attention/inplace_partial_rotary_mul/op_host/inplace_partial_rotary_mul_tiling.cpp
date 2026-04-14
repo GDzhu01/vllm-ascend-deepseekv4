@@ -70,7 +70,7 @@ ge::graphStatus Tiling4RotaryPositionEmbedding(gert::TilingContext *context)
         regBaseTilingCases.push_back(std::unique_ptr<RopeRegBaseTilingClass>(new RopeRegBaseTilingClassABAAndBA(context)));
         regBaseTilingCases.push_back(std::unique_ptr<RopeRegBaseTilingClass>(new RopeRegBaseTilingClassBAB(context)));
         OPS_LOG_I(context, "Using arch35 tiling for ASCEND910_95");
-
+        
         for (const auto& ptr : regBaseTilingCases)
         {
             if (ptr)
@@ -102,3 +102,4 @@ IMPL_OP_OPTILING(InplacePartialRotaryMul)
     .Tiling(Tiling4RotaryPositionEmbedding)
     .TilingParse<RotaryPositionEmbeddingCompileInfo>(TilingPrepareForRotaryPositionEmbedding);
 } // namespace optiling
+

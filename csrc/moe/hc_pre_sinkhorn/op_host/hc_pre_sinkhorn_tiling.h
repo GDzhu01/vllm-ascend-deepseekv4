@@ -76,7 +76,7 @@ public:
         {
         }
     ~HcPreSinkhornTiling() = default;
-
+    
     ge::graphStatus GetPlatformInfo();
     ge::graphStatus DoOpTiling();
     ge::graphStatus GetWorkspaceSize();

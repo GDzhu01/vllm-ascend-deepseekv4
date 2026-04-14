@@ -32,7 +32,7 @@ ge::graphStatus InferShapeSparseAttnSharedkv(gert::InferShapeContext *context)
     gert::Shape *attentionOutShape = context->GetOutputShape(0);
     OPS_LOG_E_IF_NULL(context, attentionOutShape, return ge::GRAPH_FAILED)
     *attentionOutShape = *queryShape;
-
+    
     gert::Shape *softmaxLseShape = context->GetOutputShape(1);
     OPS_LOG_E_IF_NULL(context, attentionOutShape, return ge::GRAPH_FAILED)
     auto attr = context->GetAttrs();

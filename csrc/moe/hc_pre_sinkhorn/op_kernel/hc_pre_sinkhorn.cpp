@@ -13,7 +13,7 @@
  * \brief
  */
 
-#if defined(__DAV_C310__)
+#if defined(__DAV_C310__) 
     #include "hc_pre_sinkhorn_regbase_perf.h"
     #include "hc_pre_sinkhorn_regbase_base.h"
 #else
