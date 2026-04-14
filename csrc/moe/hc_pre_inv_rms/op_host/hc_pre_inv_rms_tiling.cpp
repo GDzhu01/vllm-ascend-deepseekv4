@@ -76,7 +76,7 @@ private:
 
     const gert::Shape *xShape_ = nullptr;
     const gert::Shape *yShape_ = nullptr;
-
+    
     float eps_ = 1e-6f;
     int64_t A_ = 0;
     int64_t R_ = 0;
@@ -100,7 +100,7 @@ ge::graphStatus HcPreInvRmsTilingBase::CheckInputShape()
                 OPS_LOG_E(context_, "The dim number of x is: %zu, but it should be %zu or %zu(bs fused)."
                     , xDimNum, X_INPUT_DIMS, X_INPUT_BS_FUSED_DIMS),
                 return ge::GRAPH_FAILED);
-
+    
     if (xDimNum == X_INPUT_DIMS) {
         A_ = xShape_->GetDim(0) * xShape_->GetDim(1);
         R_ = xShape_->GetDim(2) * xShape_->GetDim(3);
@@ -108,7 +108,7 @@ ge::graphStatus HcPreInvRmsTilingBase::CheckInputShape()
         A_ = xShape_->GetDim(0);
         R_ = xShape_->GetDim(1) * xShape_->GetDim(2);
     }
-
+    
     invRmsTilingData_.set_A(A_);
     invRmsTilingData_.set_R(R_);
 

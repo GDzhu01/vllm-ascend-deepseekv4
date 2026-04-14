@@ -58,7 +58,7 @@
                         ASCENDC_TPL_UINT_DECL(Q_LAYOUT_T, ASCENDC_TPL_4_BW, ASCENDC_TPL_UI_LIST, QLI_LAYOUT_BSND,
                                                 QLI_LAYOUT_TND),
                         ASCENDC_TPL_UINT_DECL(K_LAYOUT_T, ASCENDC_TPL_4_BW, ASCENDC_TPL_UI_LIST,
-                                                QLI_LAYOUT_BSND, QLI_LAYOUT_TND, QLI_LAYOUT_PA_BSND), );
+                                                QLI_LAYOUT_BSND, QLI_LAYOUT_TND, QLI_LAYOUT_PA_BSND), );    
     // 支持的模板参数组合
     // 用于调用GET_TPL_TILING_KEY获取TilingKey时，接口内部校验TilingKey是否合法
     ASCENDC_TPL_SEL(
@@ -73,7 +73,7 @@
         ASCENDC_TPL_ARGS_SEL(ASCENDC_TPL_DTYPE_SEL(DT_Q, QLI_TPL_INT8), ASCENDC_TPL_DTYPE_SEL(DT_K, QLI_TPL_INT8),
                             ASCENDC_TPL_DTYPE_SEL(DT_OUT, QLI_TPL_INT32), ASCENDC_TPL_BOOL_SEL(PAGE_ATTENTION, 0),
                             ASCENDC_TPL_UINT_SEL(Q_LAYOUT_T, ASCENDC_TPL_UI_LIST, QLI_LAYOUT_TND),
-                            ASCENDC_TPL_UINT_SEL(K_LAYOUT_T, ASCENDC_TPL_UI_LIST, QLI_LAYOUT_TND), ), );
+                            ASCENDC_TPL_UINT_SEL(K_LAYOUT_T, ASCENDC_TPL_UI_LIST, QLI_LAYOUT_TND), ), );                                      
 #endif
 
 #endif

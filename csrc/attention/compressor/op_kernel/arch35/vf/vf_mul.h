@@ -17,14 +17,36 @@
 #define VF_MUL_H
 #include "kernel_operator.h"
 using namespace AscendC;
-// constexpr uint32_t FLOAT_REP_SIZE = 64;
-// constexpr uint32_t BTYEALIGNSIZE = 32;
-// constexpr uint32_t REGSIZE = 256;
+
 constexpr uint32_t FLOATBYTE = 4;
+constexpr uint32_t baseD32 = 32;
+constexpr uint32_t baseD64 = 64;
+constexpr uint32_t baseD128= 128;
 
 template<typename T>
-__simd_vf__ void MulReduceSumbaseOneVFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreAddr, __ubuf__ T* outputAddr,
-    const uint16_t coff, const uint16_t r, const uint16_t scLoopCnt, const uint16_t baseD)
+__simd_vf__ void MulReduceSumbase32VFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreAddr, __ubuf__ T* outputAddr,
+    const uint16_t coff, const uint16_t r, const uint16_t scLoopCnt, const uint16_t baseD) 
+{
+    MicroAPI::RegTensor<T> vreg0;
+    MicroAPI::RegTensor<T> vreg1;
+    MicroAPI::RegTensor<T> vregSum;
+    MicroAPI::MaskReg maskHalf = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::VL32>();
+    uint32_t count = baseD;
+    for(uint16_t scLoop = 0; scLoop < scLoopCnt; scLoop++) {
+        MicroAPI::Duplicate(vregSum, 0, maskHalf);
+        for(uint16_t rLoop = 0; rLoop < coff*r; rLoop++) {
+            MicroAPI::LoadAlign(vreg0, kvAddr + rLoop*baseD);
+            MicroAPI::LoadAlign(vreg1, scoreAddr + rLoop*baseD);
+            MicroAPI::Mul(vreg0, vreg0, vreg1, maskHalf);
+            MicroAPI::Add(vregSum, vregSum, vreg0, maskHalf);
+        }
+        MicroAPI::StoreAlign(outputAddr + scLoop*baseD, vregSum, maskHalf);
+    }
+}
+
+template<typename T>
+__simd_vf__ void MulReduceSumbase64VFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreAddr, __ubuf__ T* outputAddr,
+    const uint16_t coff, const uint16_t r, const uint16_t scLoopCnt, const uint16_t baseD) 
 {
     MicroAPI::RegTensor<T> vreg0;
     MicroAPI::RegTensor<T> vreg1;
@@ -45,37 +67,36 @@ __simd_vf__ void MulReduceSumbaseOneVFImpl(__ubuf__ T* kvAddr, __ubuf__ T* score
     }
 }
 
-/*同时处理2个sc，单寄存器存2个sc某行的元素
-
-  scLoopCnt —— sc需要循环的次数
-  scLoopLeft —— 循环后遗留的尾块
-  loadAlignParam0、loadAlignParam1
-*/
 template<typename T>
-__simd_vf__ void MulReduceSumbaseTwoVFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreAddr, __ubuf__ T* outputAddr,
-    const uint16_t coff, const uint16_t r, const uint16_t scLoopCnt, const uint16_t baseD)
+__simd_vf__ void MulReduceSumbase128VFImpl(__ubuf__ T* kvAddr, __ubuf__ T* scoreAddr, __ubuf__ T* outputAddr,
+    const uint16_t coff, const uint16_t r, const uint16_t scLoopCnt, const uint16_t baseD) 
 {
-    MicroAPI::RegTensor<T> vreg0;
-    MicroAPI::RegTensor<T> vreg1;
-    MicroAPI::RegTensor<T> vregSum;
-    MicroAPI::RegTensor<T> vregRHalfSum;
+    MicroAPI::RegTensor<T> vreg00;
+    MicroAPI::RegTensor<T> vreg01;
+    MicroAPI::RegTensor<T> vreg10;
+    MicroAPI::RegTensor<T> vreg11;
+    MicroAPI::RegTensor<T> vregMul0;
+    MicroAPI::RegTensor<T> vregMul1;
+    MicroAPI::RegTensor<T> vregSum0;
+    MicroAPI::RegTensor<T> vregSum1;
     MicroAPI::MaskReg mask = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::ALL>();
-    MicroAPI::MaskReg maskLHalf = MicroAPI::CreateMask<T, MicroAPI::MaskPattern::VL32>();
-    MicroAPI::MaskReg maskRHalf;
-    MicroAPI::Not(maskRHalf, maskLHalf, mask);
-    uint32_t count = baseD;
+    uint32_t offset = 0;
     for(uint32_t scLoop = 0; scLoop < scLoopCnt; scLoop++) {
-        MicroAPI::Duplicate(vregSum, 0, mask);
-        MicroAPI::Duplicate(vregRHalfSum, 0, mask);
-        for(uint32_t rLoop = 0; rLoop < coff * r / 2; rLoop++) {
-            MicroAPI::LoadAlign(vreg0, kvAddr + rLoop*2*baseD);
-            MicroAPI::LoadAlign(vreg1, scoreAddr + rLoop*2*baseD);
-            MicroAPI::Mul(vreg0, vreg0, vreg1, mask);
-            MicroAPI::Add(vregSum, vregSum, vreg0, mask);
+        MicroAPI::Duplicate(vregSum0, 0, mask);
+        MicroAPI::Duplicate(vregSum1, 0, mask);
+        for(uint32_t rLoop = 0; rLoop < coff * r; rLoop++) {
+            MicroAPI::LoadAlign(vreg00, kvAddr + offset);
+            MicroAPI::LoadAlign(vreg01, kvAddr + offset + baseD64);
+            MicroAPI::LoadAlign(vreg10, scoreAddr + offset);
+            MicroAPI::LoadAlign(vreg11, scoreAddr + offset + baseD64);
+            MicroAPI::Mul(vregMul0, vreg00, vreg10, mask);
+            MicroAPI::Mul(vregMul1, vreg01, vreg11, mask);
+            MicroAPI::Add(vregSum0, vregSum0, vregMul0, mask);
+            MicroAPI::Add(vregSum1, vregSum1, vregMul1, mask);
+            offset += baseD;
         }
-        MicroAPI::Add(vregRHalfSum, vregRHalfSum, vregSum, maskRHalf);
-        MicroAPI::Add(vregSum, vregSum, vregRHalfSum, maskLHalf);
-        MicroAPI::StoreAlign(outputAddr + scLoop*baseD, vregSum, maskLHalf);
+        MicroAPI::StoreAlign(outputAddr + scLoop*baseD, vregSum0, mask);
+        MicroAPI::StoreAlign(outputAddr + baseD64 + scLoop*baseD, vregSum1, mask);
     }
 }
 
@@ -91,20 +112,19 @@ __simd_vf__ void MulReduceSumbaseTwoVFImpl(__ubuf__ T* kvAddr, __ubuf__ T* score
 
 template<typename T>
 __aicore__ inline void MulReduceSumbaseVF(LocalTensor<T> &kvLocal, LocalTensor<T> &scoreLocal, LocalTensor<T> &outputLocal,
-    const uint16_t coff, const uint16_t r, uint32_t outIdx, const uint16_t baseD, const uint32_t baseS)
+    const uint16_t coff, const uint16_t r, uint32_t outIdx, const uint16_t baseD, const uint32_t baseS) 
 {
-    uint32_t scLoopNum = (baseD == FLOAT_REP_SIZE)? 1:2;
-    uint32_t scNum = baseS / r;
-    uint32_t scLoopCnt = scNum / scLoopNum;
-    uint32_t scLoopLeft = scNum - scLoopCnt * scLoopNum;
+    uint32_t scLoopCnt = baseS / r;
 
     __ubuf__ T * kvAddr = (__ubuf__ T *)kvLocal.GetPhyAddr();
     __ubuf__ T * scoreAddr = (__ubuf__ T *)scoreLocal.GetPhyAddr();
     __ubuf__ T * outputAddr = (__ubuf__ T *)outputLocal.GetPhyAddr()+outIdx;
-    if(scLoopNum ==1) {
-        MulReduceSumbaseOneVFImpl(kvAddr, scoreAddr, outputAddr, coff, r, scLoopCnt, baseD);
-    } else if(scLoopNum == 2) {
-        MulReduceSumbaseTwoVFImpl(kvAddr, scoreAddr, outputAddr, coff, r, scLoopCnt, baseD);
+    if(baseD == baseD32) {
+        MulReduceSumbase32VFImpl(kvAddr, scoreAddr, outputAddr, coff, r, scLoopCnt, baseD);
+    } else if(baseD == baseD64) {
+        MulReduceSumbase64VFImpl(kvAddr, scoreAddr, outputAddr, coff, r, scLoopCnt, baseD);
+    } else if(baseD == baseD128) {
+        MulReduceSumbase128VFImpl(kvAddr, scoreAddr, outputAddr, coff, r, scLoopCnt, baseD);
     }
 }
 

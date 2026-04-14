@@ -19,7 +19,6 @@ extern "C" {
 
 /* funtion: aclnnQuantLightningIndexerMetadataGetWorkspaceSize
  * parameters :
- * query : required
  * actualSeqLengthsQuery : optional
  * actualSeqLengthsKey : optional
  * numHeadsQ : required
@@ -57,7 +56,6 @@ aclnnQuantLightningIndexerMetadataGetWorkspaceSize(
     char* layoutKeyOptional,
     int64_t sparseCountOptional,
     int64_t sparseModeOptional,
-    bool isFdOptional,
     int64_t preTokensOptional,
     int64_t nextTokensOptional,
     int64_t cmpRatioOptional,

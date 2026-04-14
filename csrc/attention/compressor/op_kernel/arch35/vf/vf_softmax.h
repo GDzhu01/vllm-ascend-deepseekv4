@@ -88,7 +88,7 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
     MaskReg preg_all;
     MaskReg preg_136;
     preg_all = CreateMask<T, MaskPattern::ALL>();
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1,
         src0_2, src1_2, src2_2, src3_2, src0_3, src1_3, src2_3, src3_3;
@@ -122,11 +122,6 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
     __ubuf__ float *x_softmax_3_0 = x_softmax + (ReduceSize * RowSize * 3);
     __ubuf__ float *x_softmax_3_1 = x_softmax + (ReduceSize * RowSize * 3) + RowSize / 2;
 
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0_0, minValue);
         Duplicate(max1_0, minValue);
@@ -228,7 +223,7 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
             LoadAlign(vreg_x_f32_3_1, src_ub3_1 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
             LoadAlign(vreg_x_f32_3_2, src_ub3_2 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
             LoadAlign(vreg_x_f32_3_3, src_ub3_3 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
-
+            
             FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_1, preg_all);
             FusedExpSub(vreg_x_exp_0_2, vreg_x_f32_0_2, max0_0, preg_all);
@@ -245,7 +240,7 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
             FusedExpSub(vreg_x_exp_3_1, vreg_x_f32_3_1, max3_1, preg_all);
             FusedExpSub(vreg_x_exp_3_2, vreg_x_f32_3_2, max3_0, preg_all);
             FusedExpSub(vreg_x_exp_3_3, vreg_x_f32_3_3, max3_1, preg_all);
-
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
             Add(vreg_x_sum_0_2, vreg_x_exp_0_2, vreg_x_sum_0_2, preg_all);
@@ -323,7 +318,7 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
             Div(vreg_x_softmax_2_0, vreg_x_exp_2_0, vreg_x_sum_2_0, preg_all);
             Div(vreg_x_softmax_2_1, vreg_x_exp_2_1, vreg_x_sum_2_1, preg_all);
             Div(vreg_x_softmax_3_0, vreg_x_exp_3_0, vreg_x_sum_3_0, preg_all);
-            Div(vreg_x_softmax_3_1, vreg_x_exp_3_1, vreg_x_sum_3_1, preg_all);
+            Div(vreg_x_softmax_3_1, vreg_x_exp_3_1, vreg_x_sum_3_1, preg_all); 
 
             StoreAlign<T, MicroAPI::StoreDist::DIST_NORM>(((__ubuf__ T *&)x_softmax_0_0 + iter_m * RowSize + ReduceSize * RowSize * iter_sc * 4),
                 vreg_x_softmax_0_0, preg_all);
@@ -373,12 +368,12 @@ __simd_vf__ inline void SoftmaxDndBase128(__ubuf__ T *x_softmax, __ubuf__ float 
             LoadAlign(vreg_x_f32_0_1, src_ub0_1 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
             LoadAlign(vreg_x_f32_0_2, src_ub0_2 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
             LoadAlign(vreg_x_f32_0_3, src_ub0_3 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
-
+            
             FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_1, preg_all);
             FusedExpSub(vreg_x_exp_0_2, vreg_x_f32_0_2, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_0_3, vreg_x_f32_0_3, max0_1, preg_all);
-
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
             Add(vreg_x_sum_0_2, vreg_x_exp_0_2, vreg_x_sum_0_2, preg_all);
@@ -451,7 +446,7 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
     MaskReg preg_all;
     MaskReg preg_136;
     preg_all = CreateMask<T, MaskPattern::ALL>();
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1;
     RegTensor<float> max0_0, max1_0, max2_0, max3_0, max0_1, max1_1, max2_1, max3_1;
@@ -471,11 +466,6 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
     __ubuf__ float *x_softmax_2 = x_softmax + (ReduceSize * RowSize * 2);
     __ubuf__ float *x_softmax_3 = x_softmax + (ReduceSize * RowSize * 3);
 
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0_0, minValue);
         Duplicate(max1_0, minValue);
@@ -533,7 +523,7 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
 
             LoadAlign(vreg_x_f32_3_0, src_ub3_0 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
             LoadAlign(vreg_x_f32_3_1, src_ub3_1 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
-
+            
             FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_1_0, vreg_x_f32_1_0, max1_0, preg_all);
@@ -542,7 +532,7 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
             FusedExpSub(vreg_x_exp_2_1, vreg_x_f32_2_1, max2_0, preg_all);
             FusedExpSub(vreg_x_exp_3_0, vreg_x_f32_3_0, max3_0, preg_all);
             FusedExpSub(vreg_x_exp_3_1, vreg_x_f32_3_1, max3_0, preg_all);
-
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
             Add(vreg_x_sum_1_0, vreg_x_exp_1_0, vreg_x_sum_1_0, preg_all);
@@ -584,7 +574,7 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
             Div(vreg_x_softmax_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Div(vreg_x_softmax_1, vreg_x_exp_1_0, vreg_x_sum_1_0, preg_all);
             Div(vreg_x_softmax_2, vreg_x_exp_2_0, vreg_x_sum_2_0, preg_all);
-            Div(vreg_x_softmax_3, vreg_x_exp_3_0, vreg_x_sum_3_0, preg_all);
+            Div(vreg_x_softmax_3, vreg_x_exp_3_0, vreg_x_sum_3_0, preg_all); 
 
             StoreAlign<T, MicroAPI::StoreDist::DIST_NORM>(((__ubuf__ T *&)x_softmax_0 + iter_m * RowSize + ReduceSize * RowSize * iter_sc * 4),
                 vreg_x_softmax_0, preg_all);
@@ -615,10 +605,10 @@ __simd_vf__ inline void SoftmaxDndBase64(__ubuf__ T *x_softmax, __ubuf__ float *
         for (uint16_t iter_m = 0; iter_m < ReduceSize / 2; ++iter_m) {
             LoadAlign(vreg_x_f32_0_0, src_ub0_0 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
             LoadAlign(vreg_x_f32_0_1, src_ub0_1 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
-
+            
             FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
             FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_0, preg_all);
-
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
 
@@ -684,7 +674,7 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
     preg_all = CreateMask<T, MaskPattern::ALL>();
     preg_LHalf = CreateMask<T, MaskPattern::VL32>();
     Not(preg_HHalf, preg_LHalf, preg_all);
-    uint32_t sreg_92 = (uint32_t)128ULL;
+    uint32_t sreg_92 = static_cast<uint32_t>(128ULL);
     preg_136 = UpdateMask<uint16_t>(sreg_92);
     RegTensor<float> max0, max1, max2, max3;
     RegTensor<float> src0_0, src1_0, src2_0, src3_0, src0_1, src1_1, src2_1, src3_1;
@@ -705,11 +695,6 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
     __ubuf__ float *x_softmax_2 = x_softmax + (ReduceSize * RowSize * 2);
     __ubuf__ float *x_softmax_3 = x_softmax + (ReduceSize * RowSize * 3);
 
-    // for (uint16_t i = originN; i < ubN; ++i) {
-    //     StoreAlign<T, MicroAPI::StoreDist::DIST_NORM_B32>(
-    //         (__ubuf__ T *&)input_x_local_UB + i * m, vreg_min, preg_135);
-    // }
-    // mem_bar(VST_VLD);
     for (uint16_t iter_sc = 0; iter_sc < uint16_t(vScRealSize / 4); ++iter_sc) {
         Duplicate(max0, minValue);
         Duplicate(max1, minValue);
@@ -787,16 +772,16 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
 
             LoadAlign(vreg_x_f32_3_0, src_ub3_0 + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
             LoadAlign(vreg_x_f32_3_1, (src_ub3_0 + RowSize) + iter_m * RowSize * 2 + ReduceSize * RowSize * iter_sc * 4);
-
-            FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
-            FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_0, preg_all);
-            FusedExpSub(vreg_x_exp_1_0, vreg_x_f32_1_0, max1_0, preg_all);
-            FusedExpSub(vreg_x_exp_1_1, vreg_x_f32_1_1, max1_0, preg_all);
-            FusedExpSub(vreg_x_exp_2_0, vreg_x_f32_2_0, max2_0, preg_all);
-            FusedExpSub(vreg_x_exp_2_1, vreg_x_f32_2_1, max2_0, preg_all);
-            FusedExpSub(vreg_x_exp_3_0, vreg_x_f32_3_0, max3_0, preg_all);
-            FusedExpSub(vreg_x_exp_3_1, vreg_x_f32_3_1, max3_0, preg_all);
-
+            
+            FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0, preg_all);
+            FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0, preg_all);
+            FusedExpSub(vreg_x_exp_1_0, vreg_x_f32_1_0, max1, preg_all);
+            FusedExpSub(vreg_x_exp_1_1, vreg_x_f32_1_1, max1, preg_all);
+            FusedExpSub(vreg_x_exp_2_0, vreg_x_f32_2_0, max2, preg_all);
+            FusedExpSub(vreg_x_exp_2_1, vreg_x_f32_2_1, max2, preg_all);
+            FusedExpSub(vreg_x_exp_3_0, vreg_x_f32_3_0, max3, preg_all);
+            FusedExpSub(vreg_x_exp_3_1, vreg_x_f32_3_1, max3, preg_all);
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
             Add(vreg_x_sum_1_0, vreg_x_exp_1_0, vreg_x_sum_1_0, preg_all);
@@ -838,7 +823,7 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
             Div(vreg_x_softmax_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Div(vreg_x_softmax_1, vreg_x_exp_1_0, vreg_x_sum_1_0, preg_all);
             Div(vreg_x_softmax_2, vreg_x_exp_2_0, vreg_x_sum_2_0, preg_all);
-            Div(vreg_x_softmax_3, vreg_x_exp_3_0, vreg_x_sum_3_0, preg_all);
+            Div(vreg_x_softmax_3, vreg_x_exp_3_0, vreg_x_sum_3_0, preg_all); 
 
             StoreAlign<T, MicroAPI::StoreDist::DIST_NORM>(((__ubuf__ T *&)x_softmax_0 + iter_m * RowSize + ReduceSize * RowSize * iter_sc * 4),
                 vreg_x_softmax_0, preg_all);
@@ -874,10 +859,10 @@ __simd_vf__ inline void SoftmaxDndBase32(__ubuf__ T *x_softmax, __ubuf__ float *
         for (uint16_t iter_m = 0; iter_m < uint16_t(ReduceSize / 2); ++iter_m) {
             LoadAlign(vreg_x_f32_0_0, src_ub0_0 + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
             LoadAlign(vreg_x_f32_0_1, (src_ub0_0 + RowSize) + iter_m * RowSize * 2 + ReduceSize * RowSize * (iter_sc + vScRealSize / 4 * 4));
-
-            FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0_0, preg_all);
-            FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0_0, preg_all);
-
+            
+            FusedExpSub(vreg_x_exp_0_0, vreg_x_f32_0_0, max0, preg_all);
+            FusedExpSub(vreg_x_exp_0_1, vreg_x_f32_0_1, max0, preg_all);
+            
             Add(vreg_x_sum_0_0, vreg_x_exp_0_0, vreg_x_sum_0_0, preg_all);
             Add(vreg_x_sum_0_1, vreg_x_exp_0_1, vreg_x_sum_0_1, preg_all);
 

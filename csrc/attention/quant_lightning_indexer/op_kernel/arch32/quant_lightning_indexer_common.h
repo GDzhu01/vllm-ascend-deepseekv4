@@ -108,22 +108,20 @@ struct ConstInfo {
     uint32_t actualLenDims = 0U;   // KV 的actualSeqLength 的维度
     bool isAccumSeqS1 = false;     // 是否累加模式
     bool isAccumSeqS2 = false;     // 是否累加模式
-};
 
-struct SplitCoreInfo {
-    uint32_t s2Start = 0U;  // S2的起始位置
-    uint32_t s2End = 0U;    // S2循环index上限
+    uint32_t s2Start = 0U;
+    uint32_t s2End = 0U;
     uint32_t bN2Start = 0U;
     uint32_t bN2End = 0U;
     uint32_t gS1Start = 0U;
     uint32_t gS1End = 0U;
-    bool isLD = false;  // 当前核是否需要进行Decode归约任务
+    uint32_t coreEnable = 0U;
 };
 
-template <typename T>
-__aicore__ inline T Align(T num, T rnd)
+template <typename T1, typename T2>
+__aicore__ inline T1 Align(T1 num, T2 rnd)
 {
-    return (((rnd) == 0) ? 0 : (((num) + (rnd)-1) / (rnd) * (rnd)));
+    return (((rnd) == 0) ? 0 : (((num) + (rnd) - 1) / (rnd) * (rnd)));
 }
 
 template <typename T1, typename T2>

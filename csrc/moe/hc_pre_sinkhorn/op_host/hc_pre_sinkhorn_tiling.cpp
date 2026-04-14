@@ -119,7 +119,7 @@ ge::graphStatus HcPreSinkhornTiling::GetShapeAttrsInfoInner()
 }
 
 
-ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
+ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling() 
 {
     rowOfFormerBlock_ = CeilDiv(bs_, static_cast<int64_t>(coreNum_));
     usedCoreNums_ = std::min(CeilDiv(bs_, rowOfFormerBlock_), static_cast<int64_t>(coreNum_));
@@ -129,9 +129,9 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     int64_t rowOnceLoop = std::min(rowOfFormerBlock_, minRowPerCore);
 
     hcMultAlign_ = RoundUp(hcMult_, BLOCK_SIZE / sizeof(float));
-    int64_t mix0Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-    int64_t mix1Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-    int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
+    int64_t mix0Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;     
+    int64_t mix1Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
+    int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
     int64_t rsqrtSize = RoundUp(rowOnceLoop, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
     int64_t xSize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
     int64_t ySize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
@@ -141,16 +141,16 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     int64_t base1Size = hcMultAlign_ * sizeof(float);
     int64_t base2Size = hcMult_ * hcMultAlign_ * sizeof(float);
 
-    int64_t totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize +
+    int64_t totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize + 
                         base0Size + base1Size + base2Size;
-    rowFactor_ = rowOnceLoop;
+    rowFactor_ = rowOnceLoop; 
     if (totalSize <= ubSize_) {
         // row和d均可以在ub内全载
         dLoop_ = 1;
         dFactor_ = d_;
         tailDFactor_ = dFactor_;
     } else {
-        int64_t usedUbSize = mix0Size + mix1Size + mix2Size + rsqrtSize + postSize + combFragSize +
+        int64_t usedUbSize = mix0Size + mix1Size + mix2Size + rsqrtSize + postSize + combFragSize + 
                              base0Size + base1Size + base2Size;
         int64_t ubRemain = ubSize_ - usedUbSize;
         dFactor_ = d_;
@@ -175,15 +175,15 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     // d全载,尝试搬入更多的bs
     if (dFactor_ == d_) {
         while (rowFactor_ <= rowOfFormerBlock_) {
-            mix0Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-            mix1Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-            mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
+            mix0Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;     
+            mix1Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
+            mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
             rsqrtSize = RoundUp(rowFactor_, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
             xSize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
             ySize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
             postSize = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
             combFragSize = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-            totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize +
+            totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize + 
                                 base0Size + base1Size + base2Size;
             if (totalSize > ubSize_) {
                 rowFactor_ = rowFactor_ - 1;
@@ -196,7 +196,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     rowLoopOfFormerBlock_ = CeilDiv(rowOfFormerBlock_, rowFactor_);
     rowLoopOfTailBlock_ = CeilDiv(rowOfTailBlock_, rowFactor_);
     tailRowFactorOfFormerBlock_ = rowOfFormerBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfFormerBlock_ % rowFactor_;
-    tailRowFactorOfTailBlock_ = rowOfTailBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfTailBlock_ % rowFactor_;
+    tailRowFactorOfTailBlock_ = rowOfTailBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfTailBlock_ % rowFactor_;  
 
     tilingData_.set_bs(bs_);
     tilingData_.set_hcMix(hcMix_);
@@ -218,7 +218,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
+ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling() 
 {
     rowOfFormerBlock_ = CeilDiv(bs_, static_cast<int64_t>(coreNum_));
     usedCoreNums_ = std::min(CeilDiv(bs_, rowOfFormerBlock_), static_cast<int64_t>(coreNum_));
@@ -228,9 +228,9 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
     int64_t rowOnceLoop = std::min(rowOfFormerBlock_, minRowPerCore);
 
     hcMultAlign_ = RoundUp(hcMult_, BLOCK_SIZE / sizeof(float));
-    int64_t mix0Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-    int64_t mix1Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-    int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
+    int64_t mix0Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;     
+    int64_t mix1Size = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
+    int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
     int64_t rsqrtSize = RoundUp(rowOnceLoop, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
     int64_t xSize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
     int64_t ySize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
@@ -245,16 +245,16 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
     int64_t hcBrcb1Size = RoundUp(rowOnceLoop * hcMultAlign_, 8) * BLOCK_SIZE;
     int64_t reduceBufSize = rowOnceLoop * hcMultAlign_ * sizeof(float);
 
-    int64_t totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize +
+    int64_t totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize + 
                         base0Size + base1Size + base2Size + xCastSize + yCastSize + rowBrcb0Size + hcBrcb1Size + reduceBufSize;
-    rowFactor_ = rowOnceLoop;
+    rowFactor_ = rowOnceLoop; 
     if (totalSize <= ubSize_) {
         // row和d均可以在ub内全载
         dLoop_ = 1;
         dFactor_ = d_;
         tailDFactor_ = dFactor_;
     } else {
-        int64_t usedUbSize = mix0Size + mix1Size + mix2Size + rsqrtSize + postSize + combFragSize +
+        int64_t usedUbSize = mix0Size + mix1Size + mix2Size + rsqrtSize + postSize + combFragSize + 
                              base0Size + base1Size + base2Size + rowBrcb0Size + hcBrcb1Size + reduceBufSize;
         int64_t ubRemain = ubSize_ - usedUbSize;
         dFactor_ = d_;
@@ -281,9 +281,9 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
     // d全载,尝试搬入更多的bs
     if (dFactor_ == d_) {
         while (rowFactor_ <= rowOfFormerBlock_) {
-            mix0Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-            mix1Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
-            mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
+            mix0Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;     
+            mix1Size = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
+            mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
             rsqrtSize = RoundUp(rowFactor_, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
             xSize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
             ySize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
@@ -294,7 +294,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
             rowBrcb0Size = RoundUp(rowFactor_, 8) * BLOCK_SIZE;
             hcBrcb1Size = RoundUp(rowFactor_ * hcMultAlign_, 8) * BLOCK_SIZE;
             reduceBufSize = rowFactor_ * hcMultAlign_ * sizeof(float);
-            totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize +
+            totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize + 
                                 base0Size + base1Size + base2Size + xCastSize + yCastSize + rowBrcb0Size + hcBrcb1Size + reduceBufSize;;
             if (totalSize > ubSize_) {
                 rowFactor_ = rowFactor_ - 1;
@@ -307,7 +307,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
     rowLoopOfFormerBlock_ = CeilDiv(rowOfFormerBlock_, rowFactor_);
     rowLoopOfTailBlock_ = CeilDiv(rowOfTailBlock_, rowFactor_);
     tailRowFactorOfFormerBlock_ = rowOfFormerBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfFormerBlock_ % rowFactor_;
-    tailRowFactorOfTailBlock_ = rowOfTailBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfTailBlock_ % rowFactor_;
+    tailRowFactorOfTailBlock_ = rowOfTailBlock_ % rowFactor_ == 0 ? rowFactor_ : rowOfTailBlock_ % rowFactor_;  
 
     tilingData_.set_bs(bs_);
     tilingData_.set_hcMix(hcMix_);

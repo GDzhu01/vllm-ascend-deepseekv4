@@ -129,7 +129,7 @@ ge::graphStatus RopeRegBaseTilingClassAAndB::DoOpTiling()
                 return ge::GRAPH_FAILED);
     OPS_ERR_IF(ComputeUbFactor() != ge::GRAPH_SUCCESS,
                 OPS_LOG_E(context_->GetNodeName(), "failed to compute ub factor."), return ge::GRAPH_FAILED);
-    return ge::GRAPH_SUCCESS;
+    return ge::GRAPH_SUCCESS;    
 }
 
 ge::graphStatus RopeRegBaseTilingClassAAndB::DoLibApiTiling()
