@@ -42,7 +42,7 @@ on:
         description: used for pr level tests
       vllm_ascend_ref:
         required: false
-        default: main
+        default: releases/v0.18.0
         type: string
         description: used for pr level tests
       should_run:
@@ -97,7 +97,8 @@ jobs:
 
         - name: Set PTA from file
           run: |
-            TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+            # shellcheck disable=SC2002
+            TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
             TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
             git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
             git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
@@ -111,7 +112,7 @@ jobs:
             # Strip .yaml extension, lowercase, replace dots/underscores with hyphens, cap at 50 chars.
             config_file="${{ inputs.config_file_path }}"
             lws_suffix=$(echo "$config_file" | sed 's/\.yaml$//' | tr '[:upper:]' '[:lower:]' | tr '._' '-' | cut -c1-50)
-            LWS_NAME="vllm-${lws_suffix}"
+            LWS_NAME="private-vllm-${lws_suffix}"
             echo "LWS_NAME=${LWS_NAME}" >> $GITHUB_ENV
             echo "LEADER_POD=${LWS_NAME}-0" >> $GITHUB_ENV
             echo "Computed LWS_NAME=${LWS_NAME}"

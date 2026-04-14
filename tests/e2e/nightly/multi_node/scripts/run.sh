@@ -104,7 +104,7 @@ check_npu_info() {
 
 check_and_config() {
     echo "====> Configure mirrors and git proxy"
-    git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+    git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf "https://github.com/"
     pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
     export PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi
 }
@@ -114,22 +114,21 @@ checkout_src() {
     mkdir -p "$WORKSPACE"
     cd "$WORKSPACE"
     pip uninstall -y vllm-ascend || true
-    cp -r "$WORKSPACE/vllm-ascend/benchmark" /tmp/aisbench-backup || true
-    rm -rf "$WORKSPACE/vllm-ascend"
 
-    if [ ! -d "$WORKSPACE/vllm-ascend" ]; then
-        echo "Cloning vllm-ascend from $VLLM_ASCEND_REMOTE_URL"
-        git clone --depth 1 "$VLLM_ASCEND_REMOTE_URL" "$WORKSPACE/vllm-ascend"
-        cd "$WORKSPACE/vllm-ascend"
-        PR_REF=$(git ls-remote origin 'refs/pull/*/head' | grep "^${VLLM_ASCEND_REF}" | awk '{print $2}' | head -1)
-        if [ -n "$PR_REF" ]; then
-            git fetch --depth 1 origin "$PR_REF"
-            git checkout FETCH_HEAD
-        else
-            git fetch origin '+refs/pull/*/head:refs/remotes/pull/*' 2>/dev/null || true
-            git checkout "$VLLM_ASCEND_REF"
-        fi
+    TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+    TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+    git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+
+    # When IS_PR_TEST is true, VLLM_ASCEND_REF is a PR number; otherwise it is a branch/tag name.
+    cd "$WORKSPACE/vllm-ascend"
+    git clean -fd csrc/**
+    git remote add dpsk_v4 https://github.com/GDzhu01/vllm-ascend-deepseekv4.git
+    if [[ "$IS_PR_TEST" == "true" ]]; then
+        git fetch --depth 1 dpsk_v4 "refs/pull/${VLLM_ASCEND_REF}/head"
+    else
+        git fetch --depth 1 dpsk_v4 "$VLLM_ASCEND_REF"
     fi
+    git checkout FETCH_HEAD
 
 }
 
@@ -188,11 +187,8 @@ If this is insufficient to pinpoint the error, please download and review the lo
 main() {
     check_npu_info
     check_and_config
-    if [[ "$IS_PR_TEST" == "true" ]]; then
-        checkout_src
-        install_vllm
-        install_aisbench
-    fi
+    checkout_src
+    install_vllm
     show_vllm_info
     show_triton_ascend_info
     cd "$WORKSPACE/vllm-ascend"

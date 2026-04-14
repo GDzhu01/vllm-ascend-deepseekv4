@@ -21,9 +21,9 @@
 name: Nightly Image Build Schedule
 
 on:
-  schedule:
-      # Run test at 00:00 Beijing time (UTC+8)
-      - cron: "00 16 * * *"
+  # schedule:
+  #     # Run test at 00:00 Beijing time (UTC+8)
+  #     - cron: "00 16 * * *"
   workflow_dispatch:
     # Next step: Add more inputs here if needed, e.g. vllm version, vllm-ascend version, image tag, etc.
 

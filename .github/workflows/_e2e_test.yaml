@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       contains_310:
-        required: true
+        required: false
         type: boolean
       continue_on_error:
         required: false
@@ -42,6 +42,14 @@ jobs:
         VLLM_USE_MODELSCOPE: True
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -79,13 +87,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -155,6 +156,14 @@ jobs:
         HF_HUB_OFFLINE: 1
         MODELSCOPE_HUB_FILE_LOCK: False
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
 
@@ -170,7 +179,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -194,13 +202,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -268,6 +269,14 @@ jobs:
         HCCL_BUFFSIZE: 1024
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -282,7 +291,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -306,13 +314,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -380,6 +381,14 @@ jobs:
         HCCL_BUFFSIZE: 1024
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -418,13 +427,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -511,6 +513,14 @@ jobs:
         VLLM_USE_MODELSCOPE: True
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -549,13 +559,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -632,6 +635,14 @@ jobs:
           apt install git -y
           git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
 
@@ -654,13 +665,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:
@@ -716,6 +720,14 @@ jobs:
           apt install git -y
           git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
 
@@ -738,13 +750,6 @@ jobs:
         run: |
           VLLM_TARGET_DEVICE=empty uv pip install -e .
           uv pip uninstall triton
-
-      - name: Set PTA from file
-        run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Install vllm-project/vllm-ascend
         env:

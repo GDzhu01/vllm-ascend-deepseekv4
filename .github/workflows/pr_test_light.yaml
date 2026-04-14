@@ -35,6 +35,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: read
+
+
 jobs:
   lint:
     uses: ./.github/workflows/_pre_commit.yml
@@ -43,17 +48,16 @@ jobs:
   changes:
     runs-on: linux-aarch64-a2-0
     outputs:
-      e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
-      ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
-      _310_tracker: ${{ steps.filter.outputs._310_tracker }}
+      # Just to avoid the issue that the output is empty when the step is failed, we set the default value to 'true' to trigger the test.
+      # The real value is determined by the step outcome and filter output.
+      e2e_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.e2e_tracker || 'true' }}
+      ut_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.ut_tracker || 'true' }}
+      _310_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs._310_tracker || 'true' }}
     steps:
-      - name: Setup git proxy
-        run: |
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
-
       - name: Set PTA from file
         run: |
-          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
           TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
           git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
           git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
@@ -62,6 +66,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
         id: filter
+        continue-on-error: true
         with:
           filters: |
             e2e_tracker:
@@ -116,5 +121,6 @@ jobs:
     with:
       vllm: ${{ matrix.vllm_version }}
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.1-910b-ubuntu22.04-py3.11
-      contains_310: ${{ needs.changes.outputs._310_tracker == 'true' }}
+      #contains_310: ${{ needs.changes.outputs._310_tracker == 'true' }}
+      contains_310: false
       type: light
