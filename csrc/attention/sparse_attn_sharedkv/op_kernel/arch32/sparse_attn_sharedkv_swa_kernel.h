@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -62,7 +62,6 @@ struct SwaTempLoopInfo {
 
     uint64_t actualSeqQPrefixSum = 0;
     uint64_t actualSeqKVPrefixSum = 0;
-    uint64_t actualSeqCmpKVPrefixSum = 0;
 };
 
 template <typename SAST>
@@ -80,12 +79,12 @@ public:
 
     __aicore__ inline SparseAttnSharedkvSwa(){};
     __aicore__ inline void Init(__gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
-                                __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
-                                __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t* cuSeqlensKV, __gm__ uint8_t *cuSeqlensCmpKV,
-                                __gm__ uint8_t *seqUsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
-                                __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace, 
-                                const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe);
+                                __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t *oriBlockTable,
+                                __gm__ uint8_t *cmpBlockTable, __gm__ uint8_t *cuSeqlensQ, __gm__ uint8_t *seqUsedQ,
+                                __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks, __gm__ uint8_t *metadata,
+                                __gm__ uint8_t *attentionOut, __gm__ uint8_t *softmaxLse, __gm__ uint8_t *workspace,
+                                const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling,
+                                TPipe *tPipe);
 
     __aicore__ inline void Process();
 
@@ -126,7 +125,6 @@ private:
     uint64_t s2BatchBaseOffset = 0;
     uint64_t tensorACoreOffset = 0ULL;
     uint64_t tensorBCoreOffset = 0ULL;
-    uint64_t tensorCmpBCoreOffset = 0ULL;
     uint64_t attenOutOffset = 0ULL;
 
     uint32_t tmpBlockIdx = 0U;
@@ -144,13 +142,13 @@ private:
     GlobalTensor<SINKS_T> sinksGm;
 
     GlobalTensor<OUT_T> attentionOutGm;
+    GlobalTensor<T> softmaxLseGm;
 
     GlobalTensor<int32_t> oriBlockTableGm;
     GlobalTensor<int32_t> cmpBlockTableGm;
 
     GlobalTensor<int32_t> actualSeqLengthsQGm;
     GlobalTensor<int32_t> actualSeqLengthsKVGm;
-    GlobalTensor<int32_t> actualSeqLengthsCmpKVGm;
 
     // workspace
     GlobalTensor<MM1_OUT_T> mm1ResGm;
@@ -165,8 +163,6 @@ private:
     __aicore__ inline void InitCalcParamsEach();
     __aicore__ inline void InitBuffers();
     __aicore__ inline void InitActualSeqLen(__gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsKv);
-    __aicore__ inline void InitActualSeqLen(__gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsKV,
-                                            __gm__ uint8_t *actualSeqLengthsCmpKV);
     __aicore__ inline void InitOutputSingleCore();
     // ================================Process functions================================
     __aicore__ inline void ProcessBalance();
@@ -210,13 +206,15 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitTilingData()
     constInfo.oriMaskMode = tilingData->baseParams.oriMaskMode;
     constInfo.oriWinLeft = tilingData->baseParams.oriWinLeft;
     constInfo.oriWinRight = tilingData->baseParams.oriWinRight;
+    constInfo.returnSoftmaxLse = tilingData->baseParams.returnSoftmaxLse;
 
     constInfo.actualLenDimsQ = tilingData->baseParams.actualLenDimsQ;
     constInfo.actualLenDimsKV = tilingData->baseParams.actualLenDimsKV;
 
     // innerSplitParams
-    constInfo.mBaseSize = constInfo.gSize;   // tilingData->baseParams.mBaseSize
+    constInfo.mBaseSize = tilingData->baseParams.mBaseSize;
     constInfo.s2BaseSize = tilingData->baseParams.s2BaseSize;
+    // tilingData->baseParams.s2BaseSize
 
     constInfo.preLoadNum = PRELOAD_NUM;
     constInfo.nBufferMBaseSize = N_BUFFER_M_BASIC_SIZE;
@@ -257,24 +255,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitActualSeqLen(__gm__ uint
 }
 
 template <typename SAST>
-__aicore__ inline void
-SparseAttnSharedkvSwa<SAST>::InitActualSeqLen(__gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsKV,
-                                               __gm__ uint8_t *actualSeqLengthsCmpKV)
-{
-    if (constInfo.actualLenDimsKV != 0) {
-        actualSeqLengthsKVGm.SetGlobalBuffer((__gm__ int32_t *)actualSeqLengthsKV, constInfo.actualLenDimsKV);
-        if (constInfo.templateMode == CFA_TEMPLATE) {
-            actualSeqLengthsCmpKVGm.SetGlobalBuffer((__gm__ int32_t *)actualSeqLengthsCmpKV, constInfo.actualLenDimsKV);
-        } 
-    }
-    if (constInfo.actualLenDimsQ != 0) {
-        actualSeqLengthsQGm.SetGlobalBuffer((__gm__ int32_t *)actualSeqLengthsQ, constInfo.actualLenDimsQ);
-    }
-}
-
-template <typename SAST>
-__aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitAllZeroOutput(uint32_t bIdx, uint32_t s1Idx,
-                                                                                  uint32_t n2Idx)
+__aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitAllZeroOutput(uint32_t bIdx, uint32_t s1Idx, uint32_t n2Idx)
 {
     if (constInfo.outputLayout == SAS_LAYOUT::TND) {
         if (tempLoopInfo.actS1Size == 0) {
@@ -283,12 +264,23 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitAllZeroOutput(uint32_t b
         uint32_t tBase = actualSeqLengthsQGm.GetValue(bIdx);
         uint64_t attenOutOffset = (tBase + s1Idx) * kvHeadNum * constInfo.gSize * headDim + // T轴、s1轴偏移
                                   n2Idx * constInfo.gSize * headDim;                        // N2轴偏移
+        uint64_t lseOffset = (tBase + s1Idx) * constInfo.gSize  + // T轴、s1轴偏移
+                                n2Idx * constInfo.qSeqSize * constInfo.gSize; // N2轴偏移
         matmul::InitOutput<OUT_T>(attentionOutGm[attenOutOffset], constInfo.gSize * headDim, 0);
+        if (constInfo.returnSoftmaxLse) {
+            matmul::InitOutput<T>(softmaxLseGm[lseOffset], constInfo.gSize, 0);
+        }
     } else if (constInfo.outputLayout == SAS_LAYOUT::BSND) {
         uint64_t attenOutOffset = bIdx * constInfo.qSeqSize * kvHeadNum * constInfo.gSize * headDim +
                                   s1Idx * kvHeadNum * constInfo.gSize * headDim + // B轴、S1轴偏移
                                   n2Idx * constInfo.gSize * headDim;              // N2轴偏移
+        uint64_t lseOffset = bIdx * constInfo.qSeqSize * constInfo.kvHeadNum * constInfo.gSize  + // B轴偏移
+                    n2Idx  * constInfo.qSeqSize * constInfo.gSize + // N2轴偏移
+                    s1Idx * constInfo.gSize; // S1轴偏移
         matmul::InitOutput<OUT_T>(attentionOutGm[attenOutOffset], constInfo.gSize * headDim, 0);
+        if (constInfo.returnSoftmaxLse) {
+            matmul::InitOutput<T>(softmaxLseGm[lseOffset], constInfo.gSize, 0);
+        }
     }
 }
 
@@ -329,21 +321,14 @@ __aicore__ inline int32_t SparseAttnSharedkvSwa<SAST>::GetActualSeqLenQ(uint32_t
 template <typename SAST>
 __aicore__ inline int32_t SparseAttnSharedkvSwa<SAST>::GetActualSeqLenKV(uint32_t bIdx)
 {
-    if constexpr (KV_LAYOUT_T == SAS_LAYOUT::TND) {
-        int32_t actualSeqKVPrefixSum = actualSeqLengthsKVGm.GetValue(bIdx);
-        int32_t actualSeqKVNextSum = actualSeqLengthsKVGm.GetValue(bIdx + 1);
-        if (constInfo.templateMode == CFA_TEMPLATE) {
-            tempLoopInfo.actualSeqCmpKVPrefixSum = actualSeqLengthsCmpKVGm.GetValue(bIdx);
-        } 
-        tempLoopInfo.actualSeqKVPrefixSum = actualSeqKVPrefixSum;
-        return actualSeqKVNextSum - actualSeqKVPrefixSum;
-    } else {
+    if constexpr (KV_LAYOUT_T == SAS_LAYOUT::PA_ND) {
         tempLoopInfo.actualSeqKVPrefixSum = static_cast<uint64_t>(bIdx * constInfo.kvSeqSize);
         if (constInfo.actualLenDimsKV == 0) {
             return static_cast<int32_t>(constInfo.kvSeqSize);
-        } else {
-            return actualSeqLengthsKVGm.GetValue(bIdx);
         }
+        return actualSeqLengthsKVGm.GetValue(bIdx);
+    } else if constexpr(KV_LAYOUT_T == SAS_LAYOUT::BSND) {
+        return static_cast<int32_t>(constInfo.kvSeqSize);
     }
 }
 
@@ -379,13 +364,11 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::UpdateInnerLoopCond()
 
 template <typename SAST>
 __aicore__ inline void SparseAttnSharedkvSwa<SAST>::Init(
-                                __gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV,
-                                __gm__ uint8_t *cmpSparseIndices, __gm__ uint8_t* oriBlockTable,
-                                __gm__ uint8_t* cmpBlockTable, __gm__ uint8_t *cuSeqlensQ,
-                                __gm__ uint8_t* cuSeqlensKV, __gm__ uint8_t *cuSeqlensCmpKV,
-                                __gm__ uint8_t *seqUsedQ, __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks,
-                                __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *workspace,
-                                const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling, TPipe *tPipe)
+    __gm__ uint8_t *query, __gm__ uint8_t *oriKV, __gm__ uint8_t *cmpKV, __gm__ uint8_t *cmpSparseIndices,
+    __gm__ uint8_t *oriBlockTable, __gm__ uint8_t *cmpBlockTable, __gm__ uint8_t *cuSeqlensQ, __gm__ uint8_t *seqUsedQ,
+    __gm__ uint8_t *seqUsedKV, __gm__ uint8_t *sinks, __gm__ uint8_t *metadata, __gm__ uint8_t *attentionOut, __gm__ uint8_t *softmaxLse,
+    __gm__ uint8_t *workspace, const SparseAttnSharedkvTilingData *__restrict tiling, __gm__ uint8_t *gmTiling,
+    TPipe *tPipe)
 {
     if ASCEND_IS_AIV {
         tmpBlockIdx = GetBlockIdx(); // vec:0-47
@@ -399,13 +382,9 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::Init(
     tilingData = tiling;
 
     InitTilingData();
-    if (KV_LAYOUT_T == SAS_LAYOUT::TND && LAYOUT_T == SAS_LAYOUT::TND) {
-        InitActualSeqLen(cuSeqlensQ, cuSeqlensKV, cuSeqlensCmpKV);
-    } else if (KV_LAYOUT_T == SAS_LAYOUT::TND) {
-        InitActualSeqLen(seqUsedQ, cuSeqlensKV, cuSeqlensCmpKV);
-    } else if (KV_LAYOUT_T == SAS_LAYOUT::PA_ND && LAYOUT_T == SAS_LAYOUT::TND) {
+    if (LAYOUT_T == SAS_LAYOUT::TND) {
         InitActualSeqLen(cuSeqlensQ, seqUsedKV);
-    } else if (KV_LAYOUT_T == SAS_LAYOUT::PA_ND) {
+    } else {
         InitActualSeqLen(seqUsedQ, seqUsedKV);
     }
     metadataGm.SetGlobalBuffer((__gm__ uint32_t *)metadata);
@@ -424,6 +403,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::Init(
     }
 
     attentionOutGm.SetGlobalBuffer((__gm__ OUT_T *)attentionOut);
+    softmaxLseGm.SetGlobalBuffer((__gm__ T *)softmaxLse);
 
     if ASCEND_IS_AIV {
         if (LAYOUT_T != SAS_LAYOUT::TND) {
@@ -464,7 +444,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::Init(
 
     if ASCEND_IS_AIV {
         vectorBlock.InitParams(constInfo, tilingData);
-        vectorBlock.InitVec1GlobalTensor(mm1ResGm, vec1ResGm, actualSeqLengthsQGm, actualSeqLengthsKVGm, sinksGm);
+        vectorBlock.InitVec1GlobalTensor(mm1ResGm, vec1ResGm, actualSeqLengthsQGm, actualSeqLengthsKVGm, sinksGm, softmaxLseGm);
         vectorBlock.InitVec2GlobalTensor(accumOutGm, vec2ResGm, mm2ResGm, attentionOutGm);
     }
 
@@ -502,7 +482,10 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::CalcParams(uint32_t loop, ui
     info.cmpLoop = cmpLoop;
     info.bIdx = tempLoopInfo.bIdx;
     info.gS1Idx = tempLoopInfo.gS1Idx;
+    info.s1Idx = tempLoopInfo.gS1Idx / constInfo.gSize;
     info.s2Idx = s2LoopIdx;
+    info.n2IdxReal = tempLoopInfo.n2Idx;
+
     info.curSInnerLoopTimes = tempLoopInfo.s2LoopTimes;
     info.tndIsS2SplitCore = tempLoopInfo.tndIsS2SplitCore;
     info.tndCoreStartKVSplitPos = tempLoopInfo.tndCoreStartKVSplitPos;
@@ -531,16 +514,13 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::CalcParams(uint32_t loop, ui
 
     uint64_t tndBIdxOffsetForQ = tempLoopInfo.actualSeqQPrefixSum * constInfo.qHeadNum * constInfo.headDim;
     uint64_t tndBIdxOffsetForKV = tempLoopInfo.actualSeqKVPrefixSum * constInfo.kvHeadNum * constInfo.headDim;
-    uint64_t tndBIdxOffsetForCmpKV = tempLoopInfo.actualSeqCmpKVPrefixSum * constInfo.kvHeadNum * constInfo.headDim;
 
     if (info.isFirstSInnerLoop) {
         tensorACoreOffset = tndBIdxOffsetForQ + info.gS1Idx * constInfo.headDim;
-        tensorBCoreOffset = tndBIdxOffsetForKV + info.n2Idx * constInfo.headDim; 
-        tensorCmpBCoreOffset = tndBIdxOffsetForCmpKV + info.n2Idx * constInfo.headDim;
+        tensorBCoreOffset = tndBIdxOffsetForKV + info.n2Idx * constInfo.headDim; // 当前为PA场景，该变量失效
     }
     info.tensorAOffset = tensorACoreOffset;
-    info.tensorBOffset = tensorBCoreOffset; 
-    info.tensorCmpBOffset = tensorCmpBCoreOffset;
+    info.tensorBOffset = tensorBCoreOffset; // 当前为PA场景，该变量失效
     info.attenOutOffset = tensorACoreOffset;
 
     if (s2LoopIdx < tempLoopInfo.oriLoopTimes) {
@@ -610,7 +590,6 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::Process()
     if (hasLoad == 0) {
         return;
     }
-
     if ASCEND_IS_AIV {
         vectorBlock.AllocEventID();
         vectorBlock.InitSoftmaxDefaultBuffer();
@@ -678,6 +657,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::ProcessBalance()
             GetSparseActualSeqLen();
             UpdateInnerLoopCond();
             uint32_t oriSplitNum = 0;
+            uint32_t s2SplitNum = 0;
             bool isEnd = (bN2LoopIdx + 1 == constInfo.bN2End) && (gS1LoopIdx + 1 == gS1LoopEnd);
             if (tempLoopInfo.curActSeqLenIsZero) {
                 if ASCEND_IS_AIV {
@@ -688,12 +668,12 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::ProcessBalance()
                 }
             } else {
                 oriSplitNum = CeilDiv(tempLoopInfo.oriMaskRight - tempLoopInfo.oriMaskLeft + 1, constInfo.s2BaseSize);
-            }
-            uint32_t s2SplitNum = oriSplitNum;
-            if (constInfo.templateMode == CFA_TEMPLATE) {
-                uint32_t cmpSplitNum = CeilDiv(tempLoopInfo.actCmpS2Size, constInfo.s2BaseSize);
-                s2SplitNum = oriSplitNum + cmpSplitNum;
-                tempLoopInfo.cmpLoopTimes = cmpSplitNum;
+                s2SplitNum = oriSplitNum;
+                if (constInfo.templateMode == CFA_TEMPLATE) {
+                    uint32_t cmpSplitNum = CeilDiv(tempLoopInfo.actCmpS2Size, constInfo.s2BaseSize);
+                    s2SplitNum = oriSplitNum + cmpSplitNum;
+                    tempLoopInfo.cmpLoopTimes = cmpSplitNum;
+                }
             }
             tempLoopInfo.s2LoopTimes = s2SplitNum;
             tempLoopInfo.oriLoopTimes = oriSplitNum;

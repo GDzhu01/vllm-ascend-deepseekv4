@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 
 #include "kernel_operator.h"
 #include "vf_topk.h"
-#include "vf_topk_16.h"
 #include "vf_topk_16_gather.h"
 
 namespace topk {
@@ -64,7 +63,6 @@ public:
         outputValueLocal = nkValueLocal[64];
     }
 
-
     __aicore__ inline void operator()(LocalTensor<uint32_t>& outputIdxLocal,
                                       LocalTensor<uint32_t>& inputLocal,
                                       uint32_t s2SeqLen)
@@ -83,7 +81,6 @@ public:
                           topK,       // topk数量
                           s2SeqLen); // 输入元素总数
     }
-
 private:
     LocalTensor<uint32_t> tmpIdxLocal;     // filter阶段使用暂存index Buf topK * 4B
     LocalTensor<uint32_t> tmpValueLocal;   // filter阶段使用暂存value Buf topK * 4B
@@ -97,16 +94,15 @@ private:
     uint32_t topK;
 };
 
-
 template<>
 class LITopk<uint16_t> {
 public:
     __aicore__ inline uint32_t GetSharedTmpBufferSize()
     {
-        // 2 * topK:两块hisIndexLocal；3 * 256：histogramsLocal idxHighLocal idxLowLocal；64：nkValueLocal
-        uint64_t bufferSize1 = (2 * topK + 3 * 256 + 64)  * sizeof(uint32_t);
-        // topK + trunkLen：tmpIndexLocal
-        uint64_t bufferSize2 = (topK + trunkLen)  * sizeof(uint16_t);
+        // 2 * QLICommon::Align(topK, (uint32_t)256):两块hisIndexLocal；3 * 256：histogramsLocal idxHighLocal idxLowLocal；64：nkValueLocal
+        uint64_t bufferSize1 = (2 * QLICommon::Align(topK, (uint32_t)256) + 3 * 256 + 64)  * sizeof(uint32_t);
+        // QLICommon::Align(topK, (uint32_t)256) + trunkLen：tmpIndexLocal
+        uint64_t bufferSize2 = (QLICommon::Align(topK, (uint32_t)256) + trunkLen)  * sizeof(uint16_t);
         return bufferSize1 + bufferSize2;
     }
 
@@ -119,14 +115,13 @@ public:
     __aicore__ inline void InitBuffers(LocalTensor<uint32_t>& sharedTmpBuffer)
     {
         LocalTensor<uint32_t> hisIndexLocal1 = sharedTmpBuffer[0];
-        LocalTensor<uint32_t> hisIndexLocal2 = hisIndexLocal1[topK];
+        LocalTensor<uint32_t> hisIndexLocal2 = hisIndexLocal1[QLICommon::Align(topK, (uint32_t)256)];
         hisIndexLocal[0] = hisIndexLocal1;
         hisIndexLocal[1] = hisIndexLocal2;
-        histogramsLocal = hisIndexLocal2[topK];
+        histogramsLocal = hisIndexLocal2[QLICommon::Align(topK, (uint32_t)256)];
         idxHighLocal = histogramsLocal[256];
         idxLowLocal = idxHighLocal[256];
         nkValueLocal = idxLowLocal[256];
-
         LocalTensor<uint32_t> tmpIndexLocalTmp = nkValueLocal[64];
         tmpIndexLocal = tmpIndexLocalTmp.template ReinterpretCast<uint16_t>();
     }
@@ -149,12 +144,11 @@ public:
             topkb16gather::LiTopKVF<true>(tmpIndexLocal, hisValueLocal, mrgValueLocal, histogramsLocal, idxHighLocal, idxLowLocal, nkValueLocal, topK, s2SeqLen);
             PipeBarrier<PIPE_V>();
             topkb16gather::LiTopKGatherVF(hisIndexLocal[(loopIdx + 1) % 2], hisValueLocal, mrgValueLocal, tmpIndexLocal, hisIndexLocal[loopIdx % 2], 
-                                    topK, loopIdx * trunkLen - topK, s2SeqLen);
+                                    topK, loopIdx * trunkLen - QLICommon::Align(topK, (uint32_t)256), s2SeqLen);
             if (loopIdx == s2LoopNum - 1) {
                 PipeBarrier<PIPE_V>();
-                AscendC::DataCopy(indicesOutLocal, hisIndexLocal[(loopIdx + 1) % 2], topK);
+                AscendC::DataCopy(indicesOutLocal, hisIndexLocal[(loopIdx + 1) % 2], QLICommon::Align(topK, (uint32_t)256));
             }
-        
         }
     }
 private:
@@ -168,5 +162,4 @@ private:
     uint32_t trunkLen = 16384;
 };
 }
-
 #endif
