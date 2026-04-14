@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -46,6 +46,28 @@ __aicore__ inline T Trunc(T num, T rnd)
     return ((rnd) == 0) ? 0 : (((num) / (rnd) * (rnd)));
 }
 
+template <typename T>
+__aicore__ inline T FloorPow2(T num)
+{
+    if (num == 0) return 1;
+    for(uint32_t i = 1; i < sizeof(T) * 8; i <<= 1) {
+        num |= (num >> i);
+    }
+    return num - (num >> 1);
+}
+
+template <typename T>
+__aicore__ inline T CeilPow2(T num)
+{
+    if (num <= 1) return 1;
+    num --;
+    for(uint32_t i = 1; i < sizeof(T) * 8; i <<= 1) {
+        num |= (num >> i);
+    }
+    num ++;
+    return num;
+}
+
 enum class X_LAYOUT : std::uint8_t {
     BSH = static_cast<std::uint8_t>(0),
     TH = static_cast<std::uint8_t>(1)
@@ -64,6 +86,11 @@ enum class COFF : std::uint8_t {
 enum class ROTARY_MODE : std::uint8_t {
     HALF = static_cast<std::uint8_t>(1),
     INTERLEAVE = static_cast<std::uint8_t>(2)
+};
+
+enum class CACHE_MODE : std::uint8_t {
+    CONTINUOUS = static_cast<std::uint8_t>(1),
+    CYCLE = static_cast<std::uint8_t>(2)
 };
 
 enum class TEMPLATE_ID:uint8_t {
@@ -122,16 +149,22 @@ struct ConstInfo {
     uint32_t maxBlockNumPerBatch = 0;
 
     // workSpace
-    uint32_t preMm1ResSize = 0;
-    uint32_t curMm1ResSize = 0;
+    uint32_t dbWorkspaceRatio = 1;
+    uint32_t mm1KvResSize = 0;
+    uint32_t mm1ScoreResSize = 0;
+    uint32_t vec1TailCacheSize = 0;
     uint32_t vec1ResSize = 0;
+    uint32_t mm1ResSize = 0;    // 所有cube输出kv/score结果的总大小
 
     uint32_t aiCoreIdx = 0;
     uint32_t nSize = 0;
+
+    uint32_t dbSize = 0;
 };
 
 struct RunInfo {
     bool isValid = false;
+    uint32_t cubeDbIdx = 0;         // kernel主循环索引
 
     // 增加字段
     uint32_t dealTcNum = 0;
@@ -160,8 +193,20 @@ struct RunInfo {
     uint64_t vec1ResOffset = 0;
 };
 
+struct Vec1RunInfo {
+    // vec相关信息，一次syncAll需处理数据的起始索引
+    bool resetResFlag = false;          // v1积攒N轮 是否是N轮的起始轮
+    uint32_t c1v1DbIdx = 0;               // vec1 doubleBuffer索引
+    uint32_t v1v2DbIdx = 0;             // v1v2 doubleBuffer索引
+    uint32_t bStart = 0;
+    uint32_t sStart = 0;
+    uint32_t dealTcNum = 0;
+    uint32_t dealScSize = 0;
+};
+
 struct Vec2RunInfo {
     // uint32_t bStart = 0;
+    uint32_t v2DbIdx = 0;              // v2 doubleBuffer索引
     uint32_t sStart = 0;
     uint32_t bEnd = 0;
     uint32_t sEnd = 0;

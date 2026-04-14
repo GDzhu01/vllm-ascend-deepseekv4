@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
  * \brief
  */
 
-#ifndef quant_lightning_indexer_TILING_H_
-#define quant_lightning_indexer_TILING_H_
+#ifndef QUANT_LIGHTNING_INDEXER_TILING_H
+#define QUANT_LIGHTNING_INDEXER_TILING_H
 
 #include "err/ops_err.h"
 #include "exe_graph/runtime/tiling_context.h"
@@ -96,6 +96,7 @@ TILING_DATA_FIELD_DEF(uint32_t, blockSize)
 TILING_DATA_FIELD_DEF(uint32_t, maxBlockNumPerBatch)
 TILING_DATA_FIELD_DEF(uint32_t, sparseMode)
 TILING_DATA_FIELD_DEF(uint32_t, cmpRatio)
+TILING_DATA_FIELD_DEF(uint32_t, batchSupperFlag)
 TILING_DATA_FIELD_DEF(uint32_t, returnValues)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(QuantLightningIndexer, QLITilingData)
@@ -126,6 +127,7 @@ struct QLIParaInfo {
     const int64_t *preTokens = nullptr;
     const int64_t *nextTokens = nullptr;
     const int64_t *cmpRatio = nullptr;
+    const int32_t *batchSupperFlag = nullptr;
     const bool *returnValues = nullptr;
 };
 
@@ -155,6 +157,7 @@ public:
     int64_t preTokens = 0;
     int64_t nextTokens = 0;
     uint32_t cmpRatio = 1;
+    bool batchSupperFlag = false;
     bool returnValues = false;
     // DType
     ge::DataType inputQType = ge::DT_FLOAT16;
@@ -219,6 +222,7 @@ public:
     uint32_t s1Size_ = 0;
     int64_t s2Size_ = 0;
     uint32_t headDim_ = 0;
+    bool batchSupperFlag_ = false;
     // Layout
     DataLayout qLayout_ = DataLayout::BSND;
     DataLayout kLayout_ = DataLayout::PA_BSND;
@@ -248,4 +252,4 @@ private:
 };
 
 }  // namespace optiling
-#endif  // quant_lightning_indexer_TILING_H_
+#endif  // QUANT_LIGHTNING_INDEXER_TILING_H

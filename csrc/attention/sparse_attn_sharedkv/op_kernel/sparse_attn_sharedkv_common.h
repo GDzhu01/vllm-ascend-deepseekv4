@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -101,6 +101,7 @@ struct Position {
     uint32_t n2Idx;
     uint32_t s2Idx;
     uint32_t dIdx;
+    uint32_t s1Idx;
 };
 
 // 场景：query、key、value GM to L1
@@ -132,9 +133,9 @@ __aicore__ inline void DataCopyGmNDToL1(LocalTensor<T> &l1Tensor, GlobalTensor<T
     BSH\BSND\TND 为BBH
     shape.copyRowNumAlign 需要16字节对齐，如拷贝k矩阵，一次拷贝128*512，遇到尾块 10*512 需对齐到16*512
 */
-template <typename T, SAS_LAYOUT SRC_LAYOUT>
-__aicore__ inline void DataCopyPA(LocalTensor<T> &dstTensor,  // l1
-                                  GlobalTensor<T> &srcTensor, // gm
+template <typename T>
+__aicore__ inline void DataCopyPA(LocalTensor<T> &dstTensor,  //l1
+                                  GlobalTensor<T> &srcTensor, //gm
                                   GlobalTensor<int32_t> &blockTableGm,
                                   const PAShape &shape,     // blockSize, headNum, headDim
                                   const Position &startPos) // bacthIdx nIdx curSeqIdx
@@ -155,20 +156,13 @@ __aicore__ inline void DataCopyPA(LocalTensor<T> &dstTensor,  // l1
         uint64_t offset = idInBlockTable * shape.blockSize * shape.headNum * shape.headDim; // PA的偏移
 
         uint64_t dStride = shape.headDim;
-        if constexpr (SRC_LAYOUT == SAS_LAYOUT::BSND || SRC_LAYOUT == SAS_LAYOUT::TND) {
-            offset += (uint64_t)(startPos.n2Idx * shape.headDim) + reaminRowCnt * shape.headDim * shape.headNum +
-                      startPos.dIdx;
-            dStride = shape.headDim * shape.headNum;
-        } else {
-            offset += (uint64_t)(startPos.n2Idx * shape.headDim * shape.blockSize) + reaminRowCnt * shape.headDim +
-                      startPos.dIdx;
-        }
+        offset += (uint64_t)(startPos.n2Idx * shape.headDim * shape.blockSize) +
+                    reaminRowCnt * shape.headDim + startPos.dIdx;
 
         uint32_t dValue = shape.actHeadDim;
         uint32_t srcDValue = dStride;
         LocalTensor<T> tmpDstTensor = dstTensor[copyFinishRowCnt * blockElementCnt];
         GlobalTensor<T> tmpSrcTensor = srcTensor[offset];
-
         DataCopyGmNDToL1<T>(tmpDstTensor, tmpSrcTensor, copyRowCnt, shape.copyRowNumAlign, dValue, srcDValue);
         copyFinishRowCnt += copyRowCnt;
         curS2Idx += copyRowCnt;
@@ -182,6 +176,7 @@ struct RunInfo {
     uint32_t gIdx = 0;
     uint32_t s1Idx = 0;
     uint32_t s2Idx = 0;
+    uint32_t n2IdxReal = 0;
     uint32_t relativeS2Idx = 0;
     uint32_t bn2IdxInCurCore = 0;
     uint32_t curSInnerLoopTimes = 0;
@@ -189,7 +184,6 @@ struct RunInfo {
     uint64_t tndBIdxOffsetForKV = 0;
     uint64_t tensorAOffset = 0;
     uint64_t tensorBOffset = 0;
-    uint64_t tensorCmpBOffset = 0;
     uint64_t attenOutOffset = 0;
     uint64_t attenMaskOffset = 0;
     uint64_t topKBaseOffset = 0;
@@ -311,6 +305,9 @@ struct ConstInfo {
     // win
     int32_t oriWinRight = 0;
     int32_t oriWinLeft = 128;
+
+    // 是否返回SoftmaxLse
+    bool returnSoftmaxLse = false;
 };
 
 struct MSplitInfo {

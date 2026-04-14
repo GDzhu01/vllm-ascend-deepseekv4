@@ -1,11 +1,10 @@
 /**
- * This program is free software, you can redistribute it and/or modify it.
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING
- * BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
@@ -44,7 +43,7 @@ enum class SparseMode : uint8_t {
 
 enum class ValidSocVersion {
     ASCEND910B = 0,
-    ASCEND910D,
+    ASCEND950,
     RESERVED_VERSION = 99999
 };
 
@@ -194,9 +193,8 @@ struct AssignContext {
     uint32_t curS2Idx { 0U };
     uint32_t curCoreIdx { 0U };
     int64_t unassignedCost { 0 };
-    uint32_t usedCoreNum { 0U };
     uint32_t curKvSplitPart { 1U };
-    uint32_t curFdDataNum { 1U };
+    uint32_t preFdDataNum { 0U };
 
     int64_t bN2Cost { 0 };
     uint32_t bN2Block { 0U };
@@ -213,6 +211,12 @@ public:
 
 private:
     bool Prepare(CpuKernelContext &ctx);
+    int32_t GetQueryBatchSize();
+    int32_t GetKvBatchSize();
+    bool CheckSingleParam();
+    bool CheckExistence();
+    bool CheckConsistency();
+    bool CheckFeature();
     bool ParamsCheck();
     bool ParamsInit();
     bool BalanceSchedule(SplitResult &splitRes);
@@ -225,7 +229,7 @@ private:
     uint32_t GetSparseSeqSize(uint32_t bIdx);
     int64_t CalcPreTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
     int64_t CalcNextTokenLeftUp(uint32_t s1Size, uint32_t s2Size);
-    Range<uint32_t> CalcS2Range(uint32_t s1GIdx,const BatchCache &batchCache);
+    Range<int64_t> CalcS2TokenRange(uint32_t s1GIdx, const BatchCache &batchCache);
     int64_t CalcCost(uint32_t basicM, uint32_t basicS2);
     BlockCost<int64_t> CalcCostTable(uint32_t s1NormalSize, uint32_t s2NormalSize, uint32_t s1GTailSize,
         uint32_t s2TailSize);
@@ -254,50 +258,45 @@ private:
     // main
     void SplitFD(SplitResult &splitRes);
     void CalcSplitPlan(uint32_t coreNum, int64_t costLimit, const SplitContext &splitContext, SplitResult &result);
-    void SplitCore();
+
 
 private:
     CpuKernelContext* context_ = nullptr;
     // input
     Tensor *actSeqLenQ_ = nullptr;
-    Tensor *actSeqLenKV_ = nullptr;
+    Tensor *actSeqLenKey_ = nullptr;
     // output
     Tensor *metaData_ = nullptr;
     // attributes
-    std::string socVersion_ = "";//新增
-    bool supportFd_ = false; //新增。是否开启LD
-    uint32_t cmpRatio_ = 4; //新增,LIQ压缩率
+    std::string socVersion_ = "";
+    bool supportFd_ = false;
+    int32_t cmpRatio_ = 4;
     uint32_t aicCoreNum_ = 24U;
     uint32_t aivCoreNum_ = 48U;
-    uint32_t batchSize_ = 0;
-    uint32_t maxSeqlenQ_ = 0;
-    uint32_t maxSeqlenK_ = 0;
-    uint32_t numHeadsQ_ = 0;
-    uint32_t numHeadsK_ = 0;
-    uint32_t headDim_ = 0;
-    uint32_t topKSize_ = 0;
-    uint32_t queryQuantMode_ = 0;
-    uint32_t keyQuantMode_ = 0;
-    uint32_t sparseCount_ = 0;
-    uint32_t sparseBlockSize_ = 0;
-    uint32_t sparseBlockCount_ = 0; // new
+    int32_t batchSize_ = 0;
+    int32_t maxSeqlenQ_ = 0;
+    int32_t maxSeqlenK_ = 0;
+    int32_t numHeadsQ_ = 0;
+    int32_t numHeadsK_ = 0;
+    int32_t headDim_ = 0;
+    int32_t queryQuantMode_ = 0;
+    int32_t keyQuantMode_ = 0;
+    int32_t sparseCount_ = 0;
     std::string layoutQuery_ = "BSND";
-    std::string layoutKV_ = "BSND";
-    uint32_t sparseMode_ = 0;
+    std::string layoutKey_ = "BSND";
+    int32_t sparseMode_ = 0;
     uint32_t attentionMode_ = 0;
-    uint32_t ropeHeadDim_ = 0;
-    uint32_t sparseSharedSize_ = 0;
+    ValidSocVersion validSocVersion_ = ValidSocVersion::ASCEND910B;
 
     // SplitParams
-    uint32_t coreNum_ = 24U; // new
     int64_t  preToken_ = INT64_MAX;
     int64_t  nextToken_ = INT64_MAX;
     uint32_t groupSize_ = 0;
     uint32_t mBaseSize_ = 256;
     uint32_t s2BaseSize_ = 0;
-    uint32_t gS1BaseSizeOfFd_ = 0;
     bool isS1G_ = true;
-
+    bool isActQBatchPlus = false;
+    
 private:
     enum class ParamId : uint32_t {
         // input

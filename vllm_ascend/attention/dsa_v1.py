@@ -55,7 +55,7 @@ def hadamard_transform_ref(x: torch.Tensor, hadamard: torch.Tensor, scale:int =1
     if dim != dim_padded:
         x = F.pad(x, (0, dim_padded - dim))
     out = F.linear(x, hadamard)
-    out = x * scale
+    out = out * scale
     return out[..., :dim].reshape(*x_shape)
 
 
@@ -796,7 +796,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         max_seqlen_kv = torch.max(
             common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
-        max_seqlen_q = torch.max(query_start_loc_cpu).item()
+        max_seqlen_q = torch.max(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]).item()
 
         assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
