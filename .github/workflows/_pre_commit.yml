@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   pre-commit:
@@ -17,6 +18,12 @@ jobs:
       # Build it from https://github.com/nv-action/vllm-benchmarks/blob/main/Dockerfile
       image: quay.io/ascend-ci/vllm-ascend:lint
     steps:
+    - name: Set PTA from file
+      run: |
+        TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
+        TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+        git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
     - name: Checkout vllm-project/vllm-ascend repo
       uses: actions/checkout@v6
 
@@ -38,13 +45,6 @@ jobs:
         repository: vllm-project/vllm
         path: ./vllm-empty
         ref: ${{ inputs.vllm }}
-
-    - name: Set PTA from file
-      run: |
-        TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
-        TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
-        git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-        git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
     - uses: dorny/paths-filter@v3
       id: filter

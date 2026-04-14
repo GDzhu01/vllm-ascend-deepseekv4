@@ -35,6 +35,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: read
+
+
 jobs:
   changes:
     runs-on: linux-aarch64-a2-0

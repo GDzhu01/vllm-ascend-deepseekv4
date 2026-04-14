@@ -35,6 +35,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: read
+
+
 jobs:
   lint:
     uses: ./.github/workflows/_pre_commit.yml
@@ -47,10 +52,6 @@ jobs:
       ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
       _310_tracker: ${{ steps.filter.outputs._310_tracker }}
     steps:
-      - name: Setup git proxy
-        run: |
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
-
       - name: Set PTA from file
         run: |
           TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt | tr -d '\n')
@@ -118,3 +119,4 @@ jobs:
       image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.1-910b-ubuntu22.04-py3.11
       contains_310: ${{ needs.changes.outputs._310_tracker == 'true' }}
       type: light
+
