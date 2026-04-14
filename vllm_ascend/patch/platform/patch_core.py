@@ -1,7 +1,6 @@
 import os
 import time
 
-import vllm
 from vllm.config import ParallelConfig
 from vllm.logger import logger
 
@@ -11,11 +10,12 @@ from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.core.kv_cache_utils import generate_scheduler_kv_cache_config
 from vllm_ascend.patch.platform.patch_kv_cache_coordinator import USE_MULTI_GROUPS_KV_CACHE
 from vllm_ascend.patch.platform.patch_kv_cache_utils import get_kv_cache_configs_with_multi_groups as get_kv_cache_configs
+from vllm.v1.engine.core import EngineCoreProc
+from vllm.tracing import instrument
+import vllm.envs as envs
 
-
-def _initialize_kv_caches_with_multi_groups(
-    self, vllm_config: VllmConfig
-) -> tuple[int, int, KVCacheConfig]:
+@instrument(span_name="Prepare model")
+def _initialize_kv_caches_with_multi_groups(self, vllm_config: VllmConfig) -> KVCacheConfig:
     start = time.time()
 
     # Get all kv cache needed by the model
@@ -23,14 +23,11 @@ def _initialize_kv_caches_with_multi_groups(
 
     has_kv_cache = False
     has_kv_cache = any(kv_cache_spec for kv_cache_spec in kv_cache_specs)
-
     if has_kv_cache:
-        if os.environ.get("VLLM_ELASTIC_EP_SCALE_UP_LAUNCH") == "1":
-            dp_group = getattr(self, "dp_group", None)
-            assert dp_group is not None
-            self.available_gpu_memory_for_kv_cache = (
-                ParallelConfig.sync_kv_cache_memory_size(dp_group, -1)
-            )
+        if envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH:
+            # NOTE(yongji): should already be set
+            # during _eep_scale_up_before_kv_init
+            assert self.available_gpu_memory_for_kv_cache > 0
             available_gpu_memory = [self.available_gpu_memory_for_kv_cache] * len(
                 kv_cache_specs
             )
@@ -45,12 +42,29 @@ def _initialize_kv_caches_with_multi_groups(
 
     assert len(kv_cache_specs) == len(available_gpu_memory)
 
+    # Track max_model_len before KV cache config to detect auto-fit changes
+    max_model_len_before = vllm_config.model_config.max_model_len
+
     kv_cache_configs = get_kv_cache_configs(
         vllm_config, kv_cache_specs, available_gpu_memory
     )
+
+    # If auto-fit reduced max_model_len, sync the new value to workers.
+    # This is needed because workers were spawned before memory profiling
+    # and have the original (larger) max_model_len cached.
+    max_model_len_after = vllm_config.model_config.max_model_len
+    if max_model_len_after != max_model_len_before:
+        self.collective_rpc("update_max_model_len", args=(max_model_len_after,))
+
     scheduler_kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
-    num_gpu_blocks = scheduler_kv_cache_config.num_blocks
-    num_cpu_blocks = 0
+    vllm_config.cache_config.num_gpu_blocks = scheduler_kv_cache_config.num_blocks
+    kv_cache_groups = scheduler_kv_cache_config.kv_cache_groups
+    if kv_cache_groups:
+        vllm_config.cache_config.block_size = min(
+            g.kv_cache_spec.block_size for g in kv_cache_groups
+        )
+
+    vllm_config.validate_block_size()
 
     # Initialize kv cache and warmup the execution
     self.model_executor.initialize_from_config(kv_cache_configs)
@@ -61,8 +75,7 @@ def _initialize_kv_caches_with_multi_groups(
         elapsed,
         scope="local",
     )
-    return num_gpu_blocks, num_cpu_blocks, scheduler_kv_cache_config
+    return scheduler_kv_cache_config
 
 if USE_MULTI_GROUPS_KV_CACHE:
-    # EngineCoreProc._initialize_kv_caches = _initialize_kv_caches_with_multi_groups
-    vllm.v1.engine.core.get_kv_cache_configs = get_kv_cache_configs
+    EngineCoreProc._initialize_kv_caches = _initialize_kv_caches_with_multi_groups

@@ -30,8 +30,8 @@ from vllm.logger import init_logger
 from vllm.utils.math_utils import cdiv
 from dataclasses import replace
 from vllm_ascend.patch.platform.patch_kv_cache_interface import get_all_kvcache_specs_from_list
-from vllm_ascend.patch.platform.patch_kv_cache_coordinator import USE_MULTI_GROUPS_KV_CACHE
-
+from vllm_ascend import envs
+USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
 
 logger = init_logger(__name__)
 
