@@ -118,10 +118,10 @@ checkout_src() {
     TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
     TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
     git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
-    git clean -fd csrc/**
 
     # When IS_PR_TEST is true, VLLM_ASCEND_REF is a PR number; otherwise it is a branch/tag name.
     cd "$WORKSPACE/vllm-ascend"
+    git clean -fd csrc/**
     git remote add dpsk_v4 https://github.com/GDzhu01/vllm-ascend-deepseekv4.git
     if [[ "$IS_PR_TEST" == "true" ]]; then
         git fetch --depth 1 dpsk_v4 "refs/pull/${VLLM_ASCEND_REF}/head"
