@@ -2961,11 +2961,13 @@ class NPUModelRunner(GPUModelRunner):
         layer_kv_cache_spec = self._get_layer_kv_cache_specs(kv_cache_config)
         for group in self._kv_cache_spec_attn_group_iterator():
             attn_backend = group.backend
+            # TODO(Angazenn): need to align with current implementation
+            current_kv_cache_spec = group.kv_cache_spec
             for layer_name in group.layer_names:
                 if layer_name in self.runner_only_attn_layers:
                     continue
 
-                current_kv_cache_spec = layer_kv_cache_spec[layer_name]
+                # current_kv_cache_spec = layer_kv_cache_spec[layer_name]
 
                 if isinstance(current_kv_cache_spec, SWAAttentionSpec) or \
                     isinstance(current_kv_cache_spec, CompressAttentionSpec):
