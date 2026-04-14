@@ -82,51 +82,27 @@ jobs:
           pip install uv
       
       - name: uninstall vlm vllm-ascend and remove code (if pr test)
-        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: /vllm-workspace/vllm-ascend
         run: |
+          IS_PR_TEST=${{ github.event_name == 'pull_request' }}
+          echo "====> Checkout source code"
           pip uninstall -y vllm-ascend || true
 
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
 
-      - name: Checkout vllm-project/vllm-ascend repo
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@v6
-        with:
-          path: ./temp-vllm-ascend
-          fetch-depth: 1
-
-      - name: Move code to /vllm-workspace
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          mv ./temp-vllm /vllm-workspace/vllm
-          mv ./temp-vllm-ascend /vllm-workspace/vllm-ascend
-          ls -R /vllm-workspace
-
-      - name: Install vllm-project/vllm from source
-        if: ${{ github.event_name == 'pull_request' }}
-        working-directory: /vllm-workspace/vllm
-        run: |
-          VLLM_TARGET_DEVICE=empty uv pip install -e .
-      
-      - name: Install vllm-project/vllm-ascend
-        if: ${{ github.event_name == 'pull_request' }}
-        working-directory: /vllm-workspace/vllm-ascend
-        env:
-          PIP_EXTRA_INDEX_URL: https://mirrors.huaweicloud.com/ascend/repos/pypi
-        run: |
-          git config --global --add safe.directory /vllm-workspace/vllm-ascend
-          pip install uc-manager
-          uv pip install -r requirements-dev.txt
-          uv pip install -v -e .
-
-      - name: Install aisbench
-        if: ${{ github.event_name == 'pull_request' }}
-        shell: bash -l {0}
-        run: |
-          cp -r /tmp/aisbench-backup /vllm-workspace/vllm-ascend/benchmark
-          cd /vllm-workspace/vllm-ascend/benchmark
-          pip install pytest asyncio pytest-asyncio
-          pip install -e . -r requirements/api.txt -r requirements/extra.txt
-          python3 -m pip cache purge
+          # When IS_PR_TEST is true, VLLM_ASCEND_REF is a PR number; otherwise it is a branch/tag name.
+          git clean -fd csrc/**
+          git remote add dpsk_v4 https://github.com/GDzhu01/vllm-ascend-deepseekv4.git
+          if [[ "$IS_PR_TEST" == "true" ]]; then
+              git fetch --depth 1 dpsk_v4 "refs/pull/${VLLM_ASCEND_REF}/head"
+          else
+              git fetch --depth 1 dpsk_v4 "$VLLM_ASCEND_REF"
+          fi
+          git checkout FETCH_HEAD
+          pip install -r requirements-dev.txt"
+          pip install -e .
 
       - name: Show vLLM and vLLM-Ascend version
         working-directory: /vllm-workspace
