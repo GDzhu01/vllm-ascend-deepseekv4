@@ -15,6 +15,7 @@ class CompressAttentionSpec(AttentionSpec):
     nope_dtype: torch.dtype = torch.bfloat16
     rope_dtype: torch.dtype = torch.bfloat16
     scale_dtype: torch.dtype = torch.bfloat16
+    pad_size :int = 0
 
 
     @property
@@ -133,6 +134,7 @@ class Compress128AttentionSpec(CompressAttentionSpec):
 @dataclass(frozen=True)
 class SWAAttentionSpec(SlidingWindowSpec):
     sliding_window: int = 128
+    pad_size: int = 0
 
     @property
     def page_size_bytes(self) -> int:
@@ -186,6 +188,7 @@ class C4IndexerSpec(AttentionSpec):
     compress_ratio: int = 4
     indexer_scale_dim: int = 0
     indexer_scale_dtype: torch.dtype = torch.float16
+    pad_size: int = 0
 
     @property
     def indexer_scale_size_bytes(self) -> int:

@@ -23,7 +23,17 @@ import vllm_ascend.patch.platform.patch_mamba_config  # noqa
 import vllm_ascend.patch.platform.patch_sched_yield  # noqa
 import vllm_ascend.patch.platform.patch_set_cudagraph_sizes  # noqa
 from vllm_ascend import envs
+from vllm.logger import logger
 from vllm_ascend.utils import vllm_version_is
+
+USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
+logger.info(f">>>>>>>>>>>>>>>>>>>>>>>>>>>>> USE_MULTI_GROUPS_KV_CACHE: {USE_MULTI_GROUPS_KV_CACHE}")
+if USE_MULTI_GROUPS_KV_CACHE:
+    import vllm_ascend.patch.platform.patch_kv_cache_interface
+    import vllm_ascend.patch.platform.patch_kv_cache_coordinator
+    import vllm_ascend.patch.platform.patch_core
+    import vllm_ascend.patch.platform.patch_kv_cache_utils
+
 
 if envs.USE_MULTI_BLOCK_POOL:
     import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa

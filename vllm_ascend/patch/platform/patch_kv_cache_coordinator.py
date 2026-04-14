@@ -24,6 +24,8 @@ from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 from math import lcm
 
+from vllm_ascend import envs
+USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
 
 class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
     """
