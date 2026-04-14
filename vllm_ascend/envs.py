@@ -107,6 +107,9 @@ env_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ASCEND_FUSION_OP_TRANSPOSE_KV_CACHE_BY_BLOCK": lambda: bool(
         int(os.getenv("VLLM_ASCEND_FUSION_OP_TRANSPOSE_KV_CACHE_BY_BLOCK", "1"))
     ),
+    # Whether to use MultiBlockPool for KV cache management
+    "USE_MULTI_BLOCK_POOL":
+    lambda: bool(int(os.getenv("USE_MULTI_BLOCK_POOL", '0'))),
     "USE_MULTI_GROUPS_KV_CACHE":
     lambda: bool(int(os.getenv("USE_MULTI_GROUPS_KV_CACHE", '0'))),
 }
