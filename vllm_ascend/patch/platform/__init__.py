@@ -19,6 +19,16 @@ import vllm_ascend.patch.platform.patch_fusion_matcher_compat_ops  # noqa
 import vllm_ascend.patch.platform.patch_kv_cache_interface  # noqa
 from vllm_ascend import envs
 from vllm_ascend.utils import is_310p
+from vllm.logger import logger
+USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
+logger.info(f">>>>>>>>>>>>>>>>>>>>>>>>>>>>> USE_MULTI_GROUPS_KV_CACHE: {USE_MULTI_GROUPS_KV_CACHE}")
+if USE_MULTI_GROUPS_KV_CACHE:
+    import vllm_ascend.patch.platform.patch_kv_cache_interface
+    import vllm_ascend.patch.platform.patch_kv_cache_coordinator
+    import vllm_ascend.patch.platform.patch_core
+    import vllm_ascend.patch.platform.patch_kv_cache_utils
+
+
 
 if not is_310p():
     import vllm_ascend.patch.platform.patch_mamba_config  # noqa
