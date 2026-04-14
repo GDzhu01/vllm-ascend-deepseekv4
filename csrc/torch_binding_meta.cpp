@@ -845,6 +845,173 @@ at::Tensor npu_quant_lightning_indexer_metadata_meta(
     return torch::empty({1024}, torch::dtype(torch::kInt32).device(query.device()));
 }
 
+at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
+{
+    c10::SymIntArrayRef output_size = residual.sym_sizes();
+    return at::empty_symint(output_size, residual.options().dtype(residual.dtype()));
+}
+
+at::Tensor npu_hc_post_meta(const at::Tensor& x,
+                            const at::Tensor& residual,
+                            const at::Tensor& post,
+                            const at::Tensor& comb)
+{
+    return construct_hc_post_output_tensor(residual);
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(
+    const at::Tensor& x, int64_t hc_mult)
+{
+    auto xDims = x.dim();
+    at::SmallVector<c10::SymInt, 8> y_size;
+    at::SmallVector<c10::SymInt, 8> post_size;
+    at::SmallVector<c10::SymInt, 8> comb_frag_size;
+    if (xDims == 4) {
+        auto batch = x.sym_size(0);
+        auto size = x.sym_size(1);
+        auto d = x.sym_size(3);
+        y_size = {batch, size, d};
+        post_size = {batch, size, hc_mult};
+        comb_frag_size = {batch, size, hc_mult, hc_mult};
+    } else if (xDims == 3) {
+        auto bs = x.sym_size(0);
+        auto d = x.sym_size(2);
+        y_size = {bs, d};
+        post_size = {bs, hc_mult};
+        comb_frag_size = {bs, hc_mult, hc_mult};
+    } else {
+        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
+    }
+
+    at::Tensor y = at::empty_symint(c10::SymIntArrayRef(y_size), x.options().dtype(at::kBFloat16));
+    at::Tensor post = at::empty_symint(c10::SymIntArrayRef(post_size), x.options().dtype(at::kFloat));
+    at::Tensor comb_frag =
+        at::empty_symint(c10::SymIntArrayRef(comb_frag_size), x.options().dtype(at::kFloat));
+    return {y, post, comb_frag};
+}
+
+at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x,
+                                                float epsilon = 1e-6)
+{
+    constexpr int64_t SIZE = 8;
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+
+    auto options = x.options();
+    auto xDims = x.dim();
+    c10::SmallVector<int64_t, SIZE> yOut_shape;
+    for (auto i = 0; i < xDims - 2; i++) {
+        yOut_shape.push_back(x.sizes()[i]);
+    }
+    yOut_shape.push_back(1);
+    return at::empty(yOut_shape, options.dtype(at::kFloat));
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_meta(
+    const at::Tensor& x,
+    const at::Tensor& hc_fn,
+    const at::Tensor& hc_scale,
+    const at::Tensor& hc_base,
+    int64_t hc_mult,
+    int64_t hc_sinkhorn_iters,
+    double norm_eps,
+    double hc_eps)
+{
+    return construct_hc_pre_output_tensor(x, hc_mult);
+}
+
+at::Tensor construct_hc_pre_inv_rms_output_tensor(const at::Tensor& x,
+                                                  float epsilon = 1e-20)
+{
+    constexpr int64_t SIZE = 8;
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+
+    auto options = x.options();
+    auto xDims = x.dim();
+    c10::SmallVector<int64_t, SIZE> yOut_shape;
+    for (auto i = 0; i < xDims - 2; i++) {
+        yOut_shape.push_back(x.sizes()[i]);
+    }
+    yOut_shape.push_back(1);
+    return at::empty(yOut_shape, options.dtype(at::kFloat));
+}
+
+at::Tensor npu_hc_pre_inv_rms_meta(const at::Tensor& x, double epsilon = 1e-20)
+{
+    TORCH_CHECK(x.numel() > 0, "Input tensor x should not be empty.");
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+    return construct_hc_pre_inv_rms_output_tensor(x, epsilon);
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_tensor(
+    const at::Tensor& mixes, const at::Tensor& x, int64_t hc_mult)
+{
+    auto xDims = x.dim();
+    at::SmallVector<int64_t, 8> y_size;
+    at::SmallVector<int64_t, 8> post_size;
+    at::SmallVector<int64_t, 8> comb_frag_size;
+    if (xDims == 4) {
+        auto batch = x.size(0);
+        auto size = x.size(1);
+        auto d = x.size(3);
+        y_size = {batch, size, d};
+        post_size = {batch, size, hc_mult};
+        comb_frag_size = {batch, size, hc_mult, hc_mult};
+    } else if (xDims == 3) {
+        auto bs = x.size(0);
+        auto d = x.size(2);
+        y_size = {bs, d};
+        post_size = {bs, hc_mult};
+        comb_frag_size = {bs, hc_mult, hc_mult};
+    } else {
+        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
+    }
+
+    at::Tensor y = at::empty(y_size, x.options().dtype(at::kBFloat16));
+    at::Tensor post = at::empty(post_size, x.options().dtype(at::kFloat));
+    at::Tensor comb_frag = at::empty(comb_frag_size, x.options().dtype(at::kFloat));
+    return {y, post, comb_frag};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_meta(
+    const at::Tensor& mixes,
+    const at::Tensor& rsqrt,
+    const at::Tensor& hc_scale,
+    const at::Tensor& hc_base,
+    const at::Tensor& x,
+    int64_t hc_mult,
+    int64_t hc_sinkhorn_iters,
+    double hc_eps)
+{
+    return construct_hc_pre_sinkhorn_output_tensor(mixes, x, hc_mult);
+}
+
+void inplace_partial_rotary_mul_meta(at::Tensor& x,
+                                     const at::Tensor& r1,
+                                     const at::Tensor& r2,
+                                     c10::string_view rotary_mode,
+                                     at::IntArrayRef partial_slice)
+{
+    return;
+}
+
+std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_meta(
+    const at::Tensor& x,
+    const at::Tensor& gamma,
+    const c10::optional<at::Tensor>& smooth_scale,
+    const c10::optional<at::Tensor>& beta,
+    double epsilon)
+{
+    constexpr int32_t SIZE = 8;
+    at::Tensor y_out = at::empty_like(x);
+    auto options = x.options();
+    c10::SmallVector<int64_t, SIZE> scale_out_shape;
+    for (size_t i = 0; i < x.sizes().size() - 1; i++) {
+        scale_out_shape.push_back(x.sizes()[i]);
+    }
+    at::Tensor scale_out = at::empty(scale_out_shape, options.dtype(at::kFloat));
+    return std::make_tuple(y_out, scale_out);
+}
+
 at::Tensor npu_lightning_indexer_quant_meta(
     const at::Tensor &query, const at::Tensor &key, const at::Tensor &weights,
     const at::Tensor &query_dequant_scale, const at::Tensor &key_dequant_scale,
@@ -932,6 +1099,18 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("npu_sparse_attn_sharedkv_metadata", &vllm_ascend::meta::npu_sparse_attn_sharedkv_metadata_meta);
     // npu_quant_lightning_indexer_metadata
     ops.impl("npu_quant_lightning_indexer_metadata", &vllm_ascend::meta::npu_quant_lightning_indexer_metadata_meta);
+    // npu_hc_post
+    ops.impl("npu_hc_post", &vllm_ascend::meta::npu_hc_post_meta);
+    // npu_hc_pre
+    ops.impl("npu_hc_pre", &vllm_ascend::meta::npu_hc_pre_meta);
+    // npu_hc_pre_inv_rms
+    ops.impl("npu_hc_pre_inv_rms", &vllm_ascend::meta::npu_hc_pre_inv_rms_meta);
+    // npu_hc_pre_sinkhorn
+    ops.impl("npu_hc_pre_sinkhorn", &vllm_ascend::meta::npu_hc_pre_sinkhorn_meta);
+    // inplace_partial_rotary_mul
+    ops.impl("inplace_partial_rotary_mul", &vllm_ascend::meta::inplace_partial_rotary_mul_meta);
+    // npu_rms_norm_dynamic_quant
+    ops.impl("npu_rms_norm_dynamic_quant", &vllm_ascend::meta::npu_rms_norm_dynamic_quant_meta);
     // Add_Rms_Norm_Bias
     ops.impl("npu_add_rms_norm_bias", &vllm_ascend::meta::npu_add_rms_norm_bias_meta);
     // transpose_kv_cache_by_block
