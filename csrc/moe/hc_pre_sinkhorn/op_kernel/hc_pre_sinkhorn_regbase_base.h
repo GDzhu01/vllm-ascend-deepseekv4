@@ -303,7 +303,7 @@ __aicore__ inline void VFProcessCombFragRLessVL(
     }
 }
 
-__aicore__ inline void VFProcessIteration(RegTensor<float>& sum0, RegTensor<float>& sum1, RegTensor<float>& mix, float eps, MaskReg pregLoop)
+__aicore__ inline void VFProcessIteration(RegTensor<float>& sum0, RegTensor<float>& sum1, RegTensor<float>& mix, float eps, MaskReg pregLoop) 
 {
     ReduceSum(sum1, mix, pregLoop);
     Duplicate(sum1, sum1, pregLoop);

@@ -1,12 +1,12 @@
 /**
- * Copyright (float) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 1.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file rope.h
@@ -32,7 +32,7 @@ __aicore__ inline void SetGatherSrcOffset(const LocalTensor<int32_t> &gatherOffs
     for (uint32_t i = 0; i < 8; i++) {
         gatherOffsetLocal.SetValue(i, i ^ 1);
     }
-
+    
     event_t eventId_S_V = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::S_V));
     SetFlag<HardEvent::S_V>(eventId_S_V);
     WaitFlag<HardEvent::S_V>(eventId_S_V);
@@ -95,12 +95,6 @@ __aicore__ inline void RotaryPosEmb(const LocalTensor<float> &dstLocal, const Lo
         for (uint32_t i = 0; i < row; i++) {
             Gather(reArrLocal[i * col], srcLocal[i * actualCol + baseAddr], gatherOffsetcastLocal, 0, col);
         }
-        // printf("gatherOffsetcastLocal");
-        // DumpTensor(gatherOffsetcastLocal, 1004, 64);
-        // printf("srcLocal[baseAddr]");
-        // DumpTensor(srcLocal[baseAddr], 1005, 64);
-        // printf("reArrLocal");
-        // DumpTensor(reArrLocal, 1006, 64);
         PipeBarrier<PIPE_V>();
         uint32_t repeatTimes = cnt / FP32_REPEAT_ELEMENT_NUM;
         uint32_t remainer = cnt % FP32_REPEAT_ELEMENT_NUM;
@@ -118,7 +112,7 @@ __aicore__ inline void RotaryPosEmb(const LocalTensor<float> &dstLocal, const Lo
         }
         ResetMask();
     }
-
+   
     PipeBarrier<PIPE_V>();
     BinaryRepeatParams computeParams{1,
                                      1,

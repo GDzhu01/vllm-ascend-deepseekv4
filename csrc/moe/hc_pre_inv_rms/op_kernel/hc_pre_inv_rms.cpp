@@ -13,7 +13,7 @@
  * \brief hc_pre_inv_rms kernel file
  */
 #include "hc_pre_inv_rms_full_load.h"
-#if defined(__DAV_C310__)
+#if defined(__DAV_C310__) 
   #include "hc_pre_inv_rms_full_load_regbase.h"
   using namespace HcPreInvRmsRegbase;
 #endif
@@ -33,7 +33,7 @@ extern "C" __global__ __aicore__ void hc_pre_inv_rms(GM_ADDR x, GM_ADDR y, GM_AD
         op.Init(x, y, workspace, &tilingData, &pipe);
         op.Process();
     }
-    #if defined(__DAV_C310__)
+    #if defined(__DAV_C310__) 
       else if (TILING_KEY_IS(REGBASE_FULL_LOAD_TILING_KEY)) {
         HcPreInvRmsFullLoadRegbase<DTYPE_X> op;
         op.Init(x, y, workspace, &tilingData, &pipe);

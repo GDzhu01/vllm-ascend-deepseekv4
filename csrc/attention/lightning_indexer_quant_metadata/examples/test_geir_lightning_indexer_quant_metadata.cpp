@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
         dataOp1.update_input_desc_x(desc);
         graph.AddOp(dataOp1);
         metaDataOp.set_input_actual_seq_lengths_key(dataOp1);
-    }
+    } 
 
     metaDataOp.update_output_desc_metadata(TensorDesc{ge::Shape(metadataShape), FORMAT_ND, DT_INT32});
     metaDataOp.set_attr_batch_size(batchSize);
@@ -170,12 +170,12 @@ int main(int argc, char **argv) {
     auto tensor = outputTensors[0];
     auto data = tensor.GetData();
     auto dataSize = tensor.GetTensorDesc().GetShape().GetShapeSize();
-
+    
     for (uint i = 0; i < 1024; i++) {
         printf("metadata[%u] = %u\n", i, data[i]);
     }
 
     // optiling::detail::SfaMetaData *metaDataPtr = (optiling::detail::SfaMetaData*)data;
-
+   
     return 0;
 }

@@ -55,7 +55,7 @@ __simd_vf__ void AddVFImpl(__ubuf__ T* inputAddr, __ubuf__ T* apeAddr, const uin
  */
 template <typename T>
 __aicore__ inline void AddVF(LocalTensor<T> &scoreLocal, LocalTensor<T> &apeLocal,
-    uint16_t apeIdx, const uint16_t coff, const uint16_t coreSplitD, uint32_t coreSplitS)
+    uint16_t apeIdx, const uint16_t coff, const uint16_t coreSplitD, uint32_t coreSplitS) 
 {
     uint16_t loopCnt = coff *coreSplitD*coreSplitS/FLOAT_REP_SIZE;
 

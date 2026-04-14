@@ -559,7 +559,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash_meta(
                 "group_select_mode must be 0 or 1, but got ", group_select_mode);
     TORCH_CHECK(renorm == 0,
                 "renorm can only be 0 currently, but got ", renorm);
-    TORCH_CHECK(norm_type == 0 || norm_type == 1 || norm_type == 2,
+    TORCH_CHECK(norm_type == 0 || norm_type == 1 || norm_type ==2,
                 "norm_type must be 0 (softmax) or 1 (sigmoid) or 2 (softplus), but got ", norm_type);
 
     TORCH_CHECK(eps > 0.0, "eps must be > 0, but got ", eps);
@@ -608,81 +608,93 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash_meta(
     return {y, expert_idx, out};
 }
 
-at::Tensor construct_compressor_output_tensor(const at::Tensor& x,
-                                              const at::Tensor& norm_weight,
-                                              const at::Tensor& rope_sin,
-                                              int64_t cmp_ratio)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+construct_compressor_output_tensor(const at::Tensor &x, const at::Tensor &norm_weight, const at::Tensor &rope_sin,
+                                   int64_t cmp_ratio, int64_t coff, bool enable_grad)
 {
+    constexpr int32_t DIM_1 = 1;
+    constexpr int32_t DIM_2 = 2;
+    constexpr int32_t DIM_3 = 3;
+    constexpr int32_t VALUE_0 = 0;
     auto x_dim = x.dim();
     at::SmallVector<int64_t, 8> cmp_kv_size;
+    at::SmallVector<int64_t, 8> wkv_proj_size;
+    at::SmallVector<int64_t, 8> softmax_res_size;
+    at::SmallVector<int64_t, 8> norm_x_size;
+    at::SmallVector<int64_t, 8> norm_rstd_size;
+    at::Tensor cmp_kv;
+    at::Tensor wkv_proj;
+    at::Tensor softmax_res;
+    at::Tensor norm_x;
+    at::Tensor norm_rstd;
     auto cmp_s = 0;
-    if (x_dim == 3) {
+    if (x_dim == DIM_3) {
         cmp_s = (x.size(1) + cmp_ratio - 1) / cmp_ratio;
         cmp_kv_size = {x.size(0), cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), x.size(1), coff * norm_weight.size(0)};
+            softmax_res_size = {x.size(0), cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {x.size(0), cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {x.size(0), cmp_s};
+        }
     } else {
         cmp_s = rope_sin.size(0);
         cmp_kv_size = {cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), coff * norm_weight.size(0)};
+            softmax_res_size = {cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {cmp_s};
+        }
     }
 
-    return at::empty(cmp_kv_size, x.options().dtype(x.dtype()));
+    cmp_kv = at::empty(cmp_kv_size, x.options().dtype(x.dtype()));
+    if (enable_grad) {
+        wkv_proj = at::empty(wkv_proj_size, x.options().dtype(x.dtype()));
+        softmax_res = at::empty(softmax_res_size, x.options().dtype(x.dtype()));
+        norm_x = at::empty(norm_x_size, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty(norm_rstd_size, x.options().dtype(x.dtype()));
+    } else {
+        wkv_proj = at::empty({0}, x.options().dtype(x.dtype()));
+        softmax_res = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_x = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty({0}, x.options().dtype(x.dtype()));
+    }
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>(
+        cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
 }
 
-std::tuple<at::Tensor> compressor_meta(
-    const at::Tensor& x,
-    const at::Tensor& wkv,
-    const at::Tensor& wgate,
-    at::Tensor& kv_state,
-    at::Tensor& score_state,
-    const at::Tensor& ape,
-    const at::Tensor& norm_weight,
-    const at::Tensor& rope_sin,
-    const at::Tensor& rope_cos,
-    const c10::optional<at::Tensor>& kv_block_table,
-    const c10::optional<at::Tensor>& score_block_table,
-    const c10::optional<at::Tensor>& cu_seqlens,
-    const c10::optional<at::Tensor>& seqused,
-    const c10::optional<at::Tensor>& start_pos,
-    int64_t rope_head_dim,
-    int64_t cmp_ratio,
-    int64_t coff,
-    double norm_eps,
-    int64_t rotary_mode)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+compressor_meta(
+    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
+    at::Tensor &kv_state, at::Tensor &score_state,
+    const at::Tensor &ape, const at::Tensor &norm_weight,
+    const at::Tensor &rope_sin, const at::Tensor &rope_cos,
+    const c10::optional<at::Tensor> &kv_block_table, const c10::optional<at::Tensor> &score_block_table,
+    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
+    const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio,
+    int64_t coff, double norm_eps, int64_t rotary_mode, bool enable_grad)
 {
-    constexpr int64_t VALUE_0 = 0;
-    constexpr int64_t DIM_1 = 1;
-    constexpr int64_t DIM_2 = 2;
-    constexpr int64_t DIM_3 = 3;
-
     auto x_dim = x.dim();
-    TORCH_CHECK(x_dim == DIM_2 || x_dim == DIM_3, "x dim num[", x_dim, "] should be 2 or 3");
-
     auto norm_weight_dim = norm_weight.dim();
-    TORCH_CHECK(norm_weight_dim == DIM_1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
-
     auto rope_sin_dim = rope_sin.dim();
-    TORCH_CHECK(rope_sin_dim == x_dim,
-                "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
 
-    TORCH_CHECK(cmp_ratio != VALUE_0, "cmp_ratio should not be 0");
+    std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> output = construct_compressor_output_tensor(
+        x, norm_weight, rope_sin, cmp_ratio, coff, enable_grad);
 
-    at::Tensor cmp_kv = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio);
-
-    return std::tuple<at::Tensor>(cmp_kv);
+    return output;
 }
 
-std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tensor(
-    const at::Tensor& query,
-    const at::Tensor& key,
-    int64_t sparse_count,
-    std::string query_layout_str,
-    std::string key_layout_str,
-    bool return_value)
+std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tensor(const at::Tensor& query, const at::Tensor& key,
+                                                           int64_t sparse_count, std::string query_layout_str,
+                                                           std::string key_layout_str, bool return_value)
 {
     constexpr int64_t SIZE = 8;
     constexpr int64_t DIM_0 = 0;
     constexpr int64_t DIM_1 = 1;
     constexpr int64_t DIM_2 = 2;
-
+    constexpr int64_t DIM_3 = 3;
     at::SmallVector<int64_t, SIZE> output_size;
     for (size_t i = 0; i < query.sizes().size(); i++) {
         TORCH_CHECK(query.size(i) > 0, "All values within query's shape should be greater "
@@ -693,11 +705,11 @@ std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tens
             "than 0, but shape[", i, "] is ", key.size(i));
     }
     TORCH_CHECK(sparse_count > 0, "sparse count should be greater than 0, but now is ", sparse_count);
-    int64_t key_head_num = (key_layout_str == "TND") ? key.size(DIM_1) : key.size(DIM_2);
+    int64_t keyHeadNum = (key_layout_str == "TND")? key.size(DIM_1) : key.size(DIM_2);
     if (query_layout_str == "BSND") {
-        output_size = {query.size(DIM_0), query.size(DIM_1), key_head_num, sparse_count};
+        output_size = {query.size(DIM_0), query.size(DIM_1), keyHeadNum, sparse_count};
     } else {
-        output_size = {query.size(DIM_0), key_head_num, sparse_count};
+        output_size = {query.size(DIM_0), keyHeadNum, sparse_count};
     }
     at::Tensor sparse_indices_out = at::empty(output_size, query.options().dtype(at::kInt));
     at::Tensor sparse_values_out;
@@ -711,46 +723,36 @@ std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tens
 }
 
 std::tuple<at::Tensor, at::Tensor> npu_quant_lightning_indexer_meta(
-    const at::Tensor& query,
-    const at::Tensor& key,
-    const at::Tensor& weights,
-    const at::Tensor& query_dequant_scale,
-    const at::Tensor& key_dequant_scale,
-    int64_t query_quant_mode,
-    int64_t key_quant_mode,
-    const c10::optional<at::Tensor>& actual_seq_lengths_query,
-    const c10::optional<at::Tensor>& actual_seq_lengths_key,
-    const c10::optional<at::Tensor>& block_table,
-    const c10::optional<at::Tensor>& metadata,
-    c10::string_view layout_query,
-    c10::string_view layout_key,
-    int64_t sparse_count,
-    int64_t sparse_mode,
-    int64_t pre_tokens,
-    int64_t next_tokens,
-    int64_t cmp_ratio,
-    bool return_value)
+    const at::Tensor &query, const at::Tensor &key, const at::Tensor &weights,
+    const at::Tensor &query_dequant_scale, const at::Tensor &key_dequant_scale,
+    int64_t query_quant_mode, int64_t key_quant_mode,
+    const c10::optional<at::Tensor> &actual_seq_lengths_query,
+    const c10::optional<at::Tensor> &actual_seq_lengths_key,
+    const c10::optional<at::Tensor> &block_table,
+    const c10::optional<at::Tensor> &metadata,
+    c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count,
+    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio, bool return_value)
 {
     std::string query_layout_str = std::string(layout_query);
     std::string key_layout_str = std::string(layout_key);
-    auto quant_lightning_indexer_output = construct_quant_lightning_indexer_output_tensor(
-        query, key, sparse_count, query_layout_str, key_layout_str, return_value);
+    std::tuple<at::Tensor, at::Tensor> quant_lightning_indexer_output = construct_quant_lightning_indexer_output_tensor(
+            query, key, sparse_count, query_layout_str, key_layout_str, return_value);
     at::Tensor sparse_indices_out = std::get<0>(quant_lightning_indexer_output);
     at::Tensor sparse_values_out = std::get<1>(quant_lightning_indexer_output);
 
     return std::tuple<at::Tensor, at::Tensor>(sparse_indices_out, sparse_values_out);
 }
 
-std::tuple<at::Tensor, at::Tensor> construct_output_tensor(const at::Tensor& q,
-                                                           std::string layout,
-                                                           bool return_softmax_lse)
+std::tuple<at::Tensor, at::Tensor> construct_output_tensor(const at::Tensor &q, std::string layout,
+    bool return_softmax_lse)
 {
     for (size_t i = 0; i < q.sizes().size(); i++) {
         TORCH_CHECK(q.size(i) > 0,
-                    "All values within query's shape should be greater than 0, but shape[",
-                    i,
-                    "] is ",
-                    q.size(i));
+            "All values within query's shape should be greater "
+            "than 0, but shape[",
+            i,
+            "] is ",
+            q.size(i));
     }
     at::Tensor output = at::empty(q.sizes(), q.options().dtype(q.dtype()));
     at::Tensor softmax_lse;
@@ -764,45 +766,36 @@ std::tuple<at::Tensor, at::Tensor> construct_output_tensor(const at::Tensor& q,
     return std::tuple<at::Tensor, at::Tensor>(output, softmax_lse);
 }
 
-std::tuple<at::Tensor, at::Tensor> npu_sparse_attn_sharedkv_meta(
-    const at::Tensor& q,
-    const c10::optional<at::Tensor>& ori_kv,
-    const c10::optional<at::Tensor>& cmp_kv,
-    const c10::optional<at::Tensor>& ori_sparse_indices,
-    const c10::optional<at::Tensor>& cmp_sparse_indices,
-    const c10::optional<at::Tensor>& ori_block_table,
-    const c10::optional<at::Tensor>& cmp_block_table,
-    const c10::optional<at::Tensor>& cu_seqlens_q,
-    const c10::optional<at::Tensor>& cu_seqlens_ori_kv,
-    const c10::optional<at::Tensor>& cu_seqlens_cmp_kv,
-    const c10::optional<at::Tensor>& seqused_q,
-    const c10::optional<at::Tensor>& seqused_kv,
-    const c10::optional<at::Tensor>& sinks,
-    const c10::optional<at::Tensor>& metadata,
-    double softmax_scale,
-    int64_t cmp_ratio,
-    int64_t ori_mask_mode,
-    int64_t cmp_mask_mode,
-    int64_t ori_win_left,
-    int64_t ori_win_right,
-    c10::string_view layout_q,
-    c10::string_view layout_kv,
-    bool return_softmax_lse)
+std::tuple<at::Tensor, at::Tensor> npu_sparse_attn_sharedkv_meta(const at::Tensor &q, const c10::optional<at::Tensor> &ori_kv,
+    const c10::optional<at::Tensor> &cmp_kv, const c10::optional<at::Tensor> &ori_sparse_indices,
+    const c10::optional<at::Tensor> &cmp_sparse_indices, const c10::optional<at::Tensor> &ori_block_table,
+    const c10::optional<at::Tensor> &cmp_block_table, const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv, const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q, const c10::optional<at::Tensor> &seqused_kv,
+    const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
+    double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, int64_t cmp_mask_mode, int64_t ori_win_left,
+    int64_t ori_win_right, c10::string_view layout_q, c10::string_view layout_kv, bool return_softmax_lse)
 {
     std::string layout_q_str = std::string(layout_q);
-    return construct_output_tensor(q, layout_q_str, return_softmax_lse);
+    std::tuple<at::Tensor, at::Tensor> output = construct_output_tensor(q, layout_q_str, return_softmax_lse);
+
+    return output;
 }
 
 at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     int64_t num_heads_q,
     int64_t num_heads_kv,
     int64_t head_dim,
-    const c10::optional<at::Tensor>& cu_seqlens_q,
-    const c10::optional<at::Tensor>& seqused_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q,
+    const c10::optional<at::Tensor> &seqused_kv,
     int64_t batch_size,
     int64_t max_seqlen_q,
     int64_t max_seqlen_kv,
-    int64_t topk,
+    int64_t ori_topk,
+    int64_t cmp_topk,
     int64_t cmp_ratio,
     int64_t ori_mask_mode,
     int64_t cmp_mask_mode,
@@ -811,56 +804,76 @@ at::Tensor npu_sparse_attn_sharedkv_metadata_meta(
     c10::string_view layout_q,
     c10::string_view layout_kv,
     bool has_ori_kv,
-    bool has_cmp_kv)
+    bool has_cmp_kv,
+    const c10::string_view device)
 {
+    constexpr int64_t OUTPUT_SIZE = 1024;
     at::Tensor output;
     if (cu_seqlens_q.has_value()) {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_q.value().device()));
+    } else if (cu_seqlens_ori_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_ori_kv.value().device()));
+    } else if (cu_seqlens_cmp_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cu_seqlens_cmp_kv.value().device()));
+    } else if (seqused_q.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_q.value().device()));
+    } else if (seqused_kv.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_kv.value().device()));
     } else {
-        output = torch::empty({1024}, torch::dtype(torch::kInt32).device("npu"));
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
     }
     return output;
 }
 
 at::Tensor npu_quant_lightning_indexer_metadata_meta(
-    at::Tensor& query,
-    int64_t num_heads_q,
-    int64_t num_heads_k,
-    int64_t head_dim,
-    int64_t query_quant_mode,
-    int64_t key_quant_mode,
-    const c10::optional<at::Tensor>& actual_seq_lengths_query,
-    const c10::optional<at::Tensor>& actual_seq_lengths_key,
-    int64_t batch_size,
-    int64_t max_seqlen_q,
-    int64_t max_seqlen_k,
-    const c10::string_view layout_query,
-    c10::string_view layout_key,
-    int64_t sparse_count,
-    int64_t sparse_mode,
-    int64_t pre_tokens,
-    int64_t next_tokens,
-    int64_t cmp_ratio)
+    int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode,
+    const c10::optional<at::Tensor> &actual_seq_lengths_query, const c10::optional<at::Tensor> &actual_seq_lengths_key, int64_t batch_size,
+    int64_t max_seqlen_q, int64_t max_seqlen_k, const c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count,
+    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio, const c10::string_view device)
 {
-    return torch::empty({1024}, torch::dtype(torch::kInt32).device(query.device()));
+    constexpr int64_t OUTPUT_SIZE = 1024;
+    at::Tensor output;
+    if (actual_seq_lengths_query.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_query.value().device()));
+    } else if (actual_seq_lengths_key.has_value()) {
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_key.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
+    }
+
+    return output;
 }
 
 at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
 {
     c10::SymIntArrayRef output_size = residual.sym_sizes();
-    return at::empty_symint(output_size, residual.options().dtype(residual.dtype()));
+    at::Tensor out = at::empty_symint(output_size, residual.options().dtype(residual.dtype()));
+    return out;
 }
 
-at::Tensor npu_hc_post_meta(const at::Tensor& x,
-                            const at::Tensor& residual,
-                            const at::Tensor& post,
-                            const at::Tensor& comb)
+at::Tensor npu_hc_post_meta(
+    const at::Tensor& x,
+    const at::Tensor& residual,
+    const at::Tensor& post,
+    const at::Tensor& comb)
 {
-    return construct_hc_post_output_tensor(residual);
+    at::Tensor outputs = construct_hc_post_output_tensor(residual);
+    return outputs;
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(
-    const at::Tensor& x, int64_t hc_mult)
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(const at::Tensor& x, int64_t hc_mult)
 {
     auto xDims = x.dim();
     at::SmallVector<c10::SymInt, 8> y_size;
@@ -873,25 +886,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(
         y_size = {batch, size, d};
         post_size = {batch, size, hc_mult};
         comb_frag_size = {batch, size, hc_mult, hc_mult};
-    } else if (xDims == 3) {
+    } else if (xDims == 3){
         auto bs = x.sym_size(0);
         auto d = x.sym_size(2);
         y_size = {bs, d};
         post_size = {bs, hc_mult};
         comb_frag_size = {bs, hc_mult, hc_mult};
-    } else {
-        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
     }
 
     at::Tensor y = at::empty_symint(c10::SymIntArrayRef(y_size), x.options().dtype(at::kBFloat16));
     at::Tensor post = at::empty_symint(c10::SymIntArrayRef(post_size), x.options().dtype(at::kFloat));
-    at::Tensor comb_frag =
-        at::empty_symint(c10::SymIntArrayRef(comb_frag_size), x.options().dtype(at::kFloat));
-    return {y, post, comb_frag};
+    at::Tensor comb_frag = at::empty_symint(c10::SymIntArrayRef(comb_frag_size), x.options().dtype(at::kFloat));
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
 
-at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x,
-                                                float epsilon = 1e-6)
+at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x, float epsilon=1e-6)
 {
     constexpr int64_t SIZE = 8;
     TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
@@ -899,28 +909,28 @@ at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x,
     auto options = x.options();
     auto xDims = x.dim();
     c10::SmallVector<int64_t, SIZE> yOut_shape;
-    for (auto i = 0; i < xDims - 2; i++) {
+    for (size_t i = 0; i < xDims - 2; i++) {
         yOut_shape.push_back(x.sizes()[i]);
     }
     yOut_shape.push_back(1);
-    return at::empty(yOut_shape, options.dtype(at::kFloat));
+    at::Tensor yOut = at::empty(yOut_shape, options.dtype(at::kFloat));
+
+    return yOut;
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_meta(
-    const at::Tensor& x,
-    const at::Tensor& hc_fn,
-    const at::Tensor& hc_scale,
-    const at::Tensor& hc_base,
-    int64_t hc_mult,
-    int64_t hc_sinkhorn_iters,
-    double norm_eps,
-    double hc_eps)
+    const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base,
+    int64_t hc_mult, int64_t hc_sinkhorn_iters, double norm_eps, double hc_eps)
 {
-    return construct_hc_pre_output_tensor(x, hc_mult);
+    auto output_tensors = construct_hc_pre_output_tensor(x, hc_mult);
+    at::Tensor y = std::get<0>(output_tensors);
+    at::Tensor post = std::get<1>(output_tensors);
+    at::Tensor comb_frag = std::get<2>(output_tensors);
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
 
-at::Tensor construct_hc_pre_inv_rms_output_tensor(const at::Tensor& x,
-                                                  float epsilon = 1e-20)
+at::Tensor construct_hc_pre_inv_rms_output_tensor(const at::Tensor& x, float epsilon=1e-20)
 {
     constexpr int64_t SIZE = 8;
     TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
@@ -932,18 +942,23 @@ at::Tensor construct_hc_pre_inv_rms_output_tensor(const at::Tensor& x,
         yOut_shape.push_back(x.sizes()[i]);
     }
     yOut_shape.push_back(1);
-    return at::empty(yOut_shape, options.dtype(at::kFloat));
+    at::Tensor yOut = at::empty(yOut_shape, options.dtype(at::kFloat));
+
+    return yOut;
 }
 
-at::Tensor npu_hc_pre_inv_rms_meta(const at::Tensor& x, double epsilon = 1e-20)
+at::Tensor npu_hc_pre_inv_rms_meta(const at::Tensor& x, double epsilon=1e-20)
 {
     TORCH_CHECK(x.numel() > 0, "Input tensor x should not be empty.");
     TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
-    return construct_hc_pre_inv_rms_output_tensor(x, epsilon);
+
+    at::Tensor yOut;
+    yOut = construct_hc_pre_inv_rms_output_tensor(x, epsilon);
+
+    return yOut;
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_tensor(
-    const at::Tensor& mixes, const at::Tensor& x, int64_t hc_mult)
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_tensor(const at::Tensor& mixes, const at::Tensor& x, int64_t hc_mult)
 {
     auto xDims = x.dim();
     at::SmallVector<int64_t, 8> y_size;
@@ -956,41 +971,41 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_
         y_size = {batch, size, d};
         post_size = {batch, size, hc_mult};
         comb_frag_size = {batch, size, hc_mult, hc_mult};
-    } else if (xDims == 3) {
+    } else if (xDims == 3){
         auto bs = x.size(0);
         auto d = x.size(2);
         y_size = {bs, d};
         post_size = {bs, hc_mult};
         comb_frag_size = {bs, hc_mult, hc_mult};
-    } else {
-        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
     }
 
     at::Tensor y = at::empty(y_size, x.options().dtype(at::kBFloat16));
     at::Tensor post = at::empty(post_size, x.options().dtype(at::kFloat));
     at::Tensor comb_frag = at::empty(comb_frag_size, x.options().dtype(at::kFloat));
-    return {y, post, comb_frag};
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_meta(
-    const at::Tensor& mixes,
-    const at::Tensor& rsqrt,
-    const at::Tensor& hc_scale,
-    const at::Tensor& hc_base,
-    const at::Tensor& x,
-    int64_t hc_mult,
-    int64_t hc_sinkhorn_iters,
-    double hc_eps)
+    const at::Tensor& mixes, const at::Tensor& rsqrt, const at::Tensor& hc_scale, const at::Tensor& hc_base,
+    const at::Tensor& x, int64_t hc_mult, int64_t hc_sinkhorn_iters, double hc_eps)
 {
-    return construct_hc_pre_sinkhorn_output_tensor(mixes, x, hc_mult);
+    auto output_tensors = construct_hc_pre_sinkhorn_output_tensor(mixes, x, hc_mult);
+    at::Tensor y = std::get<0>(output_tensors);
+    at::Tensor post = std::get<1>(output_tensors);
+    at::Tensor comb_frag = std::get<2>(output_tensors);
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
 
-void inplace_partial_rotary_mul_meta(at::Tensor& x,
-                                     const at::Tensor& r1,
-                                     const at::Tensor& r2,
-                                     c10::string_view rotary_mode,
-                                     at::IntArrayRef partial_slice)
+void inplace_partial_rotary_mul_meta(
+    at::Tensor &x,
+    const at::Tensor &r1,
+    const at::Tensor &r2,
+    c10::string_view rotary_mode,
+    at::IntArrayRef partial_slice)
 {
+    auto origin_dim_num = x.dim();
     return;
 }
 
@@ -1009,6 +1024,7 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_meta(
         scale_out_shape.push_back(x.sizes()[i]);
     }
     at::Tensor scale_out = at::empty(scale_out_shape, options.dtype(at::kFloat));
+
     return std::make_tuple(y_out, scale_out);
 }
 
@@ -1087,32 +1103,20 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("npu_moe_init_routing_custom", &vllm_ascend::meta::npu_moe_init_routing_custom_meta);
     // Moe_gating_top_k
     ops.impl("moe_gating_top_k", &vllm_ascend::meta::moe_gating_top_k_meta);
-    // Moe_gating_top_k_hash
-    ops.impl("moe_gating_top_k_hash", &vllm_ascend::meta::moe_gating_top_k_hash_meta);
-    // compressor
-    ops.impl("compressor", &vllm_ascend::meta::compressor_meta);
-    // npu_quant_lightning_indexer
-    ops.impl("npu_quant_lightning_indexer", &vllm_ascend::meta::npu_quant_lightning_indexer_meta);
-    // npu_sparse_attn_sharedkv
-    ops.impl("npu_sparse_attn_sharedkv", &vllm_ascend::meta::npu_sparse_attn_sharedkv_meta);
-    // npu_sparse_attn_sharedkv_metadata
-    ops.impl("npu_sparse_attn_sharedkv_metadata", &vllm_ascend::meta::npu_sparse_attn_sharedkv_metadata_meta);
-    // npu_quant_lightning_indexer_metadata
-    ops.impl("npu_quant_lightning_indexer_metadata", &vllm_ascend::meta::npu_quant_lightning_indexer_metadata_meta);
-    // npu_hc_post
-    ops.impl("npu_hc_post", &vllm_ascend::meta::npu_hc_post_meta);
-    // npu_hc_pre
-    ops.impl("npu_hc_pre", &vllm_ascend::meta::npu_hc_pre_meta);
-    // npu_hc_pre_inv_rms
-    ops.impl("npu_hc_pre_inv_rms", &vllm_ascend::meta::npu_hc_pre_inv_rms_meta);
-    // npu_hc_pre_sinkhorn
-    ops.impl("npu_hc_pre_sinkhorn", &vllm_ascend::meta::npu_hc_pre_sinkhorn_meta);
-    // inplace_partial_rotary_mul
-    ops.impl("inplace_partial_rotary_mul", &vllm_ascend::meta::inplace_partial_rotary_mul_meta);
-    // npu_rms_norm_dynamic_quant
-    ops.impl("npu_rms_norm_dynamic_quant", &vllm_ascend::meta::npu_rms_norm_dynamic_quant_meta);
     // Add_Rms_Norm_Bias
     ops.impl("npu_add_rms_norm_bias", &vllm_ascend::meta::npu_add_rms_norm_bias_meta);
+    ops.impl("moe_gating_top_k_hash", &vllm_ascend::meta::moe_gating_top_k_hash_meta);
+    ops.impl("compressor", &vllm_ascend::meta::compressor_meta);
+    ops.impl("npu_quant_lightning_indexer", &vllm_ascend::meta::npu_quant_lightning_indexer_meta);
+    ops.impl("npu_quant_lightning_indexer_metadata", &vllm_ascend::meta::npu_quant_lightning_indexer_metadata_meta);
+    ops.impl("npu_sparse_attn_sharedkv", &vllm_ascend::meta::npu_sparse_attn_sharedkv_meta);
+    ops.impl("npu_sparse_attn_sharedkv_metadata", &vllm_ascend::meta::npu_sparse_attn_sharedkv_metadata_meta);
+    ops.impl("npu_hc_post", &vllm_ascend::meta::npu_hc_post_meta);
+    ops.impl("npu_hc_pre", &vllm_ascend::meta::npu_hc_pre_meta);
+    ops.impl("npu_hc_pre_inv_rms", &vllm_ascend::meta::npu_hc_pre_inv_rms_meta);
+    ops.impl("npu_hc_pre_sinkhorn", &vllm_ascend::meta::npu_hc_pre_sinkhorn_meta);
+    ops.impl("inplace_partial_rotary_mul", &vllm_ascend::meta::inplace_partial_rotary_mul_meta);
+    ops.impl("npu_rms_norm_dynamic_quant", &vllm_ascend::meta::npu_rms_norm_dynamic_quant_meta);
     // transpose_kv_cache_by_block
     ops.impl("transpose_kv_cache_by_block", &vllm_ascend::meta::transpose_kv_cache_by_block_meta);
     // CopyAndExpandEagleInputs

@@ -28,7 +28,7 @@ bool LightningIndexerQuantMetadataCpuKernel::Prepare(CpuKernelContext &ctx) {
   metaData_ = ctx.Output(static_cast<uint32_t>(ParamId::metaData));
 
 
-  bool requiredAttrs = GetAttrValue(ctx, "aic_core_num", aicCoreNum_) &&
+  bool requiredAttrs = GetAttrValue(ctx, "aic_core_num", aicCoreNum_) && 
                        GetAttrValue(ctx, "aiv_core_num", aivCoreNum_) &&
                        GetAttrValue(ctx, "soc_version", socVersion_) &&
                        GetAttrValue(ctx, "num_heads_q", numHeadsQ_) &&
@@ -59,7 +59,7 @@ bool LightningIndexerQuantMetadataCpuKernel::Prepare(CpuKernelContext &ctx) {
 
 bool LightningIndexerQuantMetadataCpuKernel::ParamsCheck() {
 
-    return true;
+    return true; 
 }
 
 ValidSocVersion LightningIndexerQuantMetadataCpuKernel::ProcessSocVersion() {
@@ -71,12 +71,12 @@ ValidSocVersion LightningIndexerQuantMetadataCpuKernel::ProcessSocVersion() {
                 socVersion_ == "Ascend910D" || socVersion_ == "Ascend910_95") {
         return ValidSocVersion::ASCEND910D;
     }
-
+    
     return ValidSocVersion::RESERVED_VERSION;
 }
 
 bool LightningIndexerQuantMetadataCpuKernel::ParamsInit() {
-
+    
     groupSize_ = numHeadsQ_ / numHeadsK_;
     if (actSeqLenQ_ != nullptr) {
         auto shape = actSeqLenQ_->GetTensorShape();
@@ -88,7 +88,7 @@ bool LightningIndexerQuantMetadataCpuKernel::ParamsInit() {
         }
     }
     mBaseSize_ = 256;
-
+    
     ValidSocVersion validSocVersion = ProcessSocVersion();
     if (validSocVersion == ValidSocVersion::ASCEND910B){
         s2BaseSize_ = 2048U; // 仅用于A3
@@ -110,7 +110,7 @@ uint32_t LightningIndexerQuantMetadataCpuKernel::GetS1SeqSize(uint32_t bIdx)
     const int32_t *s1Ptr = (int32_t*)actSeqLenQ_->GetData();
     if (layoutQuery_ == "TND") {
         if (s1Ptr[0] == 0) {
-             return static_cast<uint32_t>(s1Ptr[bIdx + 1U] - s1Ptr[bIdx]);
+             return static_cast<uint32_t>(s1Ptr[bIdx + 1U] - s1Ptr[bIdx]);       
         } else {
             return (bIdx == 0) ? static_cast<uint32_t>(s1Ptr[bIdx]) :
                 static_cast<uint32_t>(s1Ptr[bIdx] - s1Ptr[bIdx - 1U]);
@@ -197,7 +197,7 @@ int64_t LightningIndexerQuantMetadataCpuKernel::CalcCost(
     return static_cast<int64_t>(6U * alignBasicM + 10U * alignBasicS2);                 // 6：M轴系数，10：S2轴系数
 }
 
-BlockCost<int64_t> LightningIndexerQuantMetadataCpuKernel::CalcCostTable(uint32_t s1NormalSize,
+BlockCost<int64_t> LightningIndexerQuantMetadataCpuKernel::CalcCostTable(uint32_t s1NormalSize, 
     uint32_t s2NormalSize, uint32_t s1GTailSize, uint32_t s2TailSize)
 {
     BlockCost<int64_t> typeCost {};
@@ -230,7 +230,7 @@ Range<uint32_t> LightningIndexerQuantMetadataCpuKernel::CalcS2Range(
     int64_t s1GFirstToken = static_cast<int64_t>(s1GIdx) * static_cast<int64_t>(mBaseSize_);
     int64_t s1GLastToken = std::min(s1GFirstToken + static_cast<int64_t>(mBaseSize_),
         static_cast<int64_t>(batchCache.s1Size) * static_cast<int64_t>(groupSize_)) - 1;
-
+    
     int64_t s1FirstToken = 0;
     int64_t s1LastToken = 0;
     if (isS1G_) {
@@ -266,9 +266,9 @@ Range<uint32_t> LightningIndexerQuantMetadataCpuKernel::CalcS2Range(
     if (s2CmpLength == 0) {
         s2Start = 0U;
         s2End = 0U;
-        return std::make_pair(s2Start, s2End);
+        return std::make_pair(s2Start, s2End);       
     } else {
-        s2Start = 0U; //TODO:sparse mode =4
+        s2Start = 0U; //TODO:sparse mode =4 
         s2End = (s2CmpLength + s2BaseSize_ - 1) / s2BaseSize_ + 1U; // end of block index, Right-open interval
         return std::make_pair(s2Start, s2End);
     }
@@ -290,7 +290,7 @@ void LightningIndexerQuantMetadataCpuKernel::CalcBatchCache(
         splitInfo.s2TailSize[bIdx]);
 }
 
-void LightningIndexerQuantMetadataCpuKernel::CalcS1GCache(uint32_t s1GIdx,
+void LightningIndexerQuantMetadataCpuKernel::CalcS1GCache(uint32_t s1GIdx, 
     const SplitContext &splitContext, const BatchCache &batchCache, S1GCache &s1GCache)
 {
     const SplitInfo &splitInfo = splitContext.splitInfo;
@@ -504,7 +504,7 @@ void LightningIndexerQuantMetadataCpuKernel::AssignByBlock(const SplitContext &s
         curCost = assignContext.s1GCache.s1GLastBlockCost;
     }
 
-    while (IsWithinTolerance(assignContext.coreCache.costLimit, curCost / FA_TOLERANCE_RATIO,
+    while (IsWithinTolerance(assignContext.coreCache.costLimit, curCost / FA_TOLERANCE_RATIO, 
             assignContext.coreCache.cost + curCost)) { // (costLimit - curCostOnCore) * FA_TOLERANCE_RATIO > curCost；至少分配1块
         assignContext.coreCache.cost += curCost;
         assignContext.coreCache.block++;
@@ -538,7 +538,7 @@ void LightningIndexerQuantMetadataCpuKernel::ForceAssign(const SplitContext &spl
     // 当前行被分配一块出去，更新剩余负载
     assignContext.s1GCache.s1GCost = assignContext.s1GCache.s1GCost - curCost;
     assignContext.s1GCache.s1GBlock--;
-    UpdateCursor(splitContext, assignContext);
+    UpdateCursor(splitContext, assignContext); 
 }
 
 bool LightningIndexerQuantMetadataCpuKernel::IsNeedRecordFDInfo(const AssignContext &assignContext, const SplitResult &splitRes)
@@ -620,7 +620,7 @@ void LightningIndexerQuantMetadataCpuKernel::CalcSplitPlan(uint32_t coreNum,
         assignContext.coreCache.costLimit = assignContext.unassignedCost / (coreNum - assignContext.curCoreIdx);
         if (!supportFd_){
             assignContext.coreCache.costLimit = costInfo.maxS1GCost > assignContext.coreCache.costLimit ? costInfo.maxS1GCost :assignContext.coreCache.costLimit;
-        }
+        }      
 
         // 1、按整batch分配
         AssignByBatch(splitContext, assignContext);
@@ -630,7 +630,7 @@ void LightningIndexerQuantMetadataCpuKernel::CalcSplitPlan(uint32_t coreNum,
 
         // 3、按块分配
         if (supportFd_){
-        AssignByBlock(splitContext, assignContext);
+        AssignByBlock(splitContext, assignContext);            
         // 4、强制分配
             if (assignContext.coreCache.block == 0) {
                 ForceAssign(splitContext, assignContext);
@@ -746,12 +746,12 @@ void LightningIndexerQuantMetadataCpuKernel::SplitFD(SplitResult &result)
 }
 
 bool LightningIndexerQuantMetadataCpuKernel::BalanceSchedule() {
-
+    
     SplitContext splitContext(batchSize_);
-
+    
     // 1、划分基本块，统计信息
     CalcSplitInfo(splitContext);
-
+    
     // 全空case
     if (splitContext.splitInfo.isKvSeqAllZero) {
         splitRes_.usedCoreNum = 1U;
