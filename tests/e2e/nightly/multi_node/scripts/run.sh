@@ -118,6 +118,7 @@ checkout_src() {
     TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
     TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
     git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+    git clean -fd csrc/**
 
     # When IS_PR_TEST is true, VLLM_ASCEND_REF is a PR number; otherwise it is a branch/tag name.
     cd "$WORKSPACE/vllm-ascend"
