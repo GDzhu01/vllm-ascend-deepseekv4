@@ -45,8 +45,10 @@ jobs:
     runs-on: linux-aarch64-a2-0
     if: ${{ contains(github.event.pull_request.labels.*.name, 'ready') && contains(github.event.pull_request.labels.*.name, 'ready-for-test') }}
     outputs:
-      e2e_tracker: ${{ steps.filter.outputs.e2e_tracker }}
-      ut_tracker: ${{ steps.filter.outputs.ut_tracker }}
+      # Just to avoid the issue that the output is empty when the step is failed, we set the default value to 'true' to trigger the test.
+      # The real value is determined by the step outcome and filter output.
+      e2e_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.e2e_tracker || 'true' }}
+      ut_tracker: ${{ steps.filter.outcome == 'success' && steps.filter.outputs.ut_tracker || 'true' }}
     steps:
       - name: Setup git proxy
         run: |
@@ -64,6 +66,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
         id: filter
+        continue-on-error: true
         with:
           filters: |
             e2e_tracker:
