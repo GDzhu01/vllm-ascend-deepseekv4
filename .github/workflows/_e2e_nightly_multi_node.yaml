@@ -112,7 +112,7 @@ jobs:
             # Strip .yaml extension, lowercase, replace dots/underscores with hyphens, cap at 50 chars.
             config_file="${{ inputs.config_file_path }}"
             lws_suffix=$(echo "$config_file" | sed 's/\.yaml$//' | tr '[:upper:]' '[:lower:]' | tr '._' '-' | cut -c1-50)
-            LWS_NAME="vllm-${lws_suffix}"
+            LWS_NAME="private-vllm-${lws_suffix}"
             echo "LWS_NAME=${LWS_NAME}" >> $GITHUB_ENV
             echo "LEADER_POD=${LWS_NAME}-0" >> $GITHUB_ENV
             echo "Computed LWS_NAME=${LWS_NAME}"
