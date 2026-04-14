@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
  * \file quant_lightning_indexer_service_cube.h
  * \brief use 5 buffer for matmul l1, better pipeline
  */
-#ifndef quant_lightning_indexer_SERVICE_CUBE_H
-#define quant_lightning_indexer_SERVICE_CUBE_H
+#ifndef QUANT_LIGHTNING_INDEXER_SERVICE_CUBE_H
+#define QUANT_LIGHTNING_INDEXER_SERVICE_CUBE_H
 
 #include "kernel_operator.h"
 #include "kernel_operator_list_tensor_intf.h"
@@ -207,7 +207,7 @@ __aicore__ inline void QLIMatmul<QLIT>::ProcessQk(uint64_t s1gL0RealSize, uint64
         } else {
             KeyNd2Nz(mmInfo.s2L0RealSize, mmInfo, runInfo);
         }
-        
+
         SetFlag<HardEvent::MTE2_MTE1>(MTE2_MTE1_EVENT);
         WaitFlag<HardEvent::MTE2_MTE1>(MTE2_MTE1_EVENT);
     }
@@ -610,4 +610,4 @@ __aicore__ inline void QLIMatmul<QLIT>::FreeEventID()
     WaitFlag<HardEvent::FIX_M>(FIX_M_EVENT + 1);
 }
 }  // namespace QLIKernel
-#endif
+#endif  // QUANT_LIGHTNING_INDEXER_SERVICE_CUBE_H

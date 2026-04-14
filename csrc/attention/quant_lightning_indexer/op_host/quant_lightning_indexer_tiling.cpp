@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -104,7 +104,7 @@ ge::graphStatus QLIInfoParser::GetNpuInfo()
 
     socVersion_ = ascendcPlatform.GetSocVersion();
     if ((socVersion_ != platform_ascendc::SocVersion::ASCEND910B) &&
-        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) && 
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) &&
         (socVersion_ != platform_ascendc::SocVersion::ASCEND910_95)) {
         OP_LOGE(opName_, "SOC Version[%d] is not support.", static_cast<int32_t>(socVersion_));
         return GRAPH_FAILED;
@@ -211,20 +211,31 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
 {
     std::string layout_key(opParamInfo_.layOutKey);
     std::string layout_query(opParamInfo_.layOutQuery);
-    if ((socVersion_ == platform_ascendc::SocVersion::ASCEND910B) ||
-        (socVersion_ == platform_ascendc::SocVersion::ASCEND910_93)) {
-        OP_CHECK_IF(
-            ((std::string(opParamInfo_.layOutKey) == "BNSD") || (std::string(opParamInfo_.layOutKey) == "PA_BBND")),
-            OP_LOGE(opName_, "input attr layout_key only supported PA_BSND, PA_BBND, BSND or TND,"
-                    "but now layout_key is %s.", layout_key.c_str()),
-                    return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
-        OP_CHECK_IF(
+
+    OP_CHECK_IF(
             ((std::string(opParamInfo_.layOutKey) != "PA_BSND")),
             OP_LOGE(opName_, "input attr layout_key only supported PA_BSND,"
                         "but now layout_key is %s.", layout_key.c_str()),
                         return ge::GRAPH_FAILED);
+
+    if ((socVersion_ == platform_ascendc::SocVersion::ASCEND910B) ||
+        (socVersion_ == platform_ascendc::SocVersion::ASCEND910_93)) {
+        OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
+                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= %d, but now sparse_count is %d",
+                       SPARSE_LIMIT, *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
+        OP_CHECK_IF((*opParamInfo_.cmpRatio <= 0) || (*opParamInfo_.cmpRatio > 128) || 
+                    ((*opParamInfo_.cmpRatio & (*opParamInfo_.cmpRatio - 1)) != 0),
+                OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
+                *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+        OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
+                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= %d, but now sparse_count is %d",
+                       SPARSE_LIMIT, *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
+        OP_CHECK_IF((*opParamInfo_.cmpRatio != 1) && (*opParamInfo_.cmpRatio != 4) && (*opParamInfo_.cmpRatio != 128), 
+                OP_LOGE(opName_, "input attr cmpRatio must be 1、4 or 128, but now cmpRatio is %ld.",
+                *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
     }
+
     OP_CHECK_IF(((std::string(opParamInfo_.layOutQuery) != "BSND") && (std::string(opParamInfo_.layOutQuery) != "TND")),
                OP_LOGE(opName_, "input attr layout_query only supported BSND or TND."), return ge::GRAPH_FAILED);
     OP_CHECK_IF(
@@ -233,9 +244,6 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
         OP_LOGE(opName_,  "outside of PA, input attr layout_query and input attr layout_key must be the same,"
                   "but now layout_key is %s, layout_query is %s.",
          layout_key.c_str(),  layout_query.c_str()), return ge::GRAPH_FAILED);
-    OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
-                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= %d, but now sparse_count is %d",
-                       SPARSE_LIMIT, *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
     OP_CHECK_IF(!((*opParamInfo_.sparseMode == 0) || (*opParamInfo_.sparseMode == SPARSE_MODE_LOWER)),
                 OP_LOGE(opName_, "input attr sparse_mode only supported 0 or 3, but now sparseMode is %d.",
                        *opParamInfo_.sparseMode), return ge::GRAPH_FAILED);
@@ -245,10 +253,7 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
     OP_CHECK_IF(*opParamInfo_.nextTokens != 9223372036854775807,
                 OP_LOGE(opName_, "input attr nextTokens only supported 9223372036854775807, but now nextTokens is %ld.",
                 *opParamInfo_.nextTokens), return ge::GRAPH_FAILED);
-    OP_CHECK_IF((*opParamInfo_.cmpRatio <= 0) || (*opParamInfo_.cmpRatio > 128) 
-                || ((*opParamInfo_.cmpRatio & (*opParamInfo_.cmpRatio - 1)) != 0),
-                OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
-                *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
+    
     OP_CHECK_IF(*opParamInfo_.queryQuantMode != 0, OP_LOGE(opName_, "input attr query_quant_mode only supported 0."),
                return ge::GRAPH_FAILED);
     OP_CHECK_IF(*opParamInfo_.keyQuantMode != 0, OP_LOGE(opName_, "input attr key_quant_mode only supported 0."),
@@ -502,11 +507,18 @@ ge::graphStatus QLIInfoParser::GetBatchSize()
         GetActualSeqLenSize(bSizeKey, opParamInfo_.actualSeqLengthsK.tensor, "input actual_seq_lengths_key");
         if (kLayout_ == DataLayout::TND) {
             OP_CHECK_IF(bSizeQuery != bSizeKey,
-                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query is %u, %u respectively, they must be same.",
+                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query and actual_seq_lengths_key is %u, %u respectively, they must be same.",
                         bSizeQuery, bSizeKey),
                 return ge::GRAPH_FAILED);
             bSize_ = bSizeQuery;
         } else {
+            if (bSizeQuery == bSizeKey + 1) {
+                batchSupperFlag_ = true;
+            }
+            OP_CHECK_IF((bSizeQuery != bSizeKey) && !batchSupperFlag_,
+                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query and actual_seq_lengths_key is %u, %u respectively, they must be same.",
+                        bSizeQuery, bSizeKey),
+                return ge::GRAPH_FAILED);
             bSize_ = bSizeKey; // Q为TND，batch从Key中获取
         }
         return ge::GRAPH_SUCCESS;
@@ -785,6 +797,7 @@ void QLIInfoParser::GenerateInfo(QLITilingInfo &QLIInfo)
     QLIInfo.maxBlockNumPerBatch = maxBlockNumPerBatch_;
 
     QLIInfo.pageAttentionFlag = (kLayout_ == DataLayout::PA_BSND);
+    QLIInfo.batchSupperFlag = batchSupperFlag_;
     QLIInfo.sparseMode = *opParamInfo_.sparseMode;
     QLIInfo.sparseCount = *opParamInfo_.sparseCount;
     QLIInfo.preTokens = *opParamInfo_.preTokens;
@@ -878,6 +891,7 @@ ge::graphStatus QuantLightningIndexerTiling::DoTiling(QLITilingInfo *tilingInfo)
     tilingData_.set_cmpRatio(tilingInfo->cmpRatio);
     tilingData_.set_returnValues(tilingInfo->returnValues);
     tilingData_.set_usedCoreNum(blockDim);
+    tilingData_.set_batchSupperFlag(tilingInfo->batchSupperFlag);
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
 

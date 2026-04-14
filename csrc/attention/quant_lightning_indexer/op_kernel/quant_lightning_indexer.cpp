@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include "lib/matmul_intf.h"
 #if (__CCE_AICORE__ == 310)
     #include "arch35/quant_lightning_indexer_kernel.h"
-
 #else
     #include "arch32/quant_lightning_indexer_kernel.h"
 #endif
@@ -47,7 +46,7 @@ __global__ __aicore__ void quant_lightning_indexer(__gm__ uint8_t *query, __gm__
     __gm__ uint8_t *user = GetUserWorkspace(workspace);
     KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);
     #if (__CCE_AICORE__ == 310)
-        INVOKE_LI_NO_KFC_OP_IMPL(QLIPreload, fp8_e4m3fn_t, fp8_e4m3fn_t, float, uint16_t,int32_t,
+        INVOKE_LI_NO_KFC_OP_IMPL(QLIPreload, fp8_e4m3fn_t, fp8_e4m3fn_t, float, uint16_t, int32_t,
                                  PAGE_ATTENTION, LI_LAYOUT(Q_LAYOUT_T), LI_LAYOUT(K_LAYOUT_T));
     #else
         INVOKE_LI_NO_KFC_OP_IMPL(QLIPreload, int8_t, int8_t, int32_t,

@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file sparse_attn_sharedkv_tiling.h
@@ -77,7 +77,7 @@ constexpr uint32_t CMP_SPARSE_INDICES_INDEX = 4;
 constexpr uint32_t ORI_BLOCK_TABLE_INDEX = 5;
 constexpr uint32_t CMP_BLOCK_TABLE_INDEX = 6;
 constexpr uint32_t CU_SEQLENS_Q_INDEX = 7;
-constexpr uint32_t CU_SEQLENS_KV_INDEX = 8;
+constexpr uint32_t CU_SEQLENS_ORI_KV_INDEX = 8;
 constexpr uint32_t CU_SEQLENS_CMP_KV_INDEX = 9;
 constexpr uint32_t SEQUSED_Q_INDEX = 10;
 constexpr uint32_t SEQUSED_KV_INDEX = 11;
@@ -95,6 +95,7 @@ constexpr uint32_t ATTR_ORI_WIN_LEFT_INDEX = 4;
 constexpr uint32_t ATTR_ORI_WIN_RIGHT_INDEX = 5;
 constexpr uint32_t ATTR_LAYOUT_Q_INDEX = 6;
 constexpr uint32_t ATTR_LAYOUT_KV_INDEX = 7;
+constexpr uint32_t ATTR_RETURN_SOFTMAX_LSE = 8;
 
 // Dim Index
 constexpr uint32_t DIM_IDX_ONE = 1;
@@ -152,6 +153,7 @@ TILING_DATA_FIELD_DEF(uint32_t, bmm2ResUbSize);
 
 TILING_DATA_FIELD_DEF(uint32_t, mBaseSize)
 TILING_DATA_FIELD_DEF(uint32_t, s2BaseSize)
+TILING_DATA_FIELD_DEF(bool, returnSoftmaxLse)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(SparseAttnSharedkvSwaParamsOp, SparseAttnSharedkvSwaParams)
 
@@ -180,9 +182,9 @@ struct SASParaInfo {
     SASTilingOptionalParaInfo oriBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cuSeqLensQ = {nullptr, nullptr};
-    SASTilingOptionalParaInfo seqUsedQ = {nullptr, nullptr};
-    SASTilingOptionalParaInfo cuSeqLensKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo cuSeqLensOriKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo cuSeqLensCmpKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo seqUsedQ = {nullptr, nullptr};
     SASTilingOptionalParaInfo sequsedKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo sinks = {nullptr, nullptr};
     SASTilingOptionalParaInfo metadata = {nullptr, nullptr};
@@ -196,6 +198,7 @@ struct SASParaInfo {
     const uint32_t *oriWinRight = nullptr;
     const char *layoutQ = nullptr;
     const char *layoutKv = nullptr;
+    const bool *returnSoftmaxLse = nullptr;
 };
 
 static std::string SASDataTypeToSerialString(ge::DataType type);
@@ -241,6 +244,7 @@ public:
     // Others Flag
     uint32_t sparseCount = 0;
     
+    bool returnSoftmaxLse = false;
     // PageAttention
     uint32_t blockTypeSize = 0;
     uint32_t oriMaxBlockNumPerBatch = 0;
@@ -430,10 +434,8 @@ public:
     ge::graphStatus GetGSize();
     ge::graphStatus GetBatchSize();
     ge::graphStatus GetQTSize();
-    ge::graphStatus GetKVTSize();
     ge::graphStatus GetS1Size();
     ge::graphStatus GetS2SizeForPageAttention();
-    ge::graphStatus GetS2SizeForTND();
     ge::graphStatus GetS2Size();
     ge::graphStatus GetMaxBlockNumPerBatch();
     ge::graphStatus GetBlockSize();
@@ -465,8 +467,6 @@ public:
     int64_t s2Size_ = 0;
     uint32_t headDim_ = 0;
     uint32_t qTSize_ = 0;
-    uint32_t orikvTSize_ = 0;
-    uint32_t cmpkvTSize_ = 0;
     uint32_t qHeadDim_ = 0;
     uint32_t oriKvHeadDim_ = 0;
     uint32_t cmpKvHeadDim_ = 0;

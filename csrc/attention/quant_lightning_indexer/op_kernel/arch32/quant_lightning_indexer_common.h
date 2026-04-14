@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
  * \file quant_lightning_indexer_common.h
  * \brief
  */
-#ifndef quant_lightning_indexer_COMMON_H
-#define quant_lightning_indexer_COMMON_H
+#ifndef QUANT_LIGHTNING_INDEXER_COMMON_H
+#define QUANT_LIGHTNING_INDEXER_COMMON_H
 
 namespace QLICommon {
 
@@ -58,7 +58,6 @@ struct RunInfo {
 
     bool isFirstS2InnerLoop;
     bool isLastS2InnerLoop;
-    bool isAllLoopEnd = false;
     bool isValid = false;
 };
 
@@ -103,6 +102,7 @@ struct ConstInfo {
     LI_LAYOUT outputLayout;            // 输出的格式
     bool attenMaskFlag = false;
     uint32_t cmpRatio = 1;             // 压缩率
+    bool batchSupperFlag = false;      // Qactual_se长度是否为B+1
 
     uint32_t actualLenQDims = 0U;  // query的actualSeqLength 的维度
     uint32_t actualLenDims = 0U;   // KV 的actualSeqLength 的维度
@@ -143,4 +143,4 @@ __aicore__ inline T CeilDiv(T num, T rnd)
 }
 }  // namespace QLICommon
 
-#endif  // quant_lightning_indexer_COMMON_H
+#endif  // QUANT_LIGHTNING_INDEXER_COMMON_H
