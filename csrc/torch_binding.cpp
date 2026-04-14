@@ -54,6 +54,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 namespace vllm_ascend {
 
@@ -1279,6 +1280,376 @@ at::Tensor npu_quant_lightning_indexer_metadata_npu(
     return output;
 }
 
+at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
+{
+    return at::empty_like(residual);
+}
+
+void check_hc_post_shape_and_dtype(const at::Tensor& x,
+                                   const at::Tensor& residual,
+                                   const at::Tensor& post,
+                                   const at::Tensor& comb)
+{
+    TORCH_CHECK(x.dim() == residual.dim(),
+                "Input tensor x and residual should have the same rank, but got ",
+                x.dim(),
+                " and ",
+                residual.dim(),
+                ".");
+    TORCH_CHECK(x.dim() == 2 || x.dim() == 3,
+                "Input tensor x's dim num should be 2 or 3, actual ",
+                x.dim(),
+                ".");
+    TORCH_CHECK(post.dim() == x.dim() + 1,
+                "Input tensor post's dim num should be x.dim() + 1, actual ",
+                post.dim(),
+                ".");
+    TORCH_CHECK(comb.dim() == x.dim() + 2,
+                "Input tensor comb's dim num should be x.dim() + 2, actual ",
+                comb.dim(),
+                ".");
+
+    const auto batch = x.size(0);
+    const auto sequence = x.dim() == 3 ? x.size(1) : x.size(0);
+    const auto hidden = x.dim() == 3 ? x.size(2) : x.size(1);
+    const auto hc = post.size(post.dim() - 1);
+
+    TORCH_CHECK(residual.size(0) == batch,
+                "The residual.shape[0] should be batch, actual residual.shape[0] is ",
+                residual.size(0),
+                ", batch is ",
+                batch,
+                ".");
+    TORCH_CHECK(residual.size(residual.dim() - 1) == hidden,
+                "The residual last dim should be hidden, actual residual last dim is ",
+                residual.size(residual.dim() - 1),
+                ", hidden is ",
+                hidden,
+                ".");
+    if (x.dim() == 3) {
+        TORCH_CHECK(residual.size(1) == sequence,
+                    "The residual.shape[1] should be sequence, actual residual.shape[1] is ",
+                    residual.size(1),
+                    ", sequence is ",
+                    sequence,
+                    ".");
+    }
+
+    TORCH_CHECK(post.size(0) == batch,
+                "The post.shape[0] should be batch, actual post.shape[0] is ",
+                post.size(0),
+                ", batch is ",
+                batch,
+                ".");
+    if (post.dim() == 3) {
+        TORCH_CHECK(post.size(1) == sequence,
+                    "The post.shape[1] should be sequence, actual post.shape[1] is ",
+                    post.size(1),
+                    ", sequence is ",
+                    sequence,
+                    ".");
+    }
+
+    TORCH_CHECK(comb.size(0) == batch,
+                "The comb.shape[0] should be batch, actual comb.shape[0] is ",
+                comb.size(0),
+                ", batch is ",
+                batch,
+                ".");
+    if (comb.dim() == 4) {
+        TORCH_CHECK(comb.size(1) == sequence,
+                    "The comb.shape[1] should be sequence, actual comb.shape[1] is ",
+                    comb.size(1),
+                    ", sequence is ",
+                    sequence,
+                    ".");
+    }
+    TORCH_CHECK(comb.size(comb.dim() - 2) == hc,
+                "The comb second last dim should be hc, actual value is ",
+                comb.size(comb.dim() - 2),
+                ", hc is ",
+                hc,
+                ".");
+    TORCH_CHECK(comb.size(comb.dim() - 1) == hc,
+                "The comb last dim should be hc, actual value is ",
+                comb.size(comb.dim() - 1),
+                ", hc is ",
+                hc,
+                ".");
+
+    TORCH_CHECK(x.dtype() == at::kFloat || x.dtype() == at::kHalf || x.dtype() == at::kBFloat16,
+                "x should be FLOAT16, BFLOAT16, or FLOAT32.");
+    TORCH_CHECK(residual.dtype() == x.dtype(),
+                "x's dtype should be equal to residual's dtype.");
+    TORCH_CHECK(post.dtype() == at::kFloat || post.dtype() == at::kHalf || post.dtype() == at::kBFloat16,
+                "post should be FLOAT16, BFLOAT16, or FLOAT32.");
+    TORCH_CHECK(comb.dtype() == post.dtype(),
+                "comb's dtype should be equal to post's dtype.");
+}
+
+at::Tensor npu_hc_post_npu(const at::Tensor& x,
+                           const at::Tensor& residual,
+                           const at::Tensor& post,
+                           const at::Tensor& comb)
+{
+    check_hc_post_shape_and_dtype(x, residual, post, comb);
+    at::Tensor out = construct_hc_post_output_tensor(residual);
+    EXEC_NPU_CMD(aclnnHcPost, x, residual, post, comb, out);
+    return out;
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_output_tensor(
+    const at::Tensor& x, int64_t hc_mult)
+{
+    auto xDims = x.dim();
+    at::SmallVector<int64_t, 8> y_size;
+    at::SmallVector<int64_t, 8> post_size;
+    at::SmallVector<int64_t, 8> comb_frag_size;
+    if (xDims == 4) {
+        auto batch = x.size(0);
+        auto size = x.size(1);
+        auto d = x.size(3);
+        y_size = {batch, size, d};
+        post_size = {batch, size, hc_mult};
+        comb_frag_size = {batch, size, hc_mult, hc_mult};
+    } else if (xDims == 3) {
+        auto bs = x.size(0);
+        auto d = x.size(2);
+        y_size = {bs, d};
+        post_size = {bs, hc_mult};
+        comb_frag_size = {bs, hc_mult, hc_mult};
+    } else {
+        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
+    }
+
+    at::Tensor y = at::empty(y_size, x.options().dtype(at::kBFloat16));
+    at::Tensor post = at::empty(post_size, x.options().dtype(at::kFloat));
+    at::Tensor comb_frag = at::empty(comb_frag_size, x.options().dtype(at::kFloat));
+    return {y, post, comb_frag};
+}
+
+at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x,
+                                                float epsilon = 1e-6)
+{
+    constexpr int64_t SIZE = 8;
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+
+    auto options = x.options();
+    auto xDims = x.dim();
+    c10::SmallVector<int64_t, SIZE> yOut_shape;
+    for (auto i = 0; i < xDims - 2; i++) {
+        yOut_shape.push_back(x.sizes()[i]);
+    }
+    yOut_shape.push_back(1);
+    return at::empty(yOut_shape, options.dtype(at::kFloat));
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
+    const at::Tensor& x,
+    const at::Tensor& hc_fn,
+    const at::Tensor& hc_scale,
+    const at::Tensor& hc_base,
+    int64_t hc_mult,
+    int64_t hc_sinkhorn_iters,
+    double norm_eps,
+    double hc_eps)
+{
+    auto xDims = x.dim();
+    auto rsqrt = construct_hc_pre_rsqrt_output_tensor(x, norm_eps);
+    EXEC_NPU_CMD(aclnnHcPreInvRms, x, norm_eps, rsqrt);
+
+    auto original_type = x.dtype();
+    at::Tensor x_float = x.to(at::kFloat);
+    at::Tensor x_flattened = x_float.flatten(2, -1);
+    if (xDims == 3) {
+        x_flattened = x_float.flatten(1, -1);
+    }
+    auto mixes = at::linear(x_flattened, hc_fn);
+
+    auto output_tensors = construct_hc_pre_output_tensor(x, hc_mult);
+    at::Tensor y = std::get<0>(output_tensors);
+    at::Tensor post = std::get<1>(output_tensors);
+    at::Tensor comb_frag = std::get<2>(output_tensors);
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn,
+                 mixes,
+                 rsqrt,
+                 hc_scale,
+                 hc_base,
+                 x,
+                 hc_mult,
+                 hc_sinkhorn_iters,
+                 hc_eps,
+                 y,
+                 post,
+                 comb_frag);
+    y = y.to(original_type);
+
+    return {y, post, comb_frag};
+}
+
+at::Tensor construct_hc_pre_inv_rms_output_tensor(const at::Tensor& x,
+                                                  float epsilon = 1e-20)
+{
+    constexpr int64_t SIZE = 8;
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+
+    auto options = x.options();
+    auto xDims = x.dim();
+    c10::SmallVector<int64_t, SIZE> yOut_shape;
+    for (auto i = 0; i < xDims - 2; i++) {
+        yOut_shape.push_back(x.sizes()[i]);
+    }
+    yOut_shape.push_back(1);
+    return at::empty(yOut_shape, options.dtype(at::kFloat));
+}
+
+at::Tensor npu_hc_pre_inv_rms_npu(const at::Tensor& x, double epsilon = 1e-20)
+{
+    TORCH_CHECK(x.numel() > 0, "Input tensor x should not be empty.");
+    TORCH_CHECK(epsilon >= 0, "epsilon should be greater than 0.");
+    TORCH_CHECK(x.dtype() == at::kFloat || x.dtype() == at::kHalf || x.dtype() == at::kBFloat16,
+                "x should be FLOAT16, BFLOAT16, or FLOAT32.");
+
+    at::Tensor yOut = construct_hc_pre_inv_rms_output_tensor(x, epsilon);
+    EXEC_NPU_CMD(aclnnHcPreInvRms, x, epsilon, yOut);
+    return yOut;
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_tensor(
+    const at::Tensor& mixes, const at::Tensor& x, int64_t hc_mult)
+{
+    auto xDims = x.dim();
+    at::SmallVector<int64_t, 8> y_size;
+    at::SmallVector<int64_t, 8> post_size;
+    at::SmallVector<int64_t, 8> comb_frag_size;
+    if (xDims == 4) {
+        auto batch = x.size(0);
+        auto size = x.size(1);
+        auto d = x.size(3);
+        y_size = {batch, size, d};
+        post_size = {batch, size, hc_mult};
+        comb_frag_size = {batch, size, hc_mult, hc_mult};
+    } else if (xDims == 3) {
+        auto bs = x.size(0);
+        auto d = x.size(2);
+        y_size = {bs, d};
+        post_size = {bs, hc_mult};
+        comb_frag_size = {bs, hc_mult, hc_mult};
+    } else {
+        TORCH_CHECK(false, "Input tensor x's dim num should be 3 or 4, actual ", xDims, ".");
+    }
+
+    at::Tensor y = at::empty(y_size, x.options().dtype(at::kBFloat16));
+    at::Tensor post = at::empty(post_size, x.options().dtype(at::kFloat));
+    at::Tensor comb_frag = at::empty(comb_frag_size, x.options().dtype(at::kFloat));
+    return {y, post, comb_frag};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_npu(
+    const at::Tensor& mixes,
+    const at::Tensor& rsqrt,
+    const at::Tensor& hc_scale,
+    const at::Tensor& hc_base,
+    const at::Tensor& x,
+    int64_t hc_mult,
+    int64_t hc_sinkhorn_iters,
+    double hc_eps)
+{
+    auto output_tensors = construct_hc_pre_sinkhorn_output_tensor(mixes, x, hc_mult);
+    at::Tensor y = std::get<0>(output_tensors);
+    at::Tensor post = std::get<1>(output_tensors);
+    at::Tensor comb_frag = std::get<2>(output_tensors);
+
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn,
+                 mixes,
+                 rsqrt,
+                 hc_scale,
+                 hc_base,
+                 x,
+                 hc_mult,
+                 hc_sinkhorn_iters,
+                 hc_eps,
+                 y,
+                 post,
+                 comb_frag);
+
+    return {y, post, comb_frag};
+}
+
+void inplace_partial_rotary_mul_npu(at::Tensor& x,
+                                    const at::Tensor& r1,
+                                    const at::Tensor& r2,
+                                    c10::string_view rotary_mode,
+                                    at::IntArrayRef partial_slice)
+{
+    constexpr int BSND_DIM_NUM = 4;
+    static const std::unordered_map<std::string, int> mode_map = {
+        {"half", 0},
+        {"interleave", 1},
+        {"quarter", 2},
+        {"interleave-half", 3},
+    };
+    const std::string rotary_mode_str(rotary_mode);
+    auto it = mode_map.find(rotary_mode_str);
+    if (it == mode_map.end()) {
+        return;
+    }
+
+    auto origin_dim_num = x.dim();
+    TORCH_CHECK(origin_dim_num == BSND_DIM_NUM,
+                "Input tensor x's dim num should be 4, actual ",
+                origin_dim_num,
+                ".");
+    EXEC_NPU_CMD(aclnnInplacePartialRotaryMul, x, r1, r2, it->second, partial_slice);
+}
+
+std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_npu(
+    const at::Tensor& x,
+    const at::Tensor& gamma,
+    const c10::optional<at::Tensor>& smooth_scale,
+    const c10::optional<at::Tensor>& beta,
+    double epsilon)
+{
+    constexpr int32_t SIZE = 8;
+    TORCH_CHECK(x.numel() > 0, "Input tensor x should not be empty.");
+    TORCH_CHECK(gamma.numel() > 0, "Input tensor gamma should not be empty.");
+    TORCH_CHECK(gamma.dim() == 1 && gamma.size(0) == x.size(-1),
+                "gamma dim are not equal to last dim of x shape.");
+    TORCH_CHECK(epsilon > 0, "epsilon should be greater than 0.");
+    TORCH_CHECK(x.dtype() == at::kHalf || x.dtype() == at::kBFloat16,
+                "x should be FLOAT16, BFLOAT16.");
+
+    at::Tensor smooth_scale2{nullptr};
+    auto options = x.options();
+    at::Tensor y_out = at::empty_like(x, options.dtype(at::kChar));
+    at::Tensor y2_out = at::empty({1}, options.dtype(at::kChar));
+
+    c10::SmallVector<int64_t, SIZE> scale_out_shape;
+    for (size_t i = 0; i < x.sizes().size() - 1; i++) {
+        scale_out_shape.push_back(x.sizes()[i]);
+    }
+    at::Tensor scale_out = at::empty(scale_out_shape, options.dtype(at::kFloat));
+    at::Tensor scale2_out = at::empty_like(scale_out);
+    std::array<bool, 2>* output_mask = nullptr;
+    int64_t* dst_type = nullptr;
+
+    EXEC_NPU_CMD(aclnnRmsNormDynamicQuant,
+                 x,
+                 gamma,
+                 smooth_scale,
+                 smooth_scale2,
+                 beta,
+                 epsilon,
+                 output_mask,
+                 dst_type,
+                 y_out,
+                 y2_out,
+                 scale_out,
+                 scale2_out);
+
+    return std::make_tuple(y_out, scale_out);
+}
+
 } // namespace vllm_ascend
 
 #ifdef ASCEND_PLATFORM_310P
@@ -1671,6 +2042,60 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         );
     ops.impl("npu_quant_lightning_indexer_metadata", torch::kPrivateUse1,
              &vllm_ascend::npu_quant_lightning_indexer_metadata_npu);
+
+    ops.def(
+        "npu_hc_post("
+            "Tensor x, "
+            "Tensor residual, "
+            "Tensor post, "
+            "Tensor comb"
+        ") -> (Tensor out)"
+        );
+    ops.impl("npu_hc_post", torch::kPrivateUse1, &vllm_ascend::npu_hc_post_npu);
+
+    ops.def(
+        "npu_hc_pre("
+            "Tensor x, Tensor hc_fn, Tensor hc_scale, Tensor hc_base, "
+            "int hc_mult, int hc_sinkhorn_iters, "
+            "float norm_eps, float hc_eps"
+        ") -> (Tensor out0, Tensor out1, Tensor out2)"
+        );
+    ops.impl("npu_hc_pre", torch::kPrivateUse1, &vllm_ascend::npu_hc_pre_npu);
+
+    ops.def(
+        "npu_hc_pre_inv_rms("
+            "Tensor x, float epsilon=1e-20"
+        ") -> (Tensor out)"
+        );
+    ops.impl("npu_hc_pre_inv_rms", torch::kPrivateUse1, &vllm_ascend::npu_hc_pre_inv_rms_npu);
+
+    ops.def(
+        "npu_hc_pre_sinkhorn("
+            "Tensor mixes, Tensor rsqrt, Tensor hc_scale, Tensor hc_base, Tensor x, "
+            "int hc_mult, int hc_sinkhorn_iters, float hc_eps"
+        ") -> (Tensor out0, Tensor out1, Tensor out2)"
+        );
+    ops.impl("npu_hc_pre_sinkhorn", torch::kPrivateUse1, &vllm_ascend::npu_hc_pre_sinkhorn_npu);
+
+    ops.def(
+        "inplace_partial_rotary_mul("
+            "Tensor(a!) x, Tensor r1, Tensor r2, str rotary_mode, int[] partial_slice"
+        ") -> ()"
+        );
+    ops.impl("inplace_partial_rotary_mul", torch::kPrivateUse1,
+             &vllm_ascend::inplace_partial_rotary_mul_npu);
+
+    ops.def(
+        "npu_rms_norm_dynamic_quant("
+            "Tensor x, "
+            "Tensor gamma, "
+            "Tensor? smooth_scale=None, "
+            "Tensor? beta=None, "
+            "float epsilon=1e-6"
+        ") -> (Tensor y_out, Tensor scale_out)"
+        );
+    ops.impl("npu_rms_norm_dynamic_quant", torch::kPrivateUse1,
+             &vllm_ascend::npu_rms_norm_dynamic_quant_npu);
 
     // This operator is planned to be integrated into PTA in the near future.
     // Once that happens, the implementation in csrc will be removed.
