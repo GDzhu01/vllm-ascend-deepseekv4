@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
  * \brief
  */
 
-#ifndef quant_lightning_indexer_KERNEL_H
-#define quant_lightning_indexer_KERNEL_H
+#ifndef QUANT_LIGHTNING_INDEXER_KERNEL_H
+#define QUANT_LIGHTNING_INDEXER_KERNEL_H
 
 #include "kernel_operator.h"
 #include "kernel_operator_list_tensor_intf.h"
@@ -90,7 +90,6 @@ public:
     static constexpr uint32_t GM_ALIGN_BYTES = 512;
     static constexpr uint32_t LI_QUANT_PRELOAD_TASK_CACHE_SIZE = 2;
 
-    static constexpr int64_t LD_PREFETCH_LEN = 2;
     // for workspace double
     static constexpr uint32_t WS_DOBULE = 2;
     static constexpr uint32_t ELE_NUM_PER_BLOCK = 16;
@@ -138,7 +137,6 @@ protected:
     __aicore__ inline void ProcessMain();
     __aicore__ inline void ProcessBaseBlock(uint32_t loop, uint64_t s2LoopIdx,
                                             QLICommon::RunInfo runInfo[LI_QUANT_PRELOAD_TASK_CACHE_SIZE]);
-    __aicore__ inline void ProcessDecode();
     __aicore__ inline void ProcessInvalid();
     // ================================Params Calc=====================================
     __aicore__ inline void CalcGS1LoopParams(uint32_t bN2Idx);
@@ -165,6 +163,7 @@ __aicore__ inline void QLIPreload<QLIT>::InitTilingData(const QLITilingData *__r
     constInfo.maxBlockNumPerBatch = tilingData->maxBlockNumPerBatch;
     constInfo.sparseCount = tilingData->sparseCount;
     constInfo.cmpRatio = tilingData->cmpRatio;
+    constInfo.batchSupperFlag = tilingData->batchSupperFlag;
     constInfo.outputLayout = Q_LAYOUT_T;  // 输出和输入形状一致
     if (Q_LAYOUT_T == LI_LAYOUT::TND) {
         constInfo.isAccumSeqS1 = true;
@@ -198,7 +197,7 @@ __aicore__ inline void QLIPreload<QLIT>::InitActualSeqLen(__gm__ uint8_t *actual
     if (actualSeqLengthsQ == nullptr) {
         constInfo.actualLenQDims = 0;
     } else {
-        constInfo.actualLenQDims = constInfo.batchSize;
+        constInfo.actualLenQDims = (constInfo.batchSupperFlag) ? constInfo.batchSize + 1 : constInfo.batchSize;
         actualSeqLengthsGmQ.SetGlobalBuffer((__gm__ uint32_t *)actualSeqLengthsQ, constInfo.actualLenQDims);
     }
     if (actualSeqLengthsK == nullptr) {
@@ -216,6 +215,8 @@ __aicore__ inline uint32_t QLIPreload<QLIT>::GetActualSeqLen(uint32_t bIdx, uint
 {
     if (actualLenDims == 0) {
         return defaultSeqLen;
+    } else if (constInfo.batchSupperFlag) {
+        return actualSeqLengthsGm.GetValue(bIdx + 1) - actualSeqLengthsGm.GetValue(bIdx);
     } else if (isAccumSeq && bIdx > 0) {
         return actualSeqLengthsGm.GetValue(bIdx) - actualSeqLengthsGm.GetValue(bIdx - 1);
     } else {
@@ -309,8 +310,10 @@ __aicore__ inline void QLIPreload<QLIT>::DealActSeqLenIsZero(uint32_t bIdx, uint
 {
     if ASCEND_IS_AIV {
         if (constInfo.outputLayout == LI_LAYOUT::TND) {
+            uint32_t tSizeIdx = (constInfo.batchSupperFlag) ? constInfo.batchSize : constInfo.batchSize - 1;
+            uint32_t tBaseIdx = (constInfo.batchSupperFlag) ? bIdx : bIdx - 1;
             uint32_t tSize = actualSeqLengthsGmQ.GetValue(constInfo.batchSize - 1);
-            uint32_t tBase = bIdx == 0 ? 0 : actualSeqLengthsGmQ.GetValue(bIdx - 1);
+            uint32_t tBase = bIdx == 0 ? 0 : actualSeqLengthsGmQ.GetValue(tBaseIdx);
             uint32_t s1Count = tempLoopInfo.actS1Size;
 
             for (uint32_t s1Idx = s1Start; s1Idx < s1Count; s1Idx++) {
@@ -358,8 +361,7 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
 
     pipe = tPipe;
     // workspace 内存排布
-    // |mm1ResGm(存S)|vec1ResGm(存LD中间结果)|vec1ParamGm(存LD参数)
-    // |Core0_mm1ResDB0-Core0_mm1ResDB1-Core1_mm1ResDB0....Core23_mm1ResDB0-Core23_mm1ResDB1|Core0_vec1Res...
+    // |mm1ResGm(存S)
     uint64_t offset = 0;
 
     // mm1开DoubleBuffer
@@ -367,19 +369,6 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
     uint64_t singleCoreMm1ResSize = WS_DOBULE * constInfo.s1BaseSize * constInfo.s2BaseSize * sizeof(MM1_OUT_T);
     mm1ResGm.SetGlobalBuffer((__gm__ MM1_OUT_T *)(workspace + aiCoreIdx * singleCoreMm1ResSize));
     offset += GetBlockNum() * singleCoreMm1ResSize;
-
-    // ld流程需要ws大小: [aicnum, 2, CeilDiv(constInfo.mBaseSize, constInfo.gSize), topkOut_*2]
-    // (aic, 8, 2, 2, 2048)
-    // (aic, s1_cube, 头尾, idx/value, K)
-    GlobalTensor<float> vec1ResGm;  // 存放TopK计算中间结果
-    vec1ResGm.SetGlobalBuffer((__gm__ float *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * WS_DOBULE * WS_DOBULE * BASE_TOPK * sizeof(float);
-
-    // (aic, 8, 2, 16)
-    // (aic, s1_cube, 头尾，16ele)
-    GlobalTensor<int64_t> vec1ParamGm;  // 存放LD参数信息
-    vec1ParamGm.SetGlobalBuffer((__gm__ int64_t *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * WS_DOBULE * LD_PARAM_NUM * sizeof(int64_t);
 
     GlobalTensor<half> weightWorkspaceGm;  // v1阶段处理w*scale后的结果
     uint64_t weightMemSize = BLOCK_CUBE * constInfo.mBaseSize * WS_DOBULE * sizeof(half);
@@ -396,7 +385,7 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
         kScaleGm.SetGlobalBuffer((__gm__ half *)keyScale);
         blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
         vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, blockTableGm);
-        vectorService.InitVecWorkspaceTensor(weightWorkspaceGm, mm1ResGm, vec1ResGm, vec1ParamGm);
+        vectorService.InitVecWorkspaceTensor(weightWorkspaceGm, mm1ResGm);
     } else {
         matmulService.InitParams(constInfo);
         queryGm.SetGlobalBuffer((__gm__ Q_T *)query);
@@ -495,13 +484,12 @@ __aicore__ inline void QLIPreload<QLIT>::CalcRunInfo(uint32_t loop, uint32_t s2L
 
     runInfo.isFirstS2InnerLoop = s2LoopIdx == constInfo.s2Start;
     runInfo.isLastS2InnerLoop = (s2LoopIdx + 1 == tempLoopInfo.s2LoopEnd);
-    runInfo.isAllLoopEnd = (runInfo.bN2Idx + 1 == constInfo.bN2End) && (runInfo.gS1Idx + 1 == constInfo.gS1End) &&
-                           (runInfo.s2Idx + 1 == constInfo.s2End); // TODO:LD场景专用，后续通过metadata传入，此变量可删除
 
     if (runInfo.isFirstS2InnerLoop) {
         uint64_t actualSeqQPrefixSum;
         if constexpr (Q_LAYOUT_T == LI_LAYOUT::TND) {
-            actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : actualSeqLengthsGmQ.GetValue(runInfo.bIdx - 1);
+            uint32_t actualSeqLengthsGmQIdx = (constInfo.batchSupperFlag) ? runInfo.bIdx : runInfo.bIdx - 1;
+            actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : actualSeqLengthsGmQ.GetValue(actualSeqLengthsGmQIdx);
         } else {  // BSND
             actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : runInfo.bIdx * constInfo.qSeqSize;
         }
@@ -538,10 +526,7 @@ __aicore__ inline void QLIPreload<QLIT>::Process()
         ProcessInvalid();
         return;
     }
-
     ProcessMain();
-
-    ProcessDecode();
 }
 
 template <typename QLIT>
@@ -583,7 +568,7 @@ __aicore__ inline void QLIPreload<QLIT>::ProcessMain()
 
     QLICommon::RunInfo runInfo[LI_QUANT_PRELOAD_TASK_CACHE_SIZE];
 
-        // 适配左闭右开
+    // 适配左闭右开
     if (constInfo.bN2Start == constInfo.bN2End) {
         if (constInfo.gS1Start != constInfo.gS1End || constInfo.s2Start != constInfo.s2End) {
             constInfo.bN2End += 1;
@@ -609,7 +594,7 @@ __aicore__ inline void QLIPreload<QLIT>::ProcessMain()
             continue;
         }
         for (uint32_t gS1LoopIdx = constInfo.gS1Start; gS1LoopIdx < tempLoopInfo.gS1LoopEnd; gS1LoopIdx++) {
-            CalcS2LoopParams(bN2LoopIdx, gS1LoopIdx); // TODO: isEnd重复
+            CalcS2LoopParams(bN2LoopIdx, gS1LoopIdx);
             bool isEnd = (bN2LoopIdx + 1 == constInfo.bN2End) && (gS1LoopIdx + 1 == tempLoopInfo.gS1LoopEnd);
             uint32_t extraLoop = isEnd ? LI_QUANT_PRELOAD_TASK_CACHE_SIZE - 1 : 0;  // 只preload一轮
 
@@ -675,21 +660,5 @@ __aicore__ inline void QLIPreload<QLIT>::ProcessBaseBlock(uint32_t loop, uint64_
         lastRunInfo.isValid = false;
     }
 }
-
-template <typename QLIT>
-__aicore__ inline void QLIPreload<QLIT>::ProcessDecode()
-{
-    // TODO: 当前LD暂时关闭
-    return;
-
-    if ASCEND_IS_AIV {
-        vectorService.InitLDBuffers(pipe);
-        ICachePreLoad(LD_PREFETCH_LEN);
-        SyncAll();
-        if (true) {  // isLD
-            vectorService.ProcessLD();
-        }
-    }
-}
 }  // namespace QLIKernel
-#endif  // quant_lightning_indexer_KERNEL_H
+#endif  // QUANT_LIGHTNING_INDEXER_KERNEL_H

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
  * \file quant_lightning_indexer_vector.h
  * \brief
  */
-#ifndef quant_lightning_indexer_VECTOR_H
-#define quant_lightning_indexer_VECTOR_H
+#ifndef QUANT_LIGHTNING_INDEXER_VECTOR_H
+#define QUANT_LIGHTNING_INDEXER_VECTOR_H
 
 #include "kernel_operator.h"
 #include "quant_lightning_indexer_vector.h"
@@ -190,4 +190,4 @@ __aicore__ inline void SetWaitFlag(HardEvent evt)
 }
 
 }  // namespace QLIServiceVec
-#endif  // quant_lightning_indexer_VECTOR_H
+#endif  // QUANT_LIGHTNING_INDEXER_VECTOR_H
