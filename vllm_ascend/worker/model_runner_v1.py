@@ -52,6 +52,7 @@ from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadataBuilder
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.attention.selector import get_attn_backend  # type: ignore
 from vllm.v1.core.sched.output import SchedulerOutput
+from vllm.v1.worker.utils import select_common_block_size
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     EncoderOnlyAttentionSpec,
@@ -3217,10 +3218,10 @@ class NPUModelRunner(GPUModelRunner):
                 # all backends in the group.
                 attn_groups = self.attn_groups[kv_cache_group_id]
                 kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
-                selected_kernel_size = GPUModelRunner.select_common_block_size(
+                selected_kernel_size = select_common_block_size(
                     kv_manager_block_size, attn_groups
                 )
-                self.kernel_block_sizes.append(selected_kernel_size)
+                self.kernel_block_sizes.append([selected_kernel_size])
                 
                 # try:
                 #     attn_groups = self.attn_groups[kv_cache_group_id]
