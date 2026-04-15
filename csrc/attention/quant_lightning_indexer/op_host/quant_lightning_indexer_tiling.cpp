@@ -171,6 +171,8 @@ ge::graphStatus QLIInfoParser::GetAttrParaInfo()
     opParamInfo_.nextTokens = attrs->GetAttrPointer<int64_t>(ATTR_NEXT_TOKENS_INDEX);
     opParamInfo_.cmpRatio = attrs->GetAttrPointer<int64_t>(ATTR_CMP_RATIO_INDEX);
     opParamInfo_.returnValues = attrs->GetAttrPointer<bool>(ATTR_RETURN_VALUES_INDEX);
+    opParamInfo_.stride = attrs->GetAttrPointer<int64_t>(ATTR_STRIDE_INDEX);
+    opParamInfo_.scaleStride = attrs->GetAttrPointer<int64_t>(ATTR_SCALE_STRIDE_INDEX);
 
     if (opParamInfo_.layOutQuery != nullptr) {
         OP_LOGI(context_->GetNodeName(), "layout_query is:%s", opParamInfo_.layOutQuery);
@@ -804,6 +806,8 @@ void QLIInfoParser::GenerateInfo(QLITilingInfo &QLIInfo)
     QLIInfo.nextTokens = *opParamInfo_.nextTokens;
     QLIInfo.cmpRatio = *opParamInfo_.cmpRatio;
     QLIInfo.returnValues = *opParamInfo_.returnValues;
+    QLIInfo.stride = *opParamInfo_.stride;
+    QLIInfo.scaleStride = *opParamInfo_.scaleStride;
 
     QLIInfo.inputQLayout = qLayout_;
     QLIInfo.inputKLayout = kLayout_;
@@ -892,6 +896,8 @@ ge::graphStatus QuantLightningIndexerTiling::DoTiling(QLITilingInfo *tilingInfo)
     tilingData_.set_returnValues(tilingInfo->returnValues);
     tilingData_.set_usedCoreNum(blockDim);
     tilingData_.set_batchSupperFlag(tilingInfo->batchSupperFlag);
+    tilingData_.set_stride(tilingInfo->stride);
+    tilingData_.set_scaleStride(tilingInfo->scaleStride);
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
 

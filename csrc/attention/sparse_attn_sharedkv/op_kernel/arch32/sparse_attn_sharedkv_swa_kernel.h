@@ -204,6 +204,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitTilingData()
     constInfo.kvHeadNum = kvHeadNum;
     constInfo.headDim = headDim;
     constInfo.oriMaskMode = tilingData->baseParams.oriMaskMode;
+    constInfo.oriKvStride = tilingData->baseParams.oriKvStride;
     constInfo.oriWinLeft = tilingData->baseParams.oriWinLeft;
     constInfo.oriWinRight = tilingData->baseParams.oriWinRight;
     constInfo.returnSoftmaxLse = tilingData->baseParams.returnSoftmaxLse;
@@ -228,6 +229,7 @@ __aicore__ inline void SparseAttnSharedkvSwa<SAST>::InitTilingData()
     if (constInfo.templateMode == CFA_TEMPLATE) {
         constInfo.cmpRatio = tilingData->cmpParams.cmpRatio;
         constInfo.cmpMaskMode = tilingData->cmpParams.cmpMaskMode;
+        constInfo.cmpKvStride = tilingData->cmpParams.cmpKvStride;
         constInfo.cmpMaxBlockNumPerBatch = tilingData->cmpParams.cmpMaxBlockNumPerBatch;
     }
 }

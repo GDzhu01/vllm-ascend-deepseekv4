@@ -379,6 +379,7 @@ __aicore__ inline void SASCubeBlock<SAST>::ComputeMm1(const RunInfo &info, const
                         shape.blockSize = constInfo.paOriBlockSize;
                         shape.headNum = constInfo.kvHeadNum;
                         shape.headDim = constInfo.headDim;
+                        shape.kvStride = constInfo.oriKvStride;
                         shape.actHeadDim = D_SPLIT_SIZE;
                         shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
                         shape.copyRowNum = copyRowCnt;
@@ -615,6 +616,7 @@ __aicore__ inline void SASCubeBlock<SAST>::ComputeMm2(const RunInfo &info, const
                             shape.blockSize = constInfo.paOriBlockSize;
                             shape.headNum = constInfo.kvHeadNum;
                             shape.headDim = constInfo.headDim;
+                            shape.kvStride = constInfo.oriKvStride;
                             shape.actHeadDim = nL1Size;
                             shape.maxblockNumPerBatch = constInfo.oriMaxBlockNumPerBatch;
                             shape.copyRowNum = copyRowCnt;

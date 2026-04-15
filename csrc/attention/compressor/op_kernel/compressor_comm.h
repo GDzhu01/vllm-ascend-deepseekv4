@@ -160,6 +160,7 @@ struct ConstInfo {
     uint32_t nSize = 0;
 
     uint32_t dbSize = 0;
+    uint32_t stride = 1;
 };
 
 struct RunInfo {

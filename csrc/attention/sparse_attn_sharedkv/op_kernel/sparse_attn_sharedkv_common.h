@@ -90,6 +90,7 @@ struct PAShape {
     uint32_t blockSize;
     uint32_t headNum;             // 一般为kv的head num，对应n2
     uint32_t headDim;             // 512 对应d
+    uint32_t kvStride;
     uint32_t maxblockNumPerBatch; // block table 每一行的最大个数
     uint32_t actHeadDim;          // 实际拷贝col大小,考虑到N切块   s*d, 对应d
     uint32_t copyRowNum;          // 总共要拷贝的行数
@@ -153,8 +154,8 @@ __aicore__ inline void DataCopyPA(LocalTensor<T> &dstTensor,  //l1
         if (copyFinishRowCnt + copyRowCnt > shape.copyRowNum) {
             copyRowCnt = shape.copyRowNum - copyFinishRowCnt; // 一个block未拷满
         }
-        uint64_t offset = idInBlockTable * shape.blockSize * shape.headNum * shape.headDim; // PA的偏移
-
+        // uint64_t offset = idInBlockTable * shape.blockSize * shape.headNum * shape.headDim; // PA的偏移
+        uint64_t offset = idInBlockTable * shape.kvStride; // PA的偏移
         uint64_t dStride = shape.headDim;
         offset += (uint64_t)(startPos.n2Idx * shape.headDim * shape.blockSize) +
                     reaminRowCnt * shape.headDim + startPos.dIdx;
@@ -269,6 +270,8 @@ struct ConstInfo {
     SAS_LAYOUT outputLayout;  // 输出的Transpose格式
     uint32_t oriMaskMode = 0;
     uint32_t cmpMaskMode = 0;
+    uint32_t oriKvStride = 0;
+    uint32_t cmpKvStride = 0;
     bool needInit = false;
     uint32_t templateMode = 0;
 

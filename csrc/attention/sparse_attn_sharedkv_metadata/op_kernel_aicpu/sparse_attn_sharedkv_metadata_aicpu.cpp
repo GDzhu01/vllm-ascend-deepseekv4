@@ -204,13 +204,13 @@ int32_t SparseAttnSharedkvMetadataCpuKernel::GetKvBatchSize()
 
 bool SparseAttnSharedkvMetadataCpuKernel::CheckConsistency()
 {
-    // int32_t queryBatchSize = GetQueryBatchSize();
-    // int32_t kvBatchSize = GetKvBatchSize();
-    // if (queryBatchSize != kvBatchSize) {
-    //     KERNEL_LOG_ERROR("The batch_size obtained from q Tensor should be the same as "
-    //                         "that obtained from kv tensor, but got %d and %d", queryBatchSize, kvBatchSize);
-    //     return false;
-    // }
+    int32_t queryBatchSize = GetQueryBatchSize();
+    int32_t kvBatchSize = GetKvBatchSize();
+    if (queryBatchSize != kvBatchSize) {
+        KERNEL_LOG_ERROR("The batch_size obtained from q Tensor should be the same as "
+                            "that obtained from kv tensor, but got %d and %d", queryBatchSize, kvBatchSize);
+        return false;
+    }
     return true;
 }
 

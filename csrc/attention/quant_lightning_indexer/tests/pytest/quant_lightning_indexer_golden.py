@@ -553,6 +553,8 @@ def trans_prefix_actseq(self,list):
         return list_new
 
 def qli_output_single(params):
+    print("ddsads3132ads")
+
     batch_size, q_seq, k_seq, q_t_size, k_t_size, q_head_num, k_head_num, head_dim, block_size, block_num, \
     qk_dtype, dequant_dtype, actual_seq_dtype, act_seq_q, act_seq_k, query_quant_mode,key_quant_mode, \
     layout_query, layout_key, sparse_count, sparse_mode, query_datarange, key_datarange, weights_datarange,\
@@ -646,6 +648,7 @@ def qli_output_single(params):
         block_table = torch.from_numpy(block_table).to(dtype=torch.int32).npu()
     max_seqlen_q = actual_seq_lengths_query.max().item()
     max_seqlen_k = actual_seq_lengths_key.max().item()
+    print("ddsadsads")
     metadata = torch.ops.custom.npu_quant_lightning_indexer_metadata(
                                     num_heads_q = q_head_num,
                                     num_heads_k = k_head_num,
@@ -665,11 +668,80 @@ def qli_output_single(params):
                                     next_tokens = (1<<63)-1,
                                     cmp_ratio = cmp_ratio,
                                     device = 'npu:0')
+    print("ddsaddsadsads")
 
     metadata = metadata.npu()
-    npu_result,_ = torch.ops.custom.npu_quant_lightning_indexer(query, key, weights,
+    print("ddsadds22222222adsads")
+
+
+    def get_dtype_size(dtype: torch.dtype) -> int:
+        """Get the size of the data type in bytes."""
+        return torch.tensor([], dtype=dtype).element_size()
+
+    print(key.shape,key_dequant_scale.shape)
+
+    num_blocks = key.shape[0]
+    block_size = key.shape[1]
+    num_head = key.shape[2]
+    # indexer
+    indexer_k_dim = key.shape[3]
+    indexer_k_dtype = key.dtype
+ 
+    scale_dtype = key_dequant_scale.dtype
+
+    # shape & dtype list
+    indexer_k_shape =  key.shape
+    indexer_scale_shape = key_dequant_scale.shape
+    print(indexer_k_shape,indexer_scale_shape)
+
+    shapes = [indexer_k_shape, indexer_scale_shape]
+    dtypes = [indexer_k_dtype, scale_dtype]
+    print(dtypes)
+
+    print("D33DDD")
+
+    buffer_size = math.prod(indexer_k_shape) * get_dtype_size(indexer_k_dtype) + math.prod(indexer_scale_shape) * get_dtype_size(scale_dtype)
+
+    # indexer cache
+    print("DD33DD")
+
+    raw_tensor = torch.zeros(buffer_size, dtype=torch.int8).npu()
+    print("DDDD")
+
+
+    storage_offset_bytes = 0
+    indexer_cache_tensors = []
+
+    for shape, dtype in zip(shapes, dtypes):
+        dtype_size = get_dtype_size(dtype)
+        num_elements_per_page = buffer_size // num_blocks // dtype_size
+        stride = torch.empty(shape).stride()
+        print(f"{shape=}")
+        print(f"{stride=}")
+        target_stride = (num_elements_per_page, *stride[1:])
+        tensor = torch.as_strided(
+            raw_tensor.view(dtype),
+            size=shape,
+            stride=target_stride,
+            storage_offset=storage_offset_bytes // dtype_size,
+        )
+        indexer_cache_tensors.append(tensor)
+        storage_offset_bytes += stride[0] * dtype_size
+    nk = indexer_cache_tensors[0]
+    nks = indexer_cache_tensors[1]
+    nks1 = nks + 1
+    nk1 = nk + 1
+
+    nk.copy_(key)
+    nks.copy_(key_dequant_scale)
+    nks1 = nks + 1
+    nk1 = nk + 1
+    print(nk)
+    print(key_dequant_scale)
+
+    npu_result,_ = torch.ops.custom.npu_quant_lightning_indexer(query, nk, weights,
                                                     query_dequant_scale,
-                                                    key_dequant_scale,
+                                                    nks,
                                                     actual_seq_lengths_query = actual_seq_lengths_query,
                                                     actual_seq_lengths_key = actual_seq_lengths_key,
                                                     block_table = block_table,
