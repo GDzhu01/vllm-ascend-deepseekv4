@@ -98,7 +98,17 @@ def call_npu(input_data):
         used_seqused_q_flag = True
     else:
         seqused_q = torch.tensor([])
+    if 'cu_seqlens_kv' in tensor_input and tensor_input['cu_seqlens_kv'] is not None:
+        cu_seqlens_kv = tensor_input['cu_seqlens_kv']
+    else:
+        cu_seqlens_kv = torch.tensor([])
+    if 'cu_seqlens_cmp_kv' in tensor_input and tensor_input['cu_seqlens_cmp_kv'] is not None:
+        cu_seqlens_cmp_kv = tensor_input['cu_seqlens_cmp_kv']
+    else:
+        cu_seqlens_cmp_kv = torch.tensor([])
     seqused_q = seqused_q.npu()
+    cu_seqlens_kv = cu_seqlens_kv.npu()
+    cu_seqlens_cmp_kv = cu_seqlens_cmp_kv.npu()
     seqused_kv = tensor_input['seqused_kv'].npu()
     sinks = tensor_input['sinks'].npu()
     softmax_scale = tensor_input['softmax_scale']
@@ -108,8 +118,12 @@ def call_npu(input_data):
     ori_win_right = tensor_input['ori_win_right']
     layout_q = tensor_input['layout_q'] if type(tensor_input['layout_q']) == type('TND') else tensor_input['layout_q'][0]
     layout_kv = tensor_input['layout_kv']
-    ori_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['ori_kv'].npu(), 64)
-    cmp_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['cmp_kv'].npu(), 64) if tensor_input['cmp_kv'] is not None else None
+    if layout_kv == "PA_ND":
+        ori_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['ori_kv'].npu(), 64)
+        cmp_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['cmp_kv'].npu(), 64) if tensor_input['cmp_kv'] is not None else None
+    else:
+        ori_k_in_pa_shape = tensor_input['ori_kv'].npu()
+        cmp_k_in_pa_shape = tensor_input['cmp_kv'].npu() if tensor_input['cmp_kv'] is not None else None
     max_seqlen_q = metadata_input['max_seqlen_q']
     ori_max_s2 = metadata_input['max_seqlen_kv']
     cmp_sparse_indices = tensor_input['cmp_sparse_indices']
@@ -152,10 +166,10 @@ def call_npu(input_data):
             num_heads_kv=N2,
             head_dim=D,
             cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_ori_kv=torch.tensor([]).npu(),
-            cu_seqlens_cmp_kv=torch.tensor([]).npu(),
+            cu_seqlens_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_kv,
+            cu_seqlens_cmp_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_cmp_kv,
             seqused_q=seqused_q,
-            seqused_kv=seqused_kv,
+            seqused_kv=seqused_kv if layout_kv != "TND" else torch.tensor([]).npu(),
             batch_size=B,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=ori_max_s2,
@@ -172,6 +186,8 @@ def call_npu(input_data):
                                                             ori_block_table=ori_block_table,
                                                             cu_seqlens_q=cu_seqlens_q if layout_q == 'TND' else None,
                                                             seqused_q=seqused_q if used_seqused_q_flag else None,
+                                                            cu_seqlens_kv=None if tensor_input['cu_seqlens_kv'] is None else cu_seqlens_kv,
+                                                            cu_seqlens_cmp_kv=None if tensor_input['cu_seqlens_cmp_kv'] is None else cu_seqlens_cmp_kv,
                                                             seqused_kv=seqused_kv,
                                                             sinks=sinks,
                                                             metadata=metadata,
@@ -187,10 +203,10 @@ def call_npu(input_data):
             num_heads_kv=N2,
             head_dim=D,
             cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_ori_kv=torch.tensor([]).npu(),
-            cu_seqlens_cmp_kv=torch.tensor([]).npu(),
+            cu_seqlens_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_kv,
+            cu_seqlens_cmp_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_cmp_kv,
             seqused_q=seqused_q,
-            seqused_kv=seqused_kv,
+            seqused_kv=seqused_kv if layout_kv != "TND" else torch.tensor([]).npu(),
             batch_size=B,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=ori_max_s2,
@@ -211,6 +227,8 @@ def call_npu(input_data):
                                                             cmp_block_table=cmp_block_table,
                                                             cu_seqlens_q=cu_seqlens_q if layout_q == 'TND' else None,
                                                             seqused_q=seqused_q if used_seqused_q_flag else None,
+                                                            cu_seqlens_kv=None if tensor_input['cu_seqlens_kv'] is None else cu_seqlens_kv,
+                                                            cu_seqlens_cmp_kv=None if tensor_input['cu_seqlens_cmp_kv'] is None else cu_seqlens_cmp_kv,
                                                             seqused_kv=seqused_kv,
                                                             sinks=sinks,
                                                             metadata=metadata,
@@ -228,10 +246,10 @@ def call_npu(input_data):
             num_heads_kv=N2,
             head_dim=D,
             cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_ori_kv=torch.tensor([]).npu(),
-            cu_seqlens_cmp_kv=torch.tensor([]).npu(),
+            cu_seqlens_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_kv,
+            cu_seqlens_cmp_kv=torch.tensor([]).npu() if layout_kv != "TND" else cu_seqlens_cmp_kv,
             seqused_q=seqused_q,
-            seqused_kv=seqused_kv,
+            seqused_kv=seqused_kv if layout_kv != "TND" else torch.tensor([]).npu(),
             batch_size=B,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_kv=ori_max_s2,
@@ -254,6 +272,8 @@ def call_npu(input_data):
                                                                 cmp_block_table=cmp_block_table,
                                                                 cu_seqlens_q=cu_seqlens_q if layout_q == 'TND' else None,
                                                                 seqused_q=seqused_q if used_seqused_q_flag else None,
+                                                                cu_seqlens_kv=None if tensor_input['cu_seqlens_kv'] is None else cu_seqlens_kv,
+                                                                cu_seqlens_cmp_kv=None if tensor_input['cu_seqlens_cmp_kv'] is None else cu_seqlens_cmp_kv,
                                                                 seqused_kv=seqused_kv,
                                                                 sinks=sinks,
                                                                 metadata=metadata,

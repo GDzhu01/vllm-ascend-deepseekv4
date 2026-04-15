@@ -554,6 +554,9 @@ __aicore__ inline int64_t SASVectorBlock<SAST>::GetKeyGmOffset(int64_t realS2Idx
 
     } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::BSND) {
         realKeyGmOffset = runInfo.bIdx * constInfo.kvSeqSize / constInfo.cmpRatio * constInfo.kvHeadNum + realS2Idx * constInfo.kvHeadNum;
+    } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::TND) {
+        realKeyGmOffset = (runInfo.tensorCmpBOffset + realS2Idx * constInfo.kvHeadNum * constInfo.headDim) /
+ 	                           constInfo.headDim;
     }
     return realKeyGmOffset;
 }
@@ -574,9 +577,15 @@ __aicore__ inline void SASVectorBlock<SAST>::CopyInSingleKv(int64_t &mte2Size, i
     intriParams.dstStride = 0;
     intriParams.srcStride = 0;
     DataCopyPadExtParams<KV_T> padParams;
-    DataCopyPad(
-        kvMergUb_[mergeMte3Idx % 2 * INPUT2_BUFFER_OFFSET / sizeof(KV_T) + (mte2Size - mte3Size) * constInfo.headDim],
-        cmpKvGm_[keyBNBOffset], intriParams, padParams);
+    if constexpr (KV_LAYOUT_T == SAS_LAYOUT::PA_ND) {
+        DataCopyPad(
+            kvMergUb_[mergeMte3Idx % 2 * INPUT2_BUFFER_OFFSET / sizeof(KV_T) + (mte2Size - mte3Size) * constInfo.headDim],
+            cmpKvGm_[keyBNBOffset], intriParams, padParams);
+    } else {
+        DataCopyPad(
+            kvMergUb_[mergeMte3Idx % 2 * INPUT2_BUFFER_OFFSET / sizeof(KV_T) + (mte2Size - mte3Size) * constInfo.headDim],
+            cmpKvGm_[keyBNBOffset * constInfo.headDim], intriParams, padParams);
+    }
     mte2Size += validS2Count;
 }
 
@@ -601,6 +610,9 @@ __aicore__ inline void SASVectorBlock<SAST>::CopyInKv(int64_t &mte2Size, int64_t
     } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::BSND) {
         keySrcStride = ((keyOffset1 > keyOffset2 ? (keyOffset1 - keyOffset2) :
                         (keyOffset2 - keyOffset1)) - constInfo.sparseBlockSize) * constInfo.headDim * sizeof(KV_T);
+    } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::TND) {
+        keySrcStride = ((keyOffset1 > keyOffset2 ? (keyOffset1 - keyOffset2) :
+ 	                    (keyOffset2 - keyOffset1)) - constInfo.sparseBlockSize) * constInfo.headDim * sizeof(KV_T);
     }
     if (unlikely(keySrcStride >= INT32_MAX || keySrcStride < 0 ||
         realS2Idx1 + constInfo.sparseBlockSize >= s2IdLimit ||
