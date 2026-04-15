@@ -71,7 +71,7 @@ class AscendW8A8MXFP8DynamicLinearMethod:
         params_dict["weight_scale"] = torch.empty(output_size // self.block_size,
                                                   input_size //
                                                   self.block_size,
-                                                  dtype=torch.float32)
+                                                  dtype=torch.float8_e8m0fnu)
         return params_dict
 
     def apply(
@@ -86,6 +86,8 @@ class AscendW8A8MXFP8DynamicLinearMethod:
             x, dst_type=torch.float8_e4m3fn)
         pertoken_scale = dynamic_scale
         output_dtype = x.dtype
+        # print(f"quantized_x {quantized_x.shape}")
+        # print(f"layer.weight.data shape {layer.weight.data.shape}")
         output = torch_npu.npu_quant_matmul(
             quantized_x,
             layer.weight.data,
@@ -99,9 +101,11 @@ class AscendW8A8MXFP8DynamicLinearMethod:
         return output
 
     def process_weights_after_loading(self, layer):
-        layer.weight_scale.data = layer.weight_scale.data.view(torch.int32) >> 23 & 0xFF
-        layer.weight_scale.data = layer.weight_scale.data.to(torch.uint8)
+        # layer.weight_scale.data = layer.weight_scale.data.view(torch.int32) >> 23 & 0xFF
+        # layer.weight_scale.data = layer.weight_scale.data.to(torch.uint8)
+        layer.weight_scale.data = layer.weight_scale.data.view(torch.uint8)
         layer.weight_scale.data = layer.weight_scale.data.repeat_interleave(4, dim=1).repeat_interleave(128, dim=0)
+        layer.weight_scale.data = layer.weight_scale.data.view(torch.float8_e8m0fnu)
         n_dim, k_dim = layer.weight_scale.data.shape
         layer.weight_scale.data = layer.weight_scale.data.reshape(
             n_dim, k_dim // 2, 2)
@@ -136,12 +140,12 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
         param_dict = {}
         param_dict["w13_weight"] = torch.empty(num_experts,
                                                2 * intermediate_size_per_partition,
-                                               hidden_sizes,
-                                               dtype=torch.float8_e4m3fn)
+                                               hidden_sizes // 2,
+                                               dtype=torch.int8)
         param_dict["w2_weight"] = torch.empty(num_experts,
                                               hidden_sizes,
-                                              intermediate_size_per_partition,
-                                              dtype=torch.float8_e4m3fn)
+                                              intermediate_size_per_partition // 2,
+                                              dtype=torch.int8)
         return param_dict
 
     def get_dynamic_quant_param(self, 
@@ -152,14 +156,14 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
         param_dict = {}
         param_dict["w13_weight_scale"] = torch.empty(
             num_experts,
-            2 * intermediate_size_per_partition // self.block_size,
-            hidden_sizes // self.block_size,
-            dtype=torch.float32)
+            2 * intermediate_size_per_partition,
+            hidden_sizes // self.group_size,
+            dtype=torch.float8_e8m0fnu)
 
         param_dict["w2_weight_scale"] = torch.empty(num_experts,
-                                                    hidden_sizes // self.block_size,
-                                                    intermediate_size_per_partition // self.block_size,
-                                                    dtype=torch.float32)
+                                                    hidden_sizes,
+                                                    intermediate_size_per_partition // self.group_size,
+                                                    dtype=torch.float8_e8m0fnu)
         return param_dict
 
     def apply(
@@ -224,14 +228,14 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
             mc2_mask=kwargs.get("mc2_mask", None))
 
     def process_weights_after_loading(self, layer):
-        layer.w13_weight_scale.data = layer.w13_weight_scale.data.view(torch.int32) >> 23 & 0xFF
-        layer.w13_weight_scale.data = layer.w13_weight_scale.data.to(torch.uint8)
-        layer.w13_weight_scale.data = layer.w13_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
+        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.view(torch.int32) >> 23 & 0xFF
+        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.to(torch.uint8)
+        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
         g_num, n_size, k_size = layer.w13_weight_scale.shape
         layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g_num, n_size, k_size//2, 2)
-        layer.w2_weight_scale.data = layer.w2_weight_scale.data.view(torch.int32) >> 23 & 0xFF
-        layer.w2_weight_scale.data = layer.w2_weight_scale.data.to(torch.uint8)
-        layer.w2_weight_scale.data = layer.w2_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
+        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.view(torch.int32) >> 23 & 0xFF
+        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.to(torch.uint8)
+        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
         g_num, n_size, k_size = layer.w2_weight_scale.shape
         layer.w2_weight_scale.data = layer.w2_weight_scale.data.reshape(g_num, n_size, k_size//2, 2)
         if self.transpose_weight:

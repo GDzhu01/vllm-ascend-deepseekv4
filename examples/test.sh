@@ -9,25 +9,27 @@ export ACL_OP_INIT_MODE=1
 export ASCEND_A3_ENABLE=1
 export VLLM_VERSION=0.13.0
 export USE_MULTI_BLOCK_POOL=1
-# export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export ASCEND_RT_VISIBLE_DEVICES=4,5
 # export ASCEND_RT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
 # export ASCEND_RT_VISIBLE_DEVICES=8,9
-nohup vllm serve /home/models/hello2026/ \
-  --max_model_len 32000 \
-  --max-num-batched-tokens 32000 \
+# nohup vllm serve /home/weights/hello2026/ \
+nohup vllm serve /home/weights/DeepSeek-V4-HF-FP4/ \
+  --max_model_len 4096 \
+  --max-num-batched-tokens 4096 \
   --served-model-name qwen \
   --gpu-memory-utilization 0.9 \
-  --data-parallel-size 8 \
+  --data-parallel-size 2 \
   --enable-expert-parallel \
   --async-scheduling \
   --max-num-seqs 64 \
   --port 8666 \
   --block-size 128 \
-  --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-  --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
-  --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true, "multistream_dsa_preprocess":true}' \
+  --enforce_eager \
   2>&1 | tee run_online.log
 
 #   --enforce_eager \ --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
 #   --quantization ascend \
 # --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  # --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  # --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  # --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true, "multistream_dsa_preprocess":true}' \

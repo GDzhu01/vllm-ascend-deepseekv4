@@ -590,7 +590,7 @@ class DeepseekV4Attention(nn.Module):
             self.n_heads * self.head_dim // self.n_groups,
             self.n_groups * config.o_lora_rank,
             bias=False,
-            quant_config=None,
+            quant_config=quant_config,
             prefix=f"{prefix}.wo_a",
             return_bias=False,
         )        
@@ -1077,6 +1077,12 @@ class AscendDeepseekV4ForCausalLM(
             spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
             if spec_layer is not None:
                 continue  # skip spec decode layers for main model
+            
+            # import re
+
+            # layer_idx = re.findall(r"\d+", name)
+            # if len(layer_idx) > 0 and int(layer_idx[0]) >= 4:
+            #     continue
 
             # TODO: 
             if not name.startswith('model'):

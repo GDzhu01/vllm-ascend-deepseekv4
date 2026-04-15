@@ -1262,7 +1262,35 @@ class AscendDSAImpl(DSAAttentionImpl):
         o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
         # wo_a = self.wo_a.weight.transpose(1, 2).view(self.n_local_groups, self.o_lora_rank, -1)
         # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-        o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        # print(f"[Debug] o shape: {o.shape}, o dim: {o.dim()}")
+        # print(f"[Debug] wo_a.weight shape: {self.wo_a.weight.shape}, dim: {self.wo_a.weight.dim()}")
+        # w_3d = self.wo_a.weight.unsqueeze(0)
+        # w_3d = w_3d.expand(o.shape[0], -1, -1)
+
+        # o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o,dst_type=torch.float8_e4m3fn)
+        
+        eye = torch.eye(
+            4096,
+            dtype=torch.bfloat16,
+            device=self.wo_a.weight.device,
+        )
+        wo_a_weight = self.wo_a(eye)
+        wo_a_weight=wo_a_weight.T.view(self.n_local_groups,self.o_lora_rank,-1).transpose(2,1).contiguous()
+        o = torch_npu.npu_transpose_batchmatmul(o, wo_a_weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        
+        # swiglu_out_scale=swiglu_out_scale.to(torch.float8_e8m0fnu)
+        # self.wo_a.weight_scale
+        # print(f"--------------o type is {o.type}")
+        # print(f"--------------self.wo_a.weight type is {self.wo_a.weight.type}")
+        # self.wo_a.weight.data=self.wo_a.weight.data.reshape(self.n_local_groups,self.o_lora_rank,-1).transpose(2,1).contiguous()
+        # o = torch_npu.npu_transpose_batchmatmul(o, self.wo_a.weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        # x1_scale_shape = (o.shape[0], o.shape[1], o.shape[2] // 64, 2)
+        # x2_scale_shape = (self.wo_a.weight.shape[0], self.wo_a.weight.shape[1] // 64, self.wo_a.weight.shape[2], 2)
+        
+        # self.wo_a.weight_scale.data = self.wo_a.weight_scale.data.reshape(self.n_local_groups,self.o_lora_rank,-1, 2).transpose(2,1).contiguous()
+
+        # o = torch_npu.npu_transpose_quant_batchmatmul(o, self.wo_a.weight, dtype=torch.bfloat16, bias=None, group_sizes=[1,1,32],x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu),x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu), perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+
         o = o.reshape(num_tokens, -1)
         output[...] = self.wo_b(o)
 

@@ -409,7 +409,7 @@ class TokenDispatcherWithAllGather(MoETokenDispatcher):
                 active_expert_range=[first_expert_idx, last_expert_idx],
                 quant_mode=-1,
             ))
-        sorted_hidden_states, pertoken_scale = torch_npu.npu_dynamic_mx_quant(sorted_hidden_states, dst_type=torch.float8_e4m3fn)
+        # sorted_hidden_states, pertoken_scale = torch_npu.npu_dynamic_mx_quant(sorted_hidden_states, dst_type=torch.float8_e4m3fn)
         expert_tokens = expert_tokens.to(torch.int64)
         group_list_type = 1  # `count` mode
         context_metadata = {
