@@ -183,6 +183,7 @@ struct RunInfo {
     uint32_t curSInnerLoopTimes = 0;
     uint64_t tndBIdxOffsetForQ = 0;
     uint64_t tndBIdxOffsetForKV = 0;
+    uint64_t tensorCmpBOffset = 0;
     uint64_t tensorAOffset = 0;
     uint64_t tensorBOffset = 0;
     uint64_t attenOutOffset = 0;

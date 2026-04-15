@@ -415,6 +415,35 @@ __aicore__ inline void SASCubeBlock<SAST>::ComputeMm1(const RunInfo &info, const
                     uint32_t curS2 = info.s2Idx * constInfo.s2BaseSize + info.s2StartPoint;
                     uint64_t offset = (uint64_t)info.bIdx * batchStride + (uint64_t)curS2 * seqStride + (uint64_t)info.n2Idx * headStride + kL1 * D_SPLIT_SIZE;
                     DataCopy(bL1Tensor, oriKvGm[offset], nd2nzPara);
+                } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::TND) {
+                    uint32_t curS2Offset = info.s2Idx * constInfo.s2BaseSize + info.s2StartPoint;
+                    if (kL1 == 0) {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim +
+                                nL1 * N_SPLIT_SIZE * constInfo.headDim], nd2nzPara);
+                    } else {
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = nL1Size;
+                        nd2nzPara.dValue = constInfo.headDim >> 1;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = nL1SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor, 
+                                    oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim + (constInfo.headDim >> 1) +
+                                        nL1 * N_SPLIT_SIZE * constInfo.headDim], 
+                                    nd2nzPara);
+                    }
                 }
             } else {
                 if (kL1 == 0) {
@@ -648,6 +677,20 @@ __aicore__ inline void SASCubeBlock<SAST>::ComputeMm2(const RunInfo &info, const
                         uint64_t offset = (uint64_t)info.bIdx * batchStride + (uint64_t)curS2 * seqStride + (uint64_t)info.n2Idx * headStride + nL1 * N_SPLIT_SIZE;
                         subvTensor = bL1Tensor[(kL1 - kOffset) * 128 * N_SPLIT_SIZE];
                         DataCopy(subvTensor, oriKvGm[offset], nd2nzPara);
+                    } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::TND) {
+                        uint32_t curS2Offset = info.s2Idx * constInfo.s2BaseSize + info.s2StartPoint;
+                        Nd2NzParams nd2nzPara;
+                        nd2nzPara.ndNum = 1;
+                        nd2nzPara.nValue = kL0Size;      // 行数
+                        nd2nzPara.dValue = N_SPLIT_SIZE; // constInfo.headDim;
+                        nd2nzPara.srcDValue = constInfo.headDim;
+                        nd2nzPara.dstNzC0Stride = kL0SizeAlign;
+                        nd2nzPara.dstNzNStride = 1;
+                        nd2nzPara.srcNdMatrixStride = 0;
+                        nd2nzPara.dstNzMatrixStride = 0;
+                        DataCopy(bL1Tensor[(kL1 - kOffset) * 128 * N_SPLIT_SIZE],
+                                oriKvGm[info.tensorBOffset + curS2Offset * constInfo.headDim + kL1 * 128 * constInfo.headDim +
+                                nL1 * N_SPLIT_SIZE], nd2nzPara);
                     }
                 } else {
                     Nd2NzParams nd2nzPara;

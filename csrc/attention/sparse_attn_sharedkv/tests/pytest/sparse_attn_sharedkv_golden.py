@@ -59,7 +59,7 @@ class GeneralizedSFA:
         self.ori_win_left = ori_win_left
         self.ori_win_right = ori_win_right
 
-    def calulate_by_bnsd(self, q_bnsd, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx, cmp_k_bnsd=None,
+    def calulate_by_bnsd(self, q_bnsd, ori_k_bnsd, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, seqused_kv, sinks, template_idx, cmp_k_bnsd=None,
                          cmp_sparse_indices_bnsd=None, seqused_q=None):
         attn_out = torch.zeros(q_bnsd.shape, dtype=q_bnsd.dtype)
         B = q_bnsd.shape[0]
@@ -75,7 +75,15 @@ class GeneralizedSFA:
         for i_B in range(B):
             print(f"i_B = {i_B}/{B}")
             cur_act_q = act_q[i_B]
-            cur_ori_act_kv = seqused_kv[i_B]
+            if self.layout_kv == "PA_ND":
+                cur_ori_act_kv = seqused_kv[i_B]
+            elif self.layout_kv == "TND":
+                print(cu_seqlens_kv)
+                print(cu_seqlens_cmp_kv)
+                if i_B == -1:
+                    cur_ori_act_kv = cu_seqlens_kv[i_B]
+                else:
+                    cur_ori_act_kv = cu_seqlens_kv[i_B + 1] - cu_seqlens_kv[i_B]
             for i_N2 in range(self.N2):
                 print(f"    i_N2 = {i_N2}/{self.N2}")
                 cur_sinks = sinks[i_N2 * G:(i_N2 + 1) * G]
@@ -341,7 +349,7 @@ class GeneralizedSFA:
         else:
             return tensor
 
-    def forward(self, q, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx, cmp_k_bnsd=None,
+    def forward(self, q, ori_k_bnsd, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, seqused_kv, sinks, template_idx, cmp_k_bnsd=None,
                 cmp_sparse_indices=None, seqused_q=None):
         q_bnsd, q_bnsd_shape = self.trans_shape_to_bnsd(q, q.shape, self.layout_q, cu_seqlens_q)
 
@@ -351,7 +359,7 @@ class GeneralizedSFA:
                                                                      cu_seqlens_q)
         else:
             cmp_sparse_indices_bnsd = None
-        attn_out = self.calulate_by_bnsd(q_bnsd, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx,
+        attn_out = self.calulate_by_bnsd(q_bnsd, ori_k_bnsd, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, seqused_kv, sinks, template_idx,
                    cmp_k_bnsd, cmp_sparse_indices_bnsd, seqused_q)
 
         attn_out = self.trans_bnsd_to_target_layout(attn_out, self.layout_q, cu_seqlens_q)
@@ -420,7 +428,10 @@ def gen_cmp_sparse_indices_bsnd(cmp_ratio, B, S1, N2, K, seqused_kv, cmp_mask_mo
     # 有效索引在叠加了causal后有效tokens中选取，不足sparse_block_count，尾部填充-1
     cmp_sparse_indices = torch.full((B, S1, N2, K), fill_value=-1, dtype=torch.int32)
     for i_B in range(B):
-        cur_act_kv = seqused_kv[i_B]
+        if len(seqused_kv) == B:
+            cur_act_kv = seqused_kv[i_B]
+        else:
+            cur_act_kv = seqused_kv[i_B + 1] - seqused_kv[i_B]
         for i_N2 in range(N2):
             for i_S1 in range(S1):
                 if cmp_mask_mode == 3:
@@ -440,7 +451,10 @@ def gen_cmp_sparse_indices_tnd(cmp_ratio, B, T1, N2, K, cu_seqlens_q, seqused_kv
     for i_B in range(B):
         cur_act_q = cu_seqlens_q[i_B + 1] - cu_seqlens_q[i_B]
         s1_prefix = cu_seqlens_q[i_B]
-        cur_act_kv = seqused_kv[i_B]
+        if len(seqused_kv) == B:
+            cur_act_kv = seqused_kv[i_B]
+        else:
+            cur_act_kv = seqused_kv[i_B + 1] - seqused_kv[i_B]
         for i_N2 in range(N2):
             for i_S1 in range(cur_act_q):
                 if cmp_mask_mode == 3:
@@ -460,6 +474,8 @@ def gen_ori_kv(ori_kv_type, B, N2, D, block_num1, block_size1, seqused_kv, data_
     ori_block_num_sum = 0
 
     for cur_ori_act_kv in seqused_kv:
+        if cur_ori_act_kv == 0:
+ 	        continue
         cur_ori_kv_block_num = math.ceil(cur_ori_act_kv / block_size1)
         ori_block_num_per_batch.append(cur_ori_kv_block_num)
         ori_block_num_sum += cur_ori_kv_block_num
@@ -497,6 +513,23 @@ def gen_ori_kv(ori_kv_type, B, N2, D, block_num1, block_size1, seqused_kv, data_
 
     return ori_k_in_pa_shape, ori_block_table, ori_k_bnsd
 
+def gen_ori_kv_tnd(ori_max_s2, T2, ori_kv_type, B, N2, D, cu_seqlens_kv, cu_seqlens_cmp_kv, data_range_left=DATA_RANGE_LEFT, data_range_right=DATA_RANGE_RIGHT):
+    # ori_max_s2 = max(seqused_kv)
+    ori_k_bnsd = (torch.rand((B, N2, ori_max_s2, D)) * (data_range_left - data_range_right) + data_range_left).to(ori_kv_type)
+    # if k.shape = [T, N, D]
+    ori_k_in_tnd_shape = torch.zeros((T2, N2, D), dtype=ori_kv_type)
+    ori_k_bsnd = ori_k_bnsd.permute(0,2,1,3).reshape(-1, N2, D)
+    for i_B in range(1, B + 1):
+        if i_B == 0:
+            cur_act_kv = cu_seqlens_kv[i_B]
+            ori_k_in_tnd_shape[0:cur_act_kv, :, :] = ori_k_bsnd[0:cur_act_kv, :, :]
+        else:
+            cur_ori_act_kv1 = cu_seqlens_kv[i_B]
+            cur_ori_act_kv2 = cu_seqlens_kv[i_B-1]
+            cur_act_kv = cur_ori_act_kv1 - cur_ori_act_kv2
+            ori_k_in_tnd_shape[cur_ori_act_kv2:cur_ori_act_kv1, :, :] = ori_k_bsnd[(i_B-1) * ori_max_s2:(i_B-1) * ori_max_s2 + cur_act_kv, :, :]
+    return ori_k_in_tnd_shape, ori_k_bnsd
+
 def gen_cmp_kv(layout_q, cmp_kv_type, B, S1, T1, N2, D, K, block_num2, block_size2, cu_seqlens_q, seqused_kv, cmp_ratio,
                cmp_mask_mode, template_idx, data_range_left=DATA_RANGE_LEFT, data_range_right=DATA_RANGE_RIGHT):
     if cmp_ratio is None:
@@ -516,6 +549,8 @@ def gen_cmp_kv(layout_q, cmp_kv_type, B, S1, T1, N2, D, K, block_num2, block_siz
     cmp_block_num_per_batch = []
     cmp_block_num_sum = 0
     for cur_ori_act_kv in seqused_kv:
+        if cur_ori_act_kv == 0:
+ 	        continue
         cur_cmp_act_kv = math.floor(cur_ori_act_kv / cmp_ratio)
         cur_cmp_kv_block_num = math.ceil(cur_cmp_act_kv / block_size2)
         cmp_block_num_per_batch.append(cur_cmp_kv_block_num)
@@ -561,20 +596,69 @@ def gen_cmp_kv(layout_q, cmp_kv_type, B, S1, T1, N2, D, K, block_num2, block_siz
         cmp_block_table = None
     return cmp_k_in_pa_shape, cmp_sparse_indices, cmp_block_table, cmp_k_bnsd
 
+def gen_cmp_kv_tnd(ori_max_s2, layout_q, cmp_kv_type, B, S1, T1, N2, D, K, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, cmp_ratio,
+               cmp_mask_mode, template_idx, data_range_left=DATA_RANGE_LEFT, data_range_right=DATA_RANGE_RIGHT):
+    if cmp_ratio is None:
+        raise ValueError(f"cmp_ratio can't be None")
+
+    if template_idx == 1:
+        if cmp_ratio != 128:
+            raise ValueError(f"unsupported cmp_ratio {cmp_ratio} in template_idx {template_idx}")
+    elif template_idx == 2:
+        if cmp_ratio != 4:
+            raise ValueError(f"unsupported cmp_ratio {cmp_ratio} in template_idx {template_idx}")
+    else:
+        raise ValueError(f"unsupported template_idx: {template_idx}")
+
+
+    # ori_max_s2 = max(seqused_kv)
+    cmp_max_s2 = math.floor(ori_max_s2 / cmp_ratio)
+
+    cmp_k_bnsd = (torch.rand((B, N2, cmp_max_s2, D)) * (data_range_left - data_range_right) + data_range_left).to(cmp_kv_type)
+
+    cmp_k_in_tnd_shape = torch.zeros((cu_seqlens_cmp_kv[-1], N2, D), dtype=cmp_kv_type)
+    cmp_k_bsnd = cmp_k_bnsd.permute(0,2,1,3).reshape(-1, N2, D)
+    for i_B in range(1, B + 1):
+        if i_B == 0:
+            cur_act_kv = cu_seqlens_cmp_kv[i_B]
+            cmp_k_in_tnd_shape[0:cur_act_kv, :, :] = cmp_k_bsnd[0:cur_act_kv, : , :]
+        else:
+            cur_act_kv = cu_seqlens_cmp_kv[i_B] - cu_seqlens_cmp_kv[i_B-1]
+            cmp_k_in_tnd_shape[cu_seqlens_cmp_kv[i_B-1]:cu_seqlens_cmp_kv[i_B], :, :] = cmp_k_bsnd[(i_B-1)*cmp_max_s2:(i_B-1)* cmp_max_s2 + cur_act_kv, : , :]
+
+    # generate cmp_sparse_indices
+    if template_idx == 2:
+        if layout_q == "BSND":
+            cmp_sparse_indices = gen_cmp_sparse_indices_bsnd(cmp_ratio, B, S1, N2, K, cu_seqlens_kv, cmp_mask_mode)
+        elif layout_q == "TND":
+            cmp_sparse_indices = gen_cmp_sparse_indices_tnd(cmp_ratio, B, T1, N2, K, cu_seqlens_q, cu_seqlens_kv,
+                                 cmp_mask_mode)
+    else:
+        cmp_sparse_indices = None
+    return cmp_k_in_tnd_shape, cmp_sparse_indices, cmp_k_bnsd
+
 def gen_data(params):
     layout_q, layout_kv, q_type, ori_kv_type, cmp_kv_type, B, S1, T1, N1, N2, D, K, block_num1, block_num2, \
     block_size1, block_size2, cu_seqlens_q, seqused_kv, softmax_scale, cmp_ratio, ori_mask_mode, cmp_mask_mode, \
-    ori_win_left, ori_win_right, case_name, S2, q_datarange, ori_kv_datarange, cmp_kv_datarange, seqused_q = params
-    if len(seqused_kv) != B:
+    ori_win_left, ori_win_right, case_name, S2, q_datarange, ori_kv_datarange, cmp_kv_datarange, seqused_q,      \
+    cu_seqlens_kv, cu_seqlens_cmp_kv = params
+    if layout_kv == "PA_ND" and len(seqused_kv) != B:
         raise ValueError(f"len(seqused_kv) != B, which is {len(seqused_kv)} != {B}")
+    elif layout_kv == "TND" and cu_seqlens_kv != None and len(cu_seqlens_kv) != B + 1:
+        raise ValueError(f"when kvlayout is TND, cu_seqlens_kv must be provided and equal B + 1, which is {len(seqused_kv)} != {B + 1}")
     else:
         pass
     if cu_seqlens_q is not None:
         cu_seqlens_q = torch.tensor(cu_seqlens_q).to(torch.int32)
     if seqused_kv is not None:
         seqused_kv = torch.tensor(seqused_kv).to(torch.int32)
+        ori_max_s2 = max(seqused_kv)
     if seqused_q is not None:
         seqused_q = torch.tensor(seqused_q).to(torch.int32)
+    if cu_seqlens_kv is not None:
+        cu_seqlens_kv = torch.tensor(cu_seqlens_kv).to(torch.int32)
+    if cu_seqlens_cmp_kv is not None:
+        cu_seqlens_cmp_kv = torch.tensor(cu_seqlens_cmp_kv).to(torch.int32)
 
     # 获取最长 q
     if layout_q == 'TND':
@@ -582,6 +666,17 @@ def gen_data(params):
         max_seqlen_q = torch.max(seq_lens).item()
     else:
         max_seqlen_q = S1
+    
+    if layout_kv == "TND":
+        cu_seqlens_kv = torch.tensor(cu_seqlens_kv).to(torch.int32)
+        for i in range(len(cu_seqlens_kv)):
+            if i == 0:
+                ori_max_s2 = cu_seqlens_kv[i]
+            else:
+                cur_kv = cu_seqlens_kv[i] - cu_seqlens_kv[i-1]
+                if cur_kv > ori_max_s2:
+                    ori_max_s2 = cur_kv
+        T2 = cu_seqlens_kv[-1]
 
     # generate q
     if layout_q == "BSND":
@@ -605,7 +700,7 @@ def gen_data(params):
         raise ValueError(f"layout_q is not support {layout_q}")
 
     # generate ori_kv/cmp_kv (only support PA_ND)
-    if layout_kv == "PA_ND":
+    if layout_kv == "PA_ND" or layout_kv == "TND":
         pass
     else:
         raise ValueError(f"layout_kv is not support {layout_kv}")
@@ -620,18 +715,33 @@ def gen_data(params):
             template_idx = 1  # CFA
             template_run_mode = 'CFA'
             cmp_ratio, block_size2, block_num2 = int(cmp_ratio), int(block_size2), int(block_num2)
+            # if layout_kv == "TND":
+ 	        #     cu_seqlens_cmp_kv = torch.tensor(cu_seqlens_cmp_kv).to(torch.int32)
     else:
         template_idx = 2  # SCFA
         template_run_mode = 'SCFA'
         K, cmp_ratio, block_size2, block_num2 = int(K), int(cmp_ratio), int(block_size2), int(block_num2)
+    if layout_kv == "PA_ND": 
+        ori_k_in_pa_shape, ori_block_table, ori_k_bnsd = gen_ori_kv(ori_kv_type, B, N2, D, block_num1, block_size1,
+                                                                    seqused_kv, ori_kv_datarange[0], ori_kv_datarange[1])
+    elif layout_kv == "TND": 
+        ori_k_in_tnd_shape, ori_k_bnsd = gen_ori_kv_tnd(ori_max_s2, T2, ori_kv_type, B, N2, D,
+                                                                    cu_seqlens_kv, cu_seqlens_cmp_kv, ori_kv_datarange[0], ori_kv_datarange[1])
 
-    ori_k_in_pa_shape, ori_block_table, ori_k_bnsd = gen_ori_kv(ori_kv_type, B, N2, D, block_num1, block_size1,
-                                                                seqused_kv, ori_kv_datarange[0], ori_kv_datarange[1])
     if template_idx == 1 or template_idx == 2:
-        cmp_k_in_pa_shape, cmp_sparse_indices, cmp_block_table, cmp_k_bnsd = gen_cmp_kv(layout_q, cmp_kv_type, B, S1,
-                                                                                        T1, N2, D, K, block_num2,
-                                                                                        block_size2, cu_seqlens_q,
-                                                                                        seqused_kv, cmp_ratio,
+        if layout_kv == "PA_ND":  
+            cmp_k_in_pa_shape, cmp_sparse_indices, cmp_block_table, cmp_k_bnsd = gen_cmp_kv(layout_q, cmp_kv_type, B, S1,
+                                                                                            T1, N2, D, K, block_num2,
+                                                                                            block_size2, cu_seqlens_q,
+                                                                                            seqused_kv, cmp_ratio,
+                                                                                            cmp_mask_mode, template_idx,
+                                                                                            cmp_kv_datarange[0], cmp_kv_datarange[1])
+        
+        elif layout_kv == "TND": 
+            cmp_k_in_tnd_shape, cmp_sparse_indices, cmp_k_bnsd = gen_cmp_kv_tnd(ori_max_s2, layout_q, cmp_kv_type, B, S1,
+                                                                                        T1, N2, D, K,
+                                                                                        cu_seqlens_q, cu_seqlens_kv,
+                                                                                        cu_seqlens_cmp_kv, cmp_ratio,
                                                                                         cmp_mask_mode, template_idx,
                                                                                         cmp_kv_datarange[0], cmp_kv_datarange[1])
     else:
@@ -643,10 +753,20 @@ def gen_data(params):
     sinks = (torch.rand((N1,)) * (q_datarange[1] - q_datarange[0])/10 + q_datarange[0]/10).to(torch.float)
 
     test_sas = GeneralizedSFA(layout_q, layout_kv, q_type, ori_kv_type, cmp_kv_type, B, S1, T1, N1, N2, D, K,
-                              block_num1, block_num2, block_size1, block_size2, cu_seqlens_q, seqused_kv, softmax_scale,
+                              block_num1, block_num2, block_size1, block_size2, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, seqused_kv, softmax_scale,
                               cmp_ratio, ori_mask_mode, cmp_mask_mode, ori_win_left, ori_win_right)
-    cpu_result = test_sas.forward(q, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx, cmp_k_bnsd,
+    cpu_result = test_sas.forward(q, ori_k_bnsd, cu_seqlens_q, cu_seqlens_kv, cu_seqlens_cmp_kv, seqused_kv, sinks, template_idx, cmp_k_bnsd,
                                   cmp_sparse_indices, seqused_q)
+
+    if layout_kv == 'TND':
+        ori_k_in_pa_shape = ori_k_in_tnd_shape
+        ori_block_table = np.full((B, 10), fill_value=-1, dtype=np.int32) 
+        ori_block_table = torch.tensor(ori_block_table).to(torch.int32)
+        if template_idx != 0:
+            cmp_k_in_pa_shape = cmp_k_in_tnd_shape
+            cmp_block_table = np.full((B, 10), fill_value=-1, dtype=np.int32)
+            cmp_block_table = torch.tensor(cmp_block_table).to(torch.int32)
+    
     input_data = {
         # 命名用变量
         'B': B,
@@ -669,10 +789,12 @@ def gen_data(params):
             'D': D,
             'cu_seqlens_q': cu_seqlens_q,
             'seqused_q': seqused_q,
+            'cu_seqlens_kv': cu_seqlens_kv, 
+            'cu_seqlens_cmp_kv': cu_seqlens_cmp_kv, 
             'seqused_kv': seqused_kv,
             'B': B,
             'max_seqlen_q': max_seqlen_q,
-            'max_seqlen_kv': max(seqused_kv),
+            'max_seqlen_kv': max(seqused_kv) if layout_kv == "PA_ND" else ori_max_s2,
             'K': K,
             'cmp_ratio': cmp_ratio,
             'ori_mask_mode': ori_mask_mode,
@@ -691,6 +813,8 @@ def gen_data(params):
             'ori_block_table': ori_block_table,
             'cmp_block_table': cmp_block_table,
             'cu_seqlens_q': cu_seqlens_q,
+            'cu_seqlens_kv': cu_seqlens_kv, 
+            'cu_seqlens_cmp_kv': cu_seqlens_cmp_kv, 
             'seqused_q': seqused_q,
             'seqused_kv': seqused_kv,
             'sinks': sinks,

@@ -51,6 +51,8 @@ for params in ENABLED_PARAMS_FROM_FILE:
         "block_size1": params.get("block_size1"),
         "block_size2": params.get("block_size2", [None]),
         "cu_seqlens_q": params.get("cu_seqlens_q", [None]),
+        "cu_seqlens_kv": params.get("cu_seqlens_kv", [None]),
+        "cu_seqlens_cmp_kv": params.get("cu_seqlens_cmp_kv", [None]),
         "seqused_q": params.get("seqused_q", [None]),
         "seqused_kv": params.get("seqused_kv", [None]),
         "softmax_scale": params.get("softmax_scale"),
@@ -90,8 +92,10 @@ def test_sparse_attn_sharedkv(param_combinations):   # 初始化参数和tensor
     block_size1 = param_combinations['block_size1']
     block_size2 = None if param_combinations['block_size2'] is None else int(param_combinations['block_size2'])
     cu_seqlens_q = None if param_combinations['cu_seqlens_q'] is None else ast.literal_eval(param_combinations['cu_seqlens_q'])
+    cu_seqlens_kv = None if param_combinations['cu_seqlens_kv'] is None else ast.literal_eval(param_combinations['cu_seqlens_kv'])
+    cu_seqlens_cmp_kv = None if param_combinations['cu_seqlens_cmp_kv'] is None else ast.literal_eval(param_combinations['cu_seqlens_cmp_kv'])
     seqused_q = None if param_combinations['seqused_q'] is None else ast.literal_eval(param_combinations['seqused_q'])
-    seqused_kv = ast.literal_eval(param_combinations['seqused_kv'])
+    seqused_kv = None if param_combinations['seqused_kv'] is None else ast.literal_eval(param_combinations['seqused_kv'])
     softmax_scale = param_combinations['softmax_scale']
     cmp_ratio = None if param_combinations['cmp_ratio'] is None else int(param_combinations['cmp_ratio'])
     ori_mask_mode = int(param_combinations['ori_mask_mode'])
@@ -112,7 +116,7 @@ def test_sparse_attn_sharedkv(param_combinations):   # 初始化参数和tensor
     test_data = layout_q, layout_kv, q_type, ori_kv_type, cmp_kv_type, B, S1, T1, N1, N2, D, K, block_num1, \
                 block_num2, block_size1, block_size2, cu_seqlens_q, seqused_kv, softmax_scale, cmp_ratio, \
                 ori_mask_mode, cmp_mask_mode, ori_win_left, ori_win_right, testcase_name, S2, q_datarange, \
-                ori_kv_datarange, cmp_kv_datarange, seqused_q
+                ori_kv_datarange, cmp_kv_datarange, seqused_q, cu_seqlens_kv, cu_seqlens_cmp_kv
 
     print("data parsed.", test_data)
     print("strat to generate data")
