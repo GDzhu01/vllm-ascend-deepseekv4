@@ -905,95 +905,104 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> moe_gating_top_k_hash(
     return {y, expert_idx, out};
 }
 
-std::vector<bool> is_contiguous_axes(const at::Tensor &tensor)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> 
+construct_compressor_output_tensor(const at::Tensor &x, const at::Tensor &norm_weight, const at::Tensor &rope_sin, 
+                                   int64_t cmp_ratio, int64_t coff, bool enable_grad)
 {
-    auto sizes = tensor.sizes();
-    auto strides = tensor.strides();
-    int64_t ndim = sizes.size();
-
-    if (ndim == 0) {
-        return {};
-    }
-    std::vector<bool> result(ndim, false);
-
-    std::vector<int64_t> contiguous_stride(ndim, 1);
-    for (int64_t i = ndim - 2; i >= 0; i--) {
-        contiguous_stride[i] = contiguous_stride[i + 1] * sizes[i + 1];
-    }
-
-
-    for (int64_t i = 0; i < ndim; i++) {
-        result[i] = (strides[i] == contiguous_stride[i]);
-    }
-    return result;
-}
-
-std::tuple<at::Tensor> construct_compressor_output_tensor(const at::Tensor &x, const at::Tensor &norm_weight,
-                                                          const at::Tensor &rope_sin, int64_t cmp_ratio, int64_t coff)
-{
-    constexpr int DIM_3 = 3;
-    auto x_dim = x.dim();
-    at::SmallVector<int64_t, 8> cmp_kv_size;
-    at::Tensor cmp_kv;
-    auto cmp_s = 0;
-    if (x_dim == DIM_3) {
-        cmp_s = (x.size(1) + cmp_ratio - 1) / cmp_ratio;
-        cmp_kv_size = {x.size(0), cmp_s, norm_weight.size(0)};
-    } else {
-        cmp_s = rope_sin.size(0);
-        cmp_kv_size = {cmp_s, norm_weight.size(0)};
-    }
-
-    cmp_kv = at::empty(cmp_kv_size, x.options().dtype(x.dtype()));
-
-    return std::tuple<at::Tensor>(cmp_kv);
-}
-
-
-std::tuple<at::Tensor> compressor(const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
-                                  at::Tensor &state_cache, const at::Tensor &ape, const at::Tensor &norm_weight,
-                                  const at::Tensor &rope_sin, const at::Tensor &rope_cos,
-                                  const c10::optional<at::Tensor> &state_block_table,
-                                  const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
-                                  const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio,
-                                  int64_t coff, double norm_eps, int64_t rotary_mode, int64_t cache_mode)
-{
-    constexpr int CONTINUOUS = 1;
     constexpr int32_t DIM_1 = 1;
     constexpr int32_t DIM_2 = 2;
     constexpr int32_t DIM_3 = 3;
     constexpr int32_t VALUE_0 = 0;
     auto x_dim = x.dim();
+    at::SmallVector<int64_t, 8> cmp_kv_size;
+    at::SmallVector<int64_t, 8> wkv_proj_size;
+    at::SmallVector<int64_t, 8> softmax_res_size;
+    at::SmallVector<int64_t, 8> norm_x_size;
+    at::SmallVector<int64_t, 8> norm_rstd_size;
+    at::Tensor cmp_kv;
+    at::Tensor wkv_proj;
+    at::Tensor softmax_res;
+    at::Tensor norm_x;
+    at::Tensor norm_rstd;
+    auto cmp_s = 0;
+    if (x_dim == DIM_3) {
+        cmp_s = (x.size(1) + cmp_ratio - 1) / cmp_ratio;
+        cmp_kv_size = {x.size(0), cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), x.size(1), coff * norm_weight.size(0)};
+            softmax_res_size = {x.size(0), cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {x.size(0), cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {x.size(0), cmp_s};
+        }
+    } else {
+        cmp_s = rope_sin.size(0);
+        cmp_kv_size = {cmp_s, norm_weight.size(0)};
+        if (enable_grad) {
+            wkv_proj_size = {x.size(0), coff * norm_weight.size(0)};
+            softmax_res_size = {cmp_s, coff * cmp_ratio, norm_weight.size(0)};
+            norm_x_size = {cmp_s, norm_weight.size(0)};
+            norm_rstd_size = {cmp_s};
+        }
+    }
+
+    cmp_kv = at::empty(cmp_kv_size, x.options().dtype(x.dtype()));
+    if (enable_grad) {
+        wkv_proj = at::empty(wkv_proj_size, x.options().dtype(x.dtype()));
+        softmax_res = at::empty(softmax_res_size, x.options().dtype(x.dtype()));
+        norm_x = at::empty(norm_x_size, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty(norm_rstd_size, x.options().dtype(x.dtype()));
+    } else {
+        wkv_proj = at::empty({0}, x.options().dtype(x.dtype()));
+        softmax_res = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_x = at::empty({0}, x.options().dtype(x.dtype()));
+        norm_rstd = at::empty({0}, x.options().dtype(x.dtype()));
+    }
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>(
+        cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
+}
+
+// 为NPU设备实现前向接口
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+compressor(
+    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate, at::Tensor &kv_state,
+    at::Tensor &score_state, const at::Tensor &ape, const at::Tensor &norm_weight,
+    const at::Tensor &rope_sin, const at::Tensor &rope_cos, 
+    const c10::optional<at::Tensor> &kv_block_table, const c10::optional<at::Tensor> &score_block_table,
+    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
+    const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio, 
+    int64_t coff, double norm_eps, int64_t rotary_mode, bool enable_grad)
+{
+    constexpr int32_t DIM_1 = 1;
+    constexpr int32_t DIM_2 = 2;
+    constexpr int32_t DIM_3 = 3;
+    constexpr int32_t VALUE_0 = 0;
+    // construct the output tensor
+    auto x_dim = x.dim();
     TORCH_CHECK(x_dim == DIM_2 || x_dim == DIM_3, "x dim num[", x_dim, "] should be 2 or 3");
 
-    TORCH_CHECK(norm_weight.defined(), "Check norm_weight != nullptr failed");
     auto norm_weight_dim = norm_weight.dim();
     TORCH_CHECK(norm_weight_dim == DIM_1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
 
-    TORCH_CHECK(rope_sin.defined(), "Check rope_sin != nullptr failed");
     auto rope_sin_dim = rope_sin.dim();
-    TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim,
-                "]");
+    TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
 
-    TORCH_CHECK(cmp_ratio > VALUE_0, "cmp_ratio should be greater than 0");
+    TORCH_CHECK(cmp_ratio != VALUE_0, "cmp_ratio should not be 0");
 
-    std::tuple<at::Tensor> output = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio, coff);
+    std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> output = 
+    construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio, coff, enable_grad);
     at::Tensor cmp_kv = std::get<0>(output);
+    at::Tensor wkv_proj = std::get<1>(output);
+    at::Tensor softmax_res = std::get<2>(output);
+    at::Tensor norm_x = std::get<3>(output);
+    at::Tensor norm_rstd = std::get<4>(output);
 
-    auto state_cache_dim = state_cache.dim();
-    TORCH_CHECK(state_cache_dim == DIM_3, "state_cache dim num[", state_cache_dim, "] should be 3");
-    auto contiguous_axes_result = is_contiguous_axes(state_cache);
-    if (cache_mode == CONTINUOUS) {
-        TORCH_CHECK(contiguous_axes_result[0] && contiguous_axes_result[1] && contiguous_axes_result[2],
-                    "when cache_mode == ", cache_mode, ", state_cache must be contiguous on all axes");
-    }
-    int64_t state_cache_stride_dim0 = state_cache.stride(0);
+    EXEC_NPU_CMD(aclnnCompressor, x, wkv, wgate, kv_state, score_state, ape, norm_weight, rope_sin, rope_cos,
+                    kv_block_table, score_block_table, cu_seqlens, seqused, start_pos, rope_head_dim, cmp_ratio, 
+                    coff, norm_eps, rotary_mode, enable_grad, cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
 
-    EXEC_NPU_CMD(aclnnCompressor, x, wkv, wgate, state_cache, ape, norm_weight, rope_sin, rope_cos,
-                    state_block_table, cu_seqlens, seqused, start_pos, rope_head_dim, cmp_ratio, coff, norm_eps,
-                    rotary_mode, cache_mode, state_cache_stride_dim0, cmp_kv);
-
-    return std::tuple<at::Tensor>(cmp_kv);
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>( \
+        cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
 }
 
 std::tuple<at::Tensor, at::Tensor> construct_quant_lightning_indexer_output_tensor(const at::Tensor& query, const at::Tensor& key,
@@ -1767,13 +1776,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
     ops.def(
         "compressor("
             "Tensor x, Tensor wkv, Tensor wgate, "
-            "Tensor(a!) state_cache, Tensor ape, Tensor norm_weight, "
+            "Tensor(a!) kv_state, Tensor(b!) score_state, "
+            "Tensor ape, Tensor norm_weight, "
             "Tensor rope_sin, Tensor rope_cos, "
-            "Tensor? state_block_table, Tensor? cu_seqlens, "
-            "Tensor? seqused, Tensor? start_pos, "
-            "int rope_head_dim, int cmp_ratio, int coff, "
-            "float norm_eps, int rotary_mode, int cache_mode"
-        ") -> Tensor"
+            "Tensor? kv_block_table, Tensor? score_block_table, "
+            "Tensor? cu_seqlens, Tensor? seqused, "
+            "Tensor? start_pos, int rope_head_dim, int cmp_ratio, "
+            "int coff, float norm_eps, int rotary_mode, bool enable_grad"
+        ") -> (Tensor out0, Tensor out1, Tensor out2, Tensor out3, Tensor out4)"
         );
     ops.impl("compressor", torch::kPrivateUse1, &vllm_ascend::compressor);
 

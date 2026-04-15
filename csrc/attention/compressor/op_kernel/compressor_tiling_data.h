@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ namespace optiling {
         float reciprocalD = 0;              // 1分之D
         uint32_t usedCoreNum = 0;           // 使用核数
         uint32_t nSize = 0;                 // 控制v2积攒的轮数
-        uint32_t stride = 1;                // stride参数
     };
 
     struct CompressorPageAttentionParams {
@@ -51,11 +50,9 @@ namespace optiling {
     };
 
     struct CompressorWorkspaceParams {
-        uint32_t mm1KvResSize;
-        uint32_t mm1ScoreResSize;
+        uint32_t preMm1ResSize;
+        uint32_t curMm1ResSize;
         uint32_t vec1ResSize;
-        uint32_t vec1TailCacheSize;
-        uint32_t dbWorkspaceRatio = 1;
     };
 
     struct CompressorTilingData {

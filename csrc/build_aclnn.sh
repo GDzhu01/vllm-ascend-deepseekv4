@@ -172,8 +172,8 @@ fi
 
   mkdir -p -- "$install_dir"
 
-  # 删除 install_dir 下除 .gitkeep 外的所有内容（包含隐藏文件/目录）
-  find "$install_dir" -mindepth 1 \
+    # 删除 install_dir 下除 .gitkeep 外的第一层内容
+    find "$install_dir" -mindepth 1 -maxdepth 1 \
     ! -name '.gitkeep' \
     -exec rm -rf -- {} +
 
