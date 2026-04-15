@@ -36,11 +36,10 @@
 
 # # SOCs that should follow the "minimal" / "exclude some ops" branch
 # # - 310P3: existing special handling
-# # - ascend910_95: you confirmed A5 passes this value (lowercase), we compare upper
+# # - ascend950: you confirmed A5 passes this value (lowercase), we compare upper
 # set(VLLM_SOC_MINIMAL_LIST
 #   "ASCEND310P3"
-#   "ASCEND910_95"
-#   "ASCEND910_9589"
+#   "ASCEND950"
 # )
 
 # set(VLLM_MINIMAL_BUILD OFF)
@@ -234,8 +233,7 @@ string(TOUPPER "${SOC_VERSION}" SOC_VERSION_UPPER)
 # Minimal build SOC list: use same behavior bucket (skip ascendc kernels, skip some host tiling, etc.)
 set(VLLM_SOC_MINIMAL_LIST
   "ASCEND310P3"
-  "ASCEND910_95"
-  "ASCEND910_9589"
+  "ASCEND950"
 )
 
 set(VLLM_MINIMAL_BUILD OFF)

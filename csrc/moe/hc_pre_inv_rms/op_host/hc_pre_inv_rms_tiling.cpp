@@ -312,8 +312,8 @@ ge::graphStatus TilingForHcPreInvRms(gert::TilingContext *context)
                return ge::GRAPH_FAILED);
     auto ascendcPlatform = platform_ascendc::PlatformAscendC(platformInfo);
     auto socVersion = ascendcPlatform.GetSocVersion();
-    if (socVersion == platform_ascendc::SocVersion::ASCEND910_95) {
-        OPS_LOG_I(context, "Using arch35 tiling for ASCEND910_95");
+    if (socVersion == platform_ascendc::SocVersion::ASCEND950) {
+        OPS_LOG_I(context, "Using arch35 tiling for ASCEND950");
         HcPreInvRmsRegbase::HcPreInvRmsTilingRegbase hcPreInvRmsTilingRegbase(context);
         return hcPreInvRmsTilingRegbase.DoOpTiling();
     }

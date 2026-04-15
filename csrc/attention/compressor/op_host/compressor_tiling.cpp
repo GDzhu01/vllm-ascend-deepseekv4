@@ -288,7 +288,7 @@ ge::graphStatus CompressorTiling::SetScenarioInfo()
 
 ge::graphStatus CompressorTiling::SetTemplateId()
 {
-    if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         return ge::GRAPH_SUCCESS;
     }
     if (context_->seqUsed.desc != nullptr || context_->seqUsed.shape != nullptr) {

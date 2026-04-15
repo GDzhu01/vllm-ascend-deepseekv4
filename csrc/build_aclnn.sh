@@ -139,7 +139,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
-elif [[ "$SOC_VERSION" =~ ^ascend910_95 ]]; then
+elif [[ "$SOC_VERSION" =~ ^ascend950 ]]; then
     # ASCEND910B (A2) series
     # depdendency: catlass
     git config --global --add safe.directory "$ROOT_DIR"
@@ -173,7 +173,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_95 ]]; then
 
 
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
-    SOC_ARG="ascend910_95"
+    SOC_ARG="ascend950"
 else
     # others
     # currently, no custom aclnn ops for other series

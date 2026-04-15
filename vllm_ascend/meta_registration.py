@@ -97,7 +97,7 @@ def sgmv_expand_meta(x: torch.Tensor, weight: torch.Tensor,
     y_out = torch.empty_like(y)
     return y_out
 
-if not os.environ.get('SOC_VERSION',None) == 'ascend910_95':
+if not os.environ.get('SOC_VERSION',None) == 'ascend950':
     register_meta_if_necessary("_C_ascend", "rotary_embedding",
                             rotary_embedding_meta)
     register_meta_if_necessary("_C_ascend", "get_masked_input_and_mask",

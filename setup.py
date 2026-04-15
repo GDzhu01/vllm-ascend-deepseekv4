@@ -75,8 +75,8 @@ def get_value_from_lines(lines: List[str], key: str) -> str:
 
 def get_chip_type() -> str:
     try:
-        if envs.SOC_VERSION == 'ascend910_95':
-            logging.info(f"current compile op with SOC_VERSION: ascend910_95")
+        if envs.SOC_VERSION == 'ascend950':
+            logging.info(f"current compile op with SOC_VERSION: ascend950")
             return envs.SOC_VERSION
         npu_info_lines = subprocess.check_output(
             ['npu-smi', 'info', '-l']).decode().strip().split('\n')
@@ -162,8 +162,7 @@ def gen_build_info():
         "ascend310p3vir02": "_310P",
         "ascend310p3vir04": "_310P",
         "ascend310p3vir08": "_310P",
-        "ascend910_9579": "A5",
-        "ascend910_95": "A5",
+        "ascend950": "A5",
     }
 
     assert soc_version in soc_to_device, f"Undefined soc_version: {soc_version}. Please file an issue to vllm-ascend."
@@ -203,8 +202,7 @@ def get_general_soc_version():
         "ascend310p3vir02": "_310P",
         "ascend310p3vir04": "_310P",
         "ascend310p3vir08": "_310P",
-        "ascend910_95": "ascend910_95",
-        "ascend910_9579": "ascend910_95",
+        "ascend950": "ascend950",
     }
     return soc_to_general_soc[soc_version]
 
@@ -347,7 +345,7 @@ class cmake_build_ext(build_ext):
             "910b": "ascend910b1",
             "910c": "ascend910_9392",
             "310p": "ascend310p1",
-            "ascend910_95": "ascend910_9589",
+            "ascend950": "ascend950",
         }
         CANN_SOC_VERSION = soc_version_map.get(envs.SOC_VERSION,
                                                envs.SOC_VERSION)

@@ -144,7 +144,7 @@ public:
             .ExtendCfgInfo("aclnnSupport.value", "support_aclnn")
             .ExtendCfgInfo("opFile.value", "quant_lightning_indexer")
             .ExtendCfgInfo("jitCompile.flag", "static_false,dynamic_false");
-        this->AICore().AddConfig("ascend910_95", aicore_config_95);
+        this->AICore().AddConfig("ascend950", aicore_config_95);
     }
 };
 OP_ADD(QuantLightningIndexer);

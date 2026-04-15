@@ -105,7 +105,7 @@ ge::graphStatus QLIInfoParser::GetNpuInfo()
     socVersion_ = ascendcPlatform.GetSocVersion();
     if ((socVersion_ != platform_ascendc::SocVersion::ASCEND910B) &&
         (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) && 
-        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_95)) {
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND950)) {
         OP_LOGE(opName_, "SOC Version[%d] is not support.", static_cast<int32_t>(socVersion_));
         return GRAPH_FAILED;
     }
@@ -227,7 +227,7 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
                     ((*opParamInfo_.cmpRatio & (*opParamInfo_.cmpRatio - 1)) != 0),
                 OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
                 *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         OP_CHECK_IF(!(*opParamInfo_.sparseCount == 512),
                 OP_LOGE(opName_, "input attr sparse_count must be 512, but now sparse_count is %d",
                        *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
@@ -305,7 +305,7 @@ ge::graphStatus QLIInfoParser::GetAndCheckInOutDataType()
             inputQueryScaleType_ != ge::DT_FLOAT16,
             OP_LOGE(opName_, "The data types of the input query_dequant_scale and key_dequant_scale must be float16."),
             return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         OP_CHECK_IF(inputQType_ != ge::DT_FLOAT8_E4M3FN,
                OP_LOGE(opName_, "The data types of the input query and key must be float8_e4m3."), return ge::GRAPH_FAILED);
         OP_CHECK_IF(
@@ -318,7 +318,7 @@ ge::graphStatus QLIInfoParser::GetAndCheckInOutDataType()
         (socVersion_ == platform_ascendc::SocVersion::ASCEND910_93)) {
         OP_CHECK_IF(weightsType_ != ge::DT_FLOAT16,
                 OP_LOGE(opName_, "The data types of the input weights must be float16."), return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
             OP_CHECK_IF(weightsType_ != ge::DT_FLOAT,
                 OP_LOGE(opName_, "The data types of the input weights must be float."), return ge::GRAPH_FAILED);
     }
