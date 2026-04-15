@@ -1269,15 +1269,20 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o,dst_type=torch.float8_e4m3fn)
         
-        eye = torch.eye(
-            4096,
-            dtype=torch.bfloat16,
-            device=self.wo_a.weight.device,
-        )
-        wo_a_weight = self.wo_a(eye)
-        wo_a_weight=wo_a_weight.T.view(self.n_local_groups,self.o_lora_rank,-1).transpose(2,1).contiguous()
-        o = torch_npu.npu_transpose_batchmatmul(o, wo_a_weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
+        # eye = torch.eye(
+        #     4096,
+        #     dtype=torch.bfloat16,
+        #     device=self.wo_a.weight.device,
+        # )
+        # wo_a_weight = self.wo_a(eye)
+        # wo_a_weight=wo_a_weight.T.view(self.n_local_groups,self.o_lora_rank,-1).transpose(2,1).contiguous()
+        # o = torch_npu.npu_transpose_batchmatmul(o, wo_a_weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
         
+        o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o, dst_type=torch.float8_e4m3fn)
+        o = torch_npu.npu_transpose_quant_batchmatmul(o, self.wo_a.weight, dtype=torch.bfloat16, bias=None, group_sizes=(0, 0, 32), 
+                                                      x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu), x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu), 
+                                                      perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2))
+
         # swiglu_out_scale=swiglu_out_scale.to(torch.float8_e8m0fnu)
         # self.wo_a.weight_scale
         # print(f"--------------o type is {o.type}")

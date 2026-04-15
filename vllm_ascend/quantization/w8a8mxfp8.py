@@ -41,6 +41,11 @@ class AscendW8A8MXFP8DynamicLinearMethod:
         self.group_size = vllm_config.quant_config.quant_description.get(
             "group_size", 32)
         self.block_size = 128
+        tp_size = vllm_config.parallel_config.tensor_parallel_size
+        hf_config = vllm_config.model_config.hf_config
+        self.n_groups = hf_config.o_groups
+        self.n_local_groups = self.n_groups // tp_size
+        self.o_lora_rank = hf_config.o_lora_rank
 
     @staticmethod
     def get_weight(input_size: int, output_size: int,
@@ -91,7 +96,7 @@ class AscendW8A8MXFP8DynamicLinearMethod:
         output = torch_npu.npu_quant_matmul(
             quantized_x,
             layer.weight.data,
-            layer.weight_scale.data,
+            layer.weight_scale.data.view(torch.float8_e8m0fnu),
             scale_dtype=torch_npu.float8_e8m0fnu,
             pertoken_scale=pertoken_scale,
             pertoken_scale_dtype=torch_npu.float8_e8m0fnu,
@@ -105,12 +110,15 @@ class AscendW8A8MXFP8DynamicLinearMethod:
         # layer.weight_scale.data = layer.weight_scale.data.to(torch.uint8)
         layer.weight_scale.data = layer.weight_scale.data.view(torch.uint8)
         layer.weight_scale.data = layer.weight_scale.data.repeat_interleave(4, dim=1).repeat_interleave(128, dim=0)
-        layer.weight_scale.data = layer.weight_scale.data.view(torch.float8_e8m0fnu)
         n_dim, k_dim = layer.weight_scale.data.shape
         layer.weight_scale.data = layer.weight_scale.data.reshape(
             n_dim, k_dim // 2, 2)
-        layer.weight.data = layer.weight.data.transpose(0, 1)
-        layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1)
+        layer.weight.data = layer.weight.data.transpose(0, 1).contiguous()
+        layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1).contiguous()
+        
+        if layer.prefix.endswith('wo_a'):
+            layer.weight.data=layer.weight.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1).transpose(1, 2).contiguous()
+            layer.weight_scale.data = layer.weight_scale.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1, 2).transpose(1, 2).contiguous()
 
 
 class AscendW8A8MXFP8DynamicFusedMoEMethod:
