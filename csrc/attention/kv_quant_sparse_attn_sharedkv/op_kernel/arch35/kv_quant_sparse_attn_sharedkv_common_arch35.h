@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -9,7 +9,7 @@
  */
 
 /*!
- * \file infer_flash_attention_comm.h
+ * \file kv_quant_sparse_attn_sharedkv_common_arch35.h
  * \brief
  */
 #ifndef KV_QUANT_SPARSE_ATTN_AHSREDKV_COMMON_ARCH35_H
@@ -20,7 +20,6 @@
 
 constexpr uint64_t BLOCK_BYTE = 32;
 constexpr uint32_t NEGATIVE_MIN_VAULE_FP32 = 0xFF7FFFFF;
-constexpr uint32_t POSITIVE_MAX_VALUE_FP32 = 0x7F7FFFFF;
 
 constexpr uint32_t L0AB_SHARED_SIZE_64K = 65536; // 65536表示64*1024
 constexpr uint32_t L0C_SHARED_SIZE_256K = 262144; // 262144表示256 * 1024
@@ -33,12 +32,6 @@ constexpr uint32_t CV_RATIO = 2;
 constexpr uint64_t SYNC_MODE = 4;
 
 namespace BaseApi {
-struct CubeCoordInfo {
-    uint32_t curBIdx;
-    uint32_t s1Coord;
-    uint32_t s2Coord;
-};
-
 __aicore__ constexpr uint64_t Align2Func(uint64_t data) {
     return (data + 1UL) >> 1UL << 1UL; // 向上2对齐, +1移位2
 }
@@ -58,7 +51,7 @@ __aicore__ constexpr uint64_t Align64Func(uint64_t data) {
 
 #define TEMPLATE_INTF \
     template <typename Q_T, typename KV_T, typename T, typename OUTPUT_T, bool isFd, bool isPa, SAS_LAYOUT LAYOUT_T, \
-    SAS_KV_LAYOUT KV_LAYOUT_T, SASTemplateMode TEMPLATE_MODE>
+    SAS_LAYOUT KV_LAYOUT_T, SASTemplateMode TEMPLATE_MODE>
 
 #define TEMPLATE_INTF_ARGS \
     Q_T, KV_T, T, OUTPUT_T, isFd, isPa, LAYOUT_T, KV_LAYOUT_T, TEMPLATE_MODE
@@ -73,7 +66,7 @@ __aicore__ constexpr uint64_t Align64Func(uint64_t data) {
     X(isFd, bool, false) \
     X(isPa, bool, true) \
     X(LAYOUT_T, SAS_LAYOUT, SAS_LAYOUT::BSND) \
-    X(KV_LAYOUT_T, SAS_KV_LAYOUT, SAS_KV_LAYOUT::PA_ND) \
+    X(KV_LAYOUT_T, SAS_LAYOUT, SAS_LAYOUT::PA_ND) \
     X(TEMPLATE_MODE, SASTemplateMode, SASTemplateMode::SCFA_TEMPLATE_MODE) \
 
 

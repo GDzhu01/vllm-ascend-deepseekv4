@@ -8,4 +8,4 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-add_modules_sources_aicpu(DEPENDENCIES quant_lightning_indexer)
+add_modules_sources_aicpu(OPTYPE quant_lightning_indexer ACLNNTYPE aclnn)

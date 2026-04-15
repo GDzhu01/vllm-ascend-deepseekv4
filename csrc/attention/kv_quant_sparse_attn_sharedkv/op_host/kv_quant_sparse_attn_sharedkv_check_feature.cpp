@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file kv_quant_sparse_attn_sharedkv_check_feature.cpp
@@ -46,11 +46,11 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
             return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n1Size_ != 64,
-            OP_LOGE(opName_, "q_head_num should be 64, but got %u", n1Size_),
+            OP_LOGE(opName_, "q_head_num only support 64, but got %u", n1Size_),
             return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n2Size_ != 1,
-        OP_LOGE(opName_, "kv_head_num should be 1, but got %u", n2Size_),
+        OP_LOGE(opName_, "kv_head_num only support 1, but got %u", n2Size_),
         return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n1Size_ % n2Size_ != 0,
@@ -59,11 +59,11 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
 
     std::vector<uint32_t> gSizeSupportList = {64};
     OP_CHECK_IF(std::find(gSizeSupportList.begin(), gSizeSupportList.end(), gSize_) == gSizeSupportList.end(),
-        OP_LOGE(opName_, "group num should be 64, but got %u", gSize_),
+        OP_LOGE(opName_, "group num only support 64, but got %u", gSize_),
         return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(dSize_ != 512, // 512:当前不泛化
-        OP_LOGE(opName_, "dSize only support 512, but got %u", dSize_),
+        OP_LOGE(opName_, "Head dim of input q only support 512, but got %u", dSize_),
         return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(dSizeV_ != 512, // 512:当前不泛化
@@ -85,14 +85,14 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantLayout() const
     };
     std::string layoutQuery = opParamInfo_.layoutQ;
     OP_CHECK_IF(std::find(layoutSupportList.begin(), layoutSupportList.end(), layoutQuery) == layoutSupportList.end(),
-        OP_LOGE(opName_, "layoutQuery only supports BSND/TND, but got %s", layoutQuery.c_str()),
+        OP_LOGE(opName_, "layoutQuery only support BSND/TND, but got %s", layoutQuery.c_str()),
         return ge::GRAPH_FAILED);
     return ge::GRAPH_SUCCESS;
 }
 
 ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantDtype() const
 {
-    OP_CHECK_IF(qType_ != ge::DT_BF16 && qType_ != ge::DT_FLOAT16,
+    OP_CHECK_IF(qType_ != ge::DT_BF16,
         OP_LOGE(opName_, "query dtype only support %s and %s, but got %s",
             SASDataTypeToSerialString(ge::DT_BF16).c_str(), SASDataTypeToSerialString(ge::DT_FLOAT16).c_str(),
             SASDataTypeToSerialString(qType_).c_str()),
@@ -103,19 +103,19 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantDtype() const
 ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantAttr() const
 {
     OP_CHECK_IF(*opParamInfo_.kvQuantMode != 1,
-        OP_LOGE(opName_, "kv_quant_mode_ should be 1, but got %d",
+        OP_LOGE(opName_, "kv_quant_mode_ only support 1, but got %ld",
         *opParamInfo_.kvQuantMode),
         return ge::GRAPH_FAILED);
 
     if (*opParamInfo_.kvQuantMode == 1) {
         OP_CHECK_IF(*opParamInfo_.tileSize != 64, // 64:当前不泛化
-            OP_LOGE(opName_, "tile_size should be 64, but got %ld",
+            OP_LOGE(opName_, "tile_size only support 64, but got %ld",
             *opParamInfo_.tileSize),
             return ge::GRAPH_FAILED);
     }
     
     OP_CHECK_IF(*opParamInfo_.ropeHeadDim != 64, // 64:当前不泛化
-        OP_LOGE(opName_, "rope_head_dim should be 64, but got %d",
+        OP_LOGE(opName_, "rope_head_dim only support 64, but got %ld",
         *opParamInfo_.ropeHeadDim),
         return ge::GRAPH_FAILED);
 
@@ -133,7 +133,6 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantPa() const
             OP_LOGE(opName_, "when page attention is enabled, cmpBlockSize_(%ld) should be in range (0, %u].",
             cmpBlockSize_, MAX_BLOCK_SIZE), return ge::GRAPH_FAILED);
     }
-
     return ge::GRAPH_SUCCESS;
 }
 

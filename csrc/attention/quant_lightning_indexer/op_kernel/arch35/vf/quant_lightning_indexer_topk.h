@@ -99,10 +99,10 @@ class LITopk<uint16_t> {
 public:
     __aicore__ inline uint32_t GetSharedTmpBufferSize()
     {
-        // 2 * topK:两块hisIndexLocal；3 * 256：histogramsLocal idxHighLocal idxLowLocal；64：nkValueLocal
-        uint64_t bufferSize1 = (2 * topK + 3 * 256 + 64)  * sizeof(uint32_t);
-        // topK + trunkLen：tmpIndexLocal
-        uint64_t bufferSize2 = (topK + trunkLen)  * sizeof(uint16_t);
+        // 2 * QLICommon::Align(topK, (uint32_t)256):两块hisIndexLocal；3 * 256：histogramsLocal idxHighLocal idxLowLocal；64：nkValueLocal
+        uint64_t bufferSize1 = (2 * QLICommon::Align(topK, (uint32_t)256) + 3 * 256 + 64)  * sizeof(uint32_t);
+        // QLICommon::Align(topK, (uint32_t)256) + trunkLen：tmpIndexLocal
+        uint64_t bufferSize2 = (QLICommon::Align(topK, (uint32_t)256) + trunkLen)  * sizeof(uint16_t);
         return bufferSize1 + bufferSize2;
     }
 
@@ -115,10 +115,10 @@ public:
     __aicore__ inline void InitBuffers(LocalTensor<uint32_t>& sharedTmpBuffer)
     {
         LocalTensor<uint32_t> hisIndexLocal1 = sharedTmpBuffer[0];
-        LocalTensor<uint32_t> hisIndexLocal2 = hisIndexLocal1[topK];
+        LocalTensor<uint32_t> hisIndexLocal2 = hisIndexLocal1[QLICommon::Align(topK, (uint32_t)256)];
         hisIndexLocal[0] = hisIndexLocal1;
         hisIndexLocal[1] = hisIndexLocal2;
-        histogramsLocal = hisIndexLocal2[topK];
+        histogramsLocal = hisIndexLocal2[QLICommon::Align(topK, (uint32_t)256)];
         idxHighLocal = histogramsLocal[256];
         idxLowLocal = idxHighLocal[256];
         nkValueLocal = idxLowLocal[256];
@@ -144,10 +144,10 @@ public:
             topkb16gather::LiTopKVF<true>(tmpIndexLocal, hisValueLocal, mrgValueLocal, histogramsLocal, idxHighLocal, idxLowLocal, nkValueLocal, topK, s2SeqLen);
             PipeBarrier<PIPE_V>();
             topkb16gather::LiTopKGatherVF(hisIndexLocal[(loopIdx + 1) % 2], hisValueLocal, mrgValueLocal, tmpIndexLocal, hisIndexLocal[loopIdx % 2], 
-                                    topK, loopIdx * trunkLen - topK, s2SeqLen);
+                                    topK, loopIdx * trunkLen - QLICommon::Align(topK, (uint32_t)256), s2SeqLen);
             if (loopIdx == s2LoopNum - 1) {
                 PipeBarrier<PIPE_V>();
-                AscendC::DataCopy(indicesOutLocal, hisIndexLocal[(loopIdx + 1) % 2], topK);
+                AscendC::DataCopy(indicesOutLocal, hisIndexLocal[(loopIdx + 1) % 2], QLICommon::Align(topK, (uint32_t)256));
             }
         }
     }

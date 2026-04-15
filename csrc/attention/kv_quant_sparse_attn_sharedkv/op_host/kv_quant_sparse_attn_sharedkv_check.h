@@ -1,12 +1,12 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file kv_quant_sparse_attn_sharedkv_check.h
@@ -101,10 +101,14 @@ struct KvQuantSASTilingShapeCompareParam {
 constexpr uint32_t Q_INDEX = 0;
 constexpr uint32_t ORI_KV_INDEX = 1;
 constexpr uint32_t CMP_KV_INDEX = 2;
+constexpr uint32_t ORI_SPARSE_INDICES_INDEX = 3;
 constexpr uint32_t CMP_SPARSE_INDICES_INDEX = 4;
 constexpr uint32_t ORI_BLOCK_TABLE_INDEX = 5;
 constexpr uint32_t CMP_BLOCK_TABLE_INDEX = 6;
 constexpr uint32_t CU_SEQLENS_Q_INDEX = 7;
+constexpr uint32_t CU_SEQLENS_ORI_KV_INDEX = 8;
+constexpr uint32_t CU_SEQLENS_CMP_KV_INDEX = 9;
+constexpr uint32_t SEQUSED_Q_INDEX = 10;
 constexpr uint32_t SEQUSED_KV_INDEX = 11;
 constexpr uint32_t SINKS_INDEX = 12;
 constexpr uint32_t METADATA_INDEX = 13;
@@ -184,6 +188,12 @@ const std::map<ge::DataType, std::string> DATATYPE_TO_STRING_MAP = {
     {ge::DT_UINT2, "DT_UINT2"}                    // dt_variant type
 };
 
+const std::map<SASLayout, std::vector<SASAxis>> SAS_LAYOUT_AXIS_MAP = {
+    {SASLayout::BSND, {SASAxis::B, SASAxis::S, SASAxis::N, SASAxis::D}},
+    {SASLayout::TND, {SASAxis::T, SASAxis::N, SASAxis::D}},
+    {SASLayout::PA_ND, {SASAxis::Bn, SASAxis::Bs, SASAxis::N, SASAxis::D}},
+};
+
 const std::map<SASLayout, size_t> SAS_LAYOUT_DIM_MAP = {
     {SASLayout::BSND, DIM_NUM_FOUR},
     {SASLayout::TND, DIM_NUM_THREE},
@@ -196,16 +206,18 @@ std::string GetShapeStr(gert::Shape shape);
 
 // -----------算子Tiling入参信息解析及Check类---------------
 
-class KvQuantSASTilingInfo;
-
 struct KvQuantSASParaInfo {
     SASTilingRequiredParaInfo q = {nullptr, nullptr};
     SASTilingOptionalParaInfo oriKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo oriSparseIndices = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpSparseIndices = {nullptr, nullptr};
     SASTilingOptionalParaInfo oriBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cmpBlockTable = {nullptr, nullptr};
     SASTilingOptionalParaInfo cuSeqLensQ = {nullptr, nullptr};
+    SASTilingOptionalParaInfo cuSeqLensOriKv = {nullptr, nullptr};
+ 	SASTilingOptionalParaInfo cuSeqLensCmpKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo seqUsedQ = {nullptr, nullptr};
     SASTilingOptionalParaInfo sequsedKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo sinks = {nullptr, nullptr};
     SASTilingOptionalParaInfo metadata = {nullptr, nullptr};
@@ -215,11 +227,11 @@ struct KvQuantSASParaInfo {
     const int64_t *tileSize = nullptr;
     const int64_t *ropeHeadDim = nullptr;
     const float *softmaxScale = nullptr;
-    const uint32_t *cmpRatio = nullptr;
+    const int64_t *cmpRatio = nullptr;
     const uint32_t *oriMaskMode = nullptr;
     const uint32_t *cmpMaskMode = nullptr;
-    const uint32_t *oriWinLeft = nullptr;
-    const uint32_t *oriWinRight = nullptr;
+    const int64_t *oriWinLeft = nullptr;
+    const int64_t *oriWinRight = nullptr;
     const char *layoutQ = nullptr;
     const char *layoutKv = nullptr;
 };
@@ -286,7 +298,6 @@ public:
     SASLayout qLayout = SASLayout::BSND;
     SASLayout kvLayout = SASLayout::PA_ND;
     SASLayout outLayout = SASLayout::BSND;
-
 };
 
 class KvQuantSASInfoParser {
@@ -398,6 +409,11 @@ public:
 
 private:
     void Init();
+    bool HasAxis(const SASAxis &axis, const SASLayout &layout, const gert::Shape &shape) const;
+    size_t GetAxisIdx(const SASAxis &axis, const SASLayout &layout) const;
+    uint32_t GetAxisNum(const gert::Shape &shape, const SASAxis &axis,const SASLayout &layout) const;
+    static constexpr int64_t invalidDimValue_ = std::numeric_limits<int64_t>::min();
+
     void LogErrorDtypeSupport(const std::vector<ge::DataType> &expectDtypeList,
         const ge::DataType &actualDtype, const std::string &name) const;
     ge::graphStatus CheckDtypeSupport(const gert::CompileTimeTensorDesc *desc,
@@ -442,6 +458,7 @@ private:
     ge::graphStatus CheckSWAExistence();
     ge::graphStatus CheckCFAExistence();
     ge::graphStatus CheckSCFAExistence();
+    ge::graphStatus CheckUnrequiredParaExistence() const;
 
     ge::graphStatus CheckKVShapeForBatchContinuous();
     uint32_t GetTypeSize(ge::DataType dtype) const;
@@ -489,7 +506,7 @@ private:
     int64_t s2Size_ = 0;
     uint32_t qkHeadDim_ = 0;
     uint32_t vHeadDim_ = 0;
-    uint32_t ropeHeadDim_ = 0;
+    int64_t ropeHeadDim_ = 0;
     uint32_t qTSize_ = 0; // 仅TND时生效
     uint32_t kvTSize_ = 0; // 仅TND时生效
     KvStorageMode kvStorageMode_ = KvStorageMode::BATCH_CONTINUOUS;
@@ -505,7 +522,8 @@ private:
     uint32_t cmpBlockSize_ = 0;
     uint32_t oriBlockTable_ = 0;
     uint32_t cmpBlockTable_ = 0;
-    uint32_t kv_quant_mode_ = 0;
+    int64_t kv_quant_mode_ = 0;
+    int64_t tileSize_ = 0;
 
     int64_t oriWinLeft_ = 0;
     int64_t oriWinRight_ = 0;
@@ -515,6 +533,9 @@ private:
     uint32_t dSize_ = sasInfo_.dSize;
     uint32_t dSizeV_ = sasInfo_.dSizeV;
     uint32_t dSizeVInput_ = sasInfo_.dSizeVInput;
+    
+    uint32_t dSizeOriKvInput_ = 0;
+    uint32_t dSizeCmpKvInput_ = 0;
 
     uint32_t oriMaskMode_ = 0;
     uint32_t cmpMaskMode_ = 0;
@@ -530,8 +551,6 @@ private:
     uint32_t aivNum_ = 0;
     platform_ascendc::SocVersion socVersion_ = platform_ascendc::SocVersion::ASCEND910B;
     uint64_t l2CacheSize_ = 0;
-
-    uint32_t tileSize_ = 0;
 
     bool isSameSeqAllKVTensor_ = true;
     bool isSameActualseq_ = true;

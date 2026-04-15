@@ -104,7 +104,7 @@ ge::graphStatus QLIInfoParser::GetNpuInfo()
 
     socVersion_ = ascendcPlatform.GetSocVersion();
     if ((socVersion_ != platform_ascendc::SocVersion::ASCEND910B) &&
-        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) && 
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) &&
         (socVersion_ != platform_ascendc::SocVersion::ASCEND950)) {
         OP_LOGE(opName_, "SOC Version[%d] is not support.", static_cast<int32_t>(socVersion_));
         return GRAPH_FAILED;
@@ -228,9 +228,9 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
                 OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
                 *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
     } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
-        OP_CHECK_IF(!(*opParamInfo_.sparseCount == 512),
-                OP_LOGE(opName_, "input attr sparse_count must be 512, but now sparse_count is %d",
-                       *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
+        OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
+                OP_LOGE(opName_, "input attr sparse_count must > 0 and <= %d, but now sparse_count is %d",
+                       SPARSE_LIMIT, *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
         OP_CHECK_IF((*opParamInfo_.cmpRatio != 1) && (*opParamInfo_.cmpRatio != 4) && (*opParamInfo_.cmpRatio != 128), 
                 OP_LOGE(opName_, "input attr cmpRatio must be 1、4 or 128, but now cmpRatio is %ld.",
                 *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
@@ -507,11 +507,18 @@ ge::graphStatus QLIInfoParser::GetBatchSize()
         GetActualSeqLenSize(bSizeKey, opParamInfo_.actualSeqLengthsK.tensor, "input actual_seq_lengths_key");
         if (kLayout_ == DataLayout::TND) {
             OP_CHECK_IF(bSizeQuery != bSizeKey,
-                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query is %u, %u respectively, they must be same.",
+                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query and actual_seq_lengths_key is %u, %u respectively, they must be same.",
                         bSizeQuery, bSizeKey),
                 return ge::GRAPH_FAILED);
             bSize_ = bSizeQuery;
         } else {
+            if (bSizeQuery == bSizeKey + 1) {
+                batchSupperFlag_ = true;
+            }
+            OP_CHECK_IF((bSizeQuery != bSizeKey) && !batchSupperFlag_,
+                OP_LOGE(opName_, "the lengths of actual_seq_lengths_query and actual_seq_lengths_key is %u, %u respectively, they must be same.",
+                        bSizeQuery, bSizeKey),
+                return ge::GRAPH_FAILED);
             bSize_ = bSizeKey; // Q为TND，batch从Key中获取
         }
         return ge::GRAPH_SUCCESS;
@@ -790,6 +797,7 @@ void QLIInfoParser::GenerateInfo(QLITilingInfo &QLIInfo)
     QLIInfo.maxBlockNumPerBatch = maxBlockNumPerBatch_;
 
     QLIInfo.pageAttentionFlag = (kLayout_ == DataLayout::PA_BSND);
+    QLIInfo.batchSupperFlag = batchSupperFlag_;
     QLIInfo.sparseMode = *opParamInfo_.sparseMode;
     QLIInfo.sparseCount = *opParamInfo_.sparseCount;
     QLIInfo.preTokens = *opParamInfo_.preTokens;
@@ -883,6 +891,7 @@ ge::graphStatus QuantLightningIndexerTiling::DoTiling(QLITilingInfo *tilingInfo)
     tilingData_.set_cmpRatio(tilingInfo->cmpRatio);
     tilingData_.set_returnValues(tilingInfo->returnValues);
     tilingData_.set_usedCoreNum(blockDim);
+    tilingData_.set_batchSupperFlag(tilingInfo->batchSupperFlag);
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
 

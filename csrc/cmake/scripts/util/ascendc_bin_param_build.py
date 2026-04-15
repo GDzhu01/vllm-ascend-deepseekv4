@@ -227,7 +227,7 @@ class BinParamBuilder(opdesc_parser.OpDesc):
         self.rm_cprs_cmb(param_info.dtype_list, param_info.format_list, input_size, output_size)
 
 
-    def gen_input_json(self: any, auto_gen_path: str):
+    def gen_input_json(self: any, auto_gen_path: str, kernel_template_input: str, bisheng_flags: str):
         key_map = {}
         self.for_bin_list_match()
         if len(self.input_dtype) == 0:
@@ -335,7 +335,8 @@ class BinParamBuilder(opdesc_parser.OpDesc):
             param_file = os.path.realpath(param_file)
 
             self._write_build_json(param_file, param)
-            self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path)
+            self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, bisheng_flags,
+            kernel_template_input=kernel_template_input)
             if self.op_super_config:
                 bin_file += "_relocatable"
                 op_node['bin_filename'] = bin_file
@@ -343,7 +344,8 @@ class BinParamBuilder(opdesc_parser.OpDesc):
                 param_file = os.path.realpath(param_file)
                 self._write_build_json(param_file, param)
                 index_value += 1
-                self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, True)
+                self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, bisheng_flags, True, 
+                                      kernel_template_input)
 
     def _write_build_json(self: any, param_file: str, param):
         with os.fdopen(os.open(param_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
@@ -371,7 +373,9 @@ grep -q \"None of the given tiling keys are in the supported list\"; then\n"
             check_result += "fi\n"
         return check_result
 
-    def _write_build_cmd(self: any, param_file: str, bin_file: str, index: int, auto_gen_path: str, super_mode=False):
+
+    def _write_build_cmd(self: any, param_file: str, bin_file: str, index: int, auto_gen_path: str, bisheng_flags: str,
+                         super_mode=False, kernel_template_input=""):
         hard_soc = const_var.conv_soc_ver(self.soc)
         if not hard_soc:
             hard_soc = self.soc.capitalize()
@@ -379,11 +383,12 @@ grep -q \"None of the given tiling keys are in the supported list\"; then\n"
         compile_file = os.path.join(self.out_path, '-'.join(name_com) + '.sh')
         compile_file = os.path.realpath(compile_file)
 
-        bin_cmd_str = 'res=$(opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+        bin_cmd_str = 'res=$(asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
                 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
 
         build_cmd_var = "#!/bin/bash\n"
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} ..."\n'
+        build_cmd_var += f"start_time=$(date +%s.%N)\n"
         plog_level = os.environ.get("ASCEND_GLOBAL_LOG_LEVEL")
         plog_stdout = os.environ.get("ASCEND_SLOG_PRINT_TO_STDOUT")
         if plog_level is None:
@@ -395,7 +400,19 @@ grep -q \"None of the given tiling keys are in the supported list\"; then\n"
             build_cmd_var += f'export ASCEND_CUSTOM_OPP_PATH={auto_gen_path}:$ASCEND_CUSTOM_OPP_PATH \n'
         build_cmd_var += bin_cmd_str.format(fun=self.op_intf, soc=hard_soc, param=param_file,
                                            impl='high_performance,optional')
+        
+        print(f"bisheng_flags is: {bisheng_flags}")
+
+        if bisheng_flags:
+            # 如果 bisheng_flags 非空，直接使用其值
+            build_cmd_var += f" --op_debug_config={bisheng_flags}"
+
         enable_tiling_keys = False
+        
+        if kernel_template_input:
+            kernel_template_input = kernel_template_input.replace(',', ';')
+            build_cmd_var += f' --kernel-template-input="{kernel_template_input}"'
+
         if self.tiling_keys:
             tiling_keys_list = sorted(list(self.tiling_keys))
             tiling_key_str = ','.join([str(_key) for _key in tiling_keys_list])
@@ -410,11 +427,20 @@ grep -q \"None of the given tiling keys are in the supported list\"; then\n"
             op_super_config_str = ' '.join([str(_key) for _key in list(self.op_super_config)])
             build_cmd_var += f' {op_super_config_str}'
 
-        build_cmd_var += ")\n"
-        build_cmd_var += "\n"
+        build_cmd_var += ")\n\n"
     
         check_result = self._generate_check_result(enable_tiling_keys, bin_file)
         build_cmd_var += check_result
+        build_cmd_var += f'end_time=$(date +%s.%N)\n'
+        build_cmd_var += f'duration=$(awk "BEGIN {{ print $end_time - $start_time }}")\n'
+        build_bin_path = os.path.dirname(self.out_path)
+        build_cmd_var += f'kernel_path=$(find "{build_bin_path}" -type f -name "{bin_file}.o" -print | head -n 1)\n'
+        build_cmd_var += f'kernel_size=$(stat -c%s "$kernel_path")\n'
+        build_cmd_var += (
+            f'echo "Build [{self.soc}] op_name [{self.op_file}] index [{str(index)}] bin_file [{bin_file}] '
+            f'duration [$duration] size [$kernel_size] start_time [$start_time] end_time [$end_time]" '
+            f'>> {self.op_file}-{str(index)}.txt\n'
+        )
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} Done"\n'
 
         with os.fdopen(os.open(compile_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
@@ -498,7 +524,7 @@ def parse_op_debug_confg(opc_config_file: str, soc: str) -> Dict:
     return tiling_key_info, op_debug_config
 
 
-def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str,
+def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str, kernel_template_input: str, bisheng_flags: str,
                         opc_config_file: str = '', ops: list = None):
     if not os.path.exists(cfgfile):
         print(f'INFO: {cfgfile} does not exists in this project, skip generating compile commands.')
@@ -532,13 +558,14 @@ def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str,
             op_desc.set_tiling_key(tiling_key_info[op_desc.op_type])
         if all_soc_key in tiling_key_info:
             op_desc.set_tiling_key(tiling_key_info[all_soc_key])
-        op_desc.gen_input_json(auto_gen_path_dir)
+        op_desc.gen_input_json(auto_gen_path_dir, kernel_template_input, bisheng_flags)
 
 
 def parse_args(argv):
     """Command line parameter parsing"""
     parser = argparse.ArgumentParser()
     parser.add_argument('argv', nargs='+')
+    parser.add_argument('--kernel_template_input', nargs='?', const='', default='')
     parser.add_argument('--opc-config-file', nargs='?', const='', default='')
     return parser.parse_args(argv)
 
@@ -547,7 +574,14 @@ if __name__ == '__main__':
     args = parse_args(sys.argv)
     if len(args.argv) <= 3:
         raise RuntimeError('arguments must greater than 3')
+    bisheng_flags_option = ['oom', 'dump_cce', 'dump_bin', 'dump_loc', 'ccec_o0', 'ccec_g', 'check_flag_sanitizer']
+    input_bisheng_flags = ""
+    for elem in args.argv:
+        if elem in bisheng_flags_option:
+            input_bisheng_flags = elem
     gen_bin_param_file(args.argv[1],
                     args.argv[2],
                     args.argv[3],
+                    args.kernel_template_input,
+                    input_bisheng_flags,
                     opc_config_file=args.opc_config_file)

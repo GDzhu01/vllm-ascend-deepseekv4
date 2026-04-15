@@ -150,7 +150,8 @@ class GenCoverage:
         使用 lcov 生成覆盖率
         """
         # 当 log 等级小于 INFO 时，lcov 不带 -q 标签
-        lcov_log_tag = "" if logging.getLogger().level <= logging.INFO else "-q"
+        log_quiet = logging.getLogger().level > logging.INFO
+        lcov_log_tag = "-q" if log_quiet else ""
         logging.critical("================================================================================")
         logging.critical("Coverage Report")
         logging.critical("================================================================================")
@@ -158,7 +159,7 @@ class GenCoverage:
         # 生成覆盖率
         cmd = f"lcov -c -d {param.data_dir} -o {param.info_file} {lcov_log_tag}"
         logging.debug("[DEBUG] Generate origin coverage file, cmd=`%s`", cmd)
-        ret = subprocess.run(cmd.split(), capture_output=False, check=True, encoding='utf-8')
+        ret = subprocess.run(cmd.split(), capture_output=log_quiet, check=True, encoding='utf-8')
         ret.check_returncode()
         if param.info_file.stat().st_size == 0:
             logging.critical("No file found in origin coverage file.")
@@ -167,7 +168,7 @@ class GenCoverage:
         # 滤掉某些文件/路径的覆盖率信息
         cmd = f"lcov --remove {param.info_file} {param.filter_str} -o {param.info_file_filtered} {lcov_log_tag}"
         logging.debug("[DEBUG] Generate filtered coverage file, cmd=`%s`", cmd)
-        ret = subprocess.run(cmd.split(), capture_output=False, check=True, encoding='utf-8')
+        ret = subprocess.run(cmd.split(), capture_output=log_quiet, check=True, encoding='utf-8')
         ret.check_returncode()
         logging.debug("[DEBUG] Generated filtered coverage file %s", param.info_file_filtered)
         logging.info("[INFO] Generated coverage result in %s", os.path.dirname(param.info_file))
@@ -179,7 +180,7 @@ class GenCoverage:
         sub_cmd_prefix = f"-p {param.source_dir}" if param.source_dir else ""
         cmd = f'genhtml {param.info_file_filtered} {sub_cmd_prefix} -o {param.html_report_dir} {lcov_log_tag}'
         logging.debug("[DEBUG] Generate filtered coverage html report, cmd=`%s`", cmd)
-        ret = subprocess.run(cmd.split(), capture_output=False, check=True, encoding='utf-8')
+        ret = subprocess.run(cmd.split(), capture_output=log_quiet, check=True, encoding='utf-8')
         ret.check_returncode()
         logging.info("[INFO] Generated filtered coverage html report. %s", param.html_report_dir)
         # 输出覆盖率数据到终端

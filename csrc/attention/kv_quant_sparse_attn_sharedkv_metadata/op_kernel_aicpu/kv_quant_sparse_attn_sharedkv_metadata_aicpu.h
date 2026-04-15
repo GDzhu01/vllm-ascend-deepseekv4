@@ -1,13 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the
- * "License"). Please refer to the License for details. You may not use this
- * file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
- * "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
- * FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
- * for the full text of the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -46,8 +44,8 @@ enum class SparseMode : uint8_t {
 };
 
 enum class ValidSocVersion {
-    ASCEND910B = 0,
-    ASCEND910D,
+    ASCEND910 = 0,
+    ASCEND950,
     RESERVED_VERSION = 99999
 };
 
@@ -231,6 +229,12 @@ public:
 
 private:
     bool Prepare(CpuKernelContext &ctx);
+    int32_t GetQueryBatchSize();
+    int32_t GetKvBatchSize();
+    bool CheckSingleParam();
+    bool CheckExistence();
+    bool CheckConsistency();
+    bool CheckFeature();
     bool ParamsCheck();
     bool ParamsInit();
     bool BalanceSchedule(SplitResult &splitRes);
@@ -290,17 +294,17 @@ private:
     Tensor *metaData_ = nullptr;
 
     // attributes
-    uint32_t batchSize_ = 0;
-    uint32_t querySeqSize_ = 0;
-    uint32_t queryHeadNum_ = 0;
-    uint32_t kvSeqSize_ = 0;
-    uint32_t kvHeadNum_ = 0;
-    uint32_t headDim_ = 0;
-    uint32_t oriTopK_ = 0;
-    uint32_t cmpTopK_ = 0;
-    uint32_t cmpRatio_ = -1;
-    uint32_t oriMaskMode_ = 4;
-    uint32_t cmpMaskMode_ = 3;
+    int32_t batchSize_ = 0;
+    int32_t querySeqSize_ = 0;
+    int32_t queryHeadNum_ = 0;
+    int32_t kvSeqSize_ = 0;
+    int32_t kvHeadNum_ = 0;
+    int32_t headDim_ = 0;
+    int32_t oriTopK_ = 0;
+    int32_t cmpTopK_ = 0;
+    int32_t cmpRatio_ = -1;
+    int32_t oriMaskMode_ = 4;
+    int32_t cmpMaskMode_ = 3;
     int64_t winLeft_ = 127;
     int64_t winRight_ = 0;
     std::string layoutQuery_ = "BSND";
@@ -317,7 +321,6 @@ private:
     uint32_t groupSize_ = 0;
     uint32_t mBaseSize_ = 0;
     uint32_t s2BaseSize_ = 0;
-    uint32_t gS1BaseSizeOfFd_ = 0;
     bool isS1G_ = true;
     bool isCFA = false;
     bool isSCFA = false;
@@ -331,8 +334,8 @@ private:
     actSeqLenQ = 0,
     actSeqLenOriKv = 1,
     actSeqLenCmpKv = 2,
-    SeqUsedQ = 3,
-    SeqUsedKv = 4,
+    seqUsedQ = 3,
+    seqUsedKv = 4,
     // output
     metaData = 0,
     };

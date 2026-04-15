@@ -19,18 +19,6 @@ if ((NOT Python3_FOUND) OR (${Python3_EXECUTABLE} STREQUAL ""))
 endif ()
 set(HI_PYTHON   "${Python3_EXECUTABLE}" CACHE   STRING   "python executor")
 
-# 获取基础 CANN 路径
-if (CUSTOM_ASCEND_CANN_PACKAGE_PATH)
-    set(ASCEND_CANN_PACKAGE_PATH  ${CUSTOM_ASCEND_CANN_PACKAGE_PATH})
-elseif (DEFINED ENV{ASCEND_HOME_PATH})
-    set(ASCEND_CANN_PACKAGE_PATH  $ENV{ASCEND_HOME_PATH})
-elseif (DEFINED ENV{ASCEND_OPP_PATH})
-    get_filename_component(ASCEND_CANN_PACKAGE_PATH "$ENV{ASCEND_OPP_PATH}/.." ABSOLUTE)
-else()
-    set(ASCEND_CANN_PACKAGE_PATH  "/usr/local/Ascend/latest")
-endif ()
-message(STATUS "ASCEND_CANN_PACKAGE_PATH=${ASCEND_CANN_PACKAGE_PATH}")
-
 ########################################################################################################################
 # 公共配置
 ########################################################################################################################
@@ -49,6 +37,7 @@ set(OP_DEBUG_CONFIG               "false"                         CACHE   STRING
 get_filename_component(OPS_ADV_DIR                  "${CMAKE_CURRENT_SOURCE_DIR}"           REALPATH)
 get_filename_component(OPS_ADV_CMAKE_DIR            "${OPS_ADV_DIR}/cmake"                  REALPATH)
 get_filename_component(OPS_ADV_UTILS_KERNEL_INC     "${OPS_ADV_DIR}/common/include/kernel"   REALPATH)
+get_filename_component(OPS_CGMCT                    "${OPS_ADV_DIR}/gmm/common/cgmct"       REALPATH)
 
 
 #   构建树相关路径
@@ -261,6 +250,8 @@ if (BUILD_OPEN_PROJECT)
                 --build_type ${BUILD_TYPE}
                 --version ${VERSION}
                 --enable_oom ${ENABLE_OOM}
+                --enable_tiling_sink ${ENABLE_TILING_SINK}
+                --enable_aicpu ${ENABLE_AICPU}
                 RESULT_VARIABLE result
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 OUTPUT_VARIABLE PREPARE_BUILD_OUTPUT_VARIABLE)

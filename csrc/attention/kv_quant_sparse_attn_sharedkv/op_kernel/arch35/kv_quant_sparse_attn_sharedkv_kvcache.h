@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ __aicore__ inline void GetSingleCoreParam(RunParamStr& runParam, const ConstInfo
                 actualS2Size -= actualSeqKvlenAddr[sIdx - 1];
             }
         } else {
-            actualS2Size = (constInfo.actualSeqLenKVSize == actualSeqKVMin) ? 
+            actualS2Size = (constInfo.actualSeqLenKVSize == actualSeqKVMin) ?
                 actualSeqKvlenAddr[0] : actualSeqKvlenAddr[sIdx];
         }
     }
@@ -76,7 +76,7 @@ __aicore__ inline void ComputeParamBatch(RunParamStr& runParam, const ConstInfo 
 }
 
 TEMPLATE_INTF
-__aicore__ inline void ComputeS1LoopInfo(RunParamStr& runParam, const ConstInfo &constInfo, bool lastBN, 
+__aicore__ inline void ComputeS1LoopInfo(RunParamStr& runParam, const ConstInfo &constInfo, bool lastBN,
     int64_t nextGs1Idx, int64_t gS1StartIdx)
 {
     runParam.qSNumInOneBlock = constInfo.s1BaseSize / constInfo.gSize; // 不切G轴, 计算每个基本快可以拷贝多少行s

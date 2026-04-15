@@ -32,6 +32,9 @@ add_library(${GRAPH_PLUGIN_NAME}_proto_headers INTERFACE)
 # global variables
 set(COMPILED_OPS CACHE STRING "Compiled Ops" FORCE)
 set(COMPILED_OP_DIRS CACHE STRING "Compiled Ops Dirs" FORCE)
+set(ACLNN_EXTRA_HEADERS "" CACHE STRING "Aclnn Extra Headers" FORCE)
+set(ACLNN_EXTRA_SRCS "" CACHE STRING "Aclnn Extra Sources" FORCE)
+set(ACLNNINNER_EXTRA_SRCS "" CACHE STRING "AclnnInner Extra Sources" FORCE)
 
 # src path
 get_filename_component(OPS_TRANSFORMER_CMAKE_DIR           "${OPS_TRANSFORMER_DIR}/cmake"                               REALPATH)
@@ -53,7 +56,6 @@ if (ENABLE_BUILT_IN)
   set(ACLNN_INC_LEVEL2_INSTALL_DIR    ops_transformer/built-in/op_impl/ai_core/tbe/op_api/include/aclnnop/level2)
   set(ACLNN_LIB_INSTALL_DIR           ops_transformer/built-in/op_impl/ai_core/tbe/op_api/lib/linux/${CMAKE_SYSTEM_PROCESSOR})
   set(OPS_INFO_INSTALL_DIR            ops_transformer/built-in/op_impl/ai_core/tbe/config)
-  set(IMPL_INSTALL_DIR                ops_transformer/built-in/op_impl/ai_core/tbe/impl/ops_transformer/ascendc)
   set(IMPL_DYNAMIC_INSTALL_DIR        ops_transformer/built-in/op_impl/ai_core/tbe/impl/ops_transformer/dynamic)
   set(BIN_KERNEL_INSTALL_DIR          ops_transformer/built-in/op_impl/ai_core/tbe/kernel)
   set(BIN_KERNEL_CONFIG_INSTALL_DIR   ops_transformer/built-in/op_impl/ai_core/tbe/kernel/config)
@@ -132,9 +134,10 @@ if (NOT BUILD_OPEN_PROJECT)
     ${TOP_DIR}/asl/ops/cann/ops/utils/inc/error
     ${TOP_DIR}/ace/comop/inc/external
     ${TOP_DIR}/ace/npuruntime/inc/external
-    ${TOP_DIR}/ace/npuruntime/inc/nnopbase
+    ${TOP_DIR}/ops-base/include/nnopbase
+    ${TOP_DIR}/runtime/pkg_inc/aicpu_sched/common
     ${TOP_DIR}/asl/ops/cann/ops/mc2/communication_and_computation
-    ${TOP_DIR}/ace/npuruntime/acl/inc/external/acl/error_codes
+    ${TOP_DIR}/runtime/include/external/acl/error_codes
     ${TOP_DIR}/asl/ops/cann/ops/built-in/op_tiling/runtime
     ${TOP_DIR}/asl/ops/cann/ops/built-in
     ${TOP_DIR}/ops-base/pkg_inc/op_common/op_host
@@ -270,6 +273,7 @@ set(AICPU_INCLUDE
   ${NNOPBASE_INCLUDE_DIRS}
   ${HCCL_EXTERNAL_INCLUDE}
   ${OPS_TRANSFORMER_DIR}/common/inc/common
+  ${OPS_TRANSFORMER_DIR}/common/include/kernel
   ${METADEF_INCLUDE_DIRS}
 )
 
@@ -310,10 +314,6 @@ else()
     )
 endif()
 
-include_directories(${PROJECT_SOURCE_DIR}/utils/inc)
-
 set(OPS_CATEGORY_LIST
   "attention"
-  "moe"
-  "mc2"
 )

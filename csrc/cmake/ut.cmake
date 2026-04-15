@@ -139,6 +139,7 @@ if(UT_TEST_ALL OR OP_API_UT)
               ${ASCEND_DIR}/pkg_inc 
               ${ASCEND_DIR}/include/ascendc/basic_api 
               ${ASCEND_CANN_PACKAGE_PATH}/runtime/pkg_inc
+              ${PROJECT_SOURCE_DIR}/tests/ut/framework_normal/common
       )
     target_link_libraries(${OP_API_MODULE_NAME}_cases_obj 
       PRIVATE $<BUILD_INTERFACE:intf_llt_pub_asan_cxx17>
@@ -403,7 +404,7 @@ if(UT_TEST_ALL OR OP_KERNEL_UT)
       target_compile_definitions(${opName}_${socVersion}_tiling_tmp PRIVATE LOG_CPP _GLIBCXX_USE_CXX11_ABI=0)
       target_link_libraries(
         ${opName}_${socVersion}_tiling_tmp
-        PRIVATE -Wl,--no-as-needed $<$<TARGET_EXISTS:opsbase>:opsbase> -Wl,--as-needed -Wl,--whole-archive tiling_api
+        PRIVATE -Wl,--no-as-needed -Wl,--as-needed -Wl,--whole-archive tiling_api
                 -Wl,--no-whole-archive gcov
                 $<$<BOOL:${dlog_FOUND}>:$<BUILD_INTERFACE:dlog_headers>>
         )
@@ -450,8 +451,10 @@ if(UT_TEST_ALL OR OP_KERNEL_UT)
         )
       target_include_directories(
         ${opName}_${socVersion}_cases_obj
-        PRIVATE ${ASCEND_DIR}/include/base/context_builder ${PROJECT_SOURCE_DIR}/tests/ut/framework_normal/op_kernel
+        PRIVATE ${ASCEND_DIR}/include/base/context_builder 
+                ${PROJECT_SOURCE_DIR}/tests/ut/framework_normal/op_kernel
                 ${PROJECT_SOURCE_DIR}/tests/ut/framework_normal/common
+                ${PROJECT_SOURCE_DIR}/common/include/kernel
                 ${ASCEND_DIR}/${SYSTEM_PREFIX}/asc/impl/basic_api
                 ${ASCEND_DIR}/${SYSTEM_PREFIX}/asc
                 ${ASCEND_DIR}/${SYSTEM_PREFIX}/asc/include
@@ -527,7 +530,6 @@ if(UT_TEST_ALL OR OP_KERNEL_AICPU_UT)
             gtest
             c_sec
             Eigen3::EigenMath
-            $<$<TARGET_EXISTS:opsbase>:opsbase>
             )
 
     ## add object: math_op_kernel_ut_cases_obj
@@ -541,14 +543,13 @@ if(UT_TEST_ALL OR OP_KERNEL_AICPU_UT)
     endif()
 
     target_link_libraries(${AICPU_OP_KERNEL_MODULE_NAME}_cases_obj PRIVATE
-        $<BUILD_INTERFACE:intf_llt_pub_asan>
+            $<BUILD_INTERFACE:intf_llt_pub_asan>
             $<BUILD_INTERFACE:intf_llt_pub_asan_cxx17>
             -ldl
             $<TARGET_OBJECTS:${opName}_cases_obj>
             gtest
             c_sec
             Eigen3::EigenMath
-      $<$<TARGET_EXISTS:opsbase>:opsbase>
             )
   endfunction()
 endif()
