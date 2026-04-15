@@ -698,8 +698,8 @@ ge::graphStatus SASInfoParser::GetActualseqInfo()
             actualLenDimsQ_ = opParamInfo_.seqUsedQ.tensor->GetShapeSize();
         }
     }
-    if (kvLayout_ != SASLayout::PA_ND && kvLayout_ != SASLayout::BSND) {
-        OP_LOGE(opName_, "ori_kv and cmp_kv only support PA_ND and BSND layout.");
+    if (kvLayout_ != SASLayout::PA_ND && kvLayout_ != SASLayout::BSND && kvLayout_ != SASLayout::TND) {
+        OP_LOGE(opName_, "ori_kv and cmp_kv only support PA_ND and BSND and TND layout.");
         return ge::GRAPH_FAILED;
     }
     if (kvLayout_ == SASLayout::PA_ND) {
