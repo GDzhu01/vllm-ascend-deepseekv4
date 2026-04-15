@@ -96,6 +96,7 @@ ge::graphStatus CompressorTiling::ConvertContext(gert::TilingContext &context, C
     compressorContext.normEps = attrs->GetAttrPointer<float>(NORM_EPS_ATTR_INDEX);
     compressorContext.rotaryMode = attrs->GetAttrPointer<int>(ROTARY_MODE_ATTR_INDEX);
     compressorContext.cacheMode = attrs->GetAttrPointer<int>(CACHE_MODE_ATTR_INDEX);
+    compressorContext.stride = attrs->GetAttrPointer<int>(STATE_CACHE_STRIDE_DIM0_ATTR_INDEX);
 
     OP_CHECK_IF(context.GetWorkspaceSizes(1) == nullptr,
                OPS_REPORT_VECTOR_INNER_ERR(context.GetNodeName(), "workSpaceSize got from ge is nullptr"),
@@ -153,6 +154,7 @@ ge::graphStatus CompressorTiling::SetBaseInfo()
         (baseParams_->seqSize + baseParams_->cmpRatio - 1) / baseParams_->cmpRatio; // number of token after compress
     coff = static_cast<uint8_t>(*context_->coff);
     baseParams_->nSize = 2; // 2:每个核处理两个基本块后做全核同步
+    baseParams_->stride = static_cast<uint32_t>(*context_->stride);
 
     OP_LOGI(context_->opName, "[TILING] bSize:%u  tSize:%u cmpRatio:%u coff:%u", baseParams_->batchSize, baseParams_->tokenSize, baseParams_->cmpRatio, coff);
     
@@ -352,7 +354,7 @@ ge::graphStatus CompressorTiling::GenTilingKey() const
         dtype,
         coff,
         rotaryMode,
-        cacheMode,
+        1,
         templateId
     );
     OP_LOGI(context_->opName,
@@ -697,9 +699,9 @@ ge::graphStatus CompressorTiling::CheckSingleParaRotaryMode()const
 
 ge::graphStatus CompressorTiling::CheckSingleParaCacheMode() const
 {
-    if (ge::GRAPH_SUCCESS != CheckAttrValueSupport(context_->cacheMode, CACHE_MODE, CACHE_MODE_NAME)) {
-        return ge::GRAPH_FAILED;
-    }
+    // if (ge::GRAPH_SUCCESS != CheckAttrValueSupport(context_->cacheMode, CACHE_MODE, CACHE_MODE_NAME)) {
+    //     return ge::GRAPH_FAILED;
+    // }
     return ge::GRAPH_SUCCESS;
 }
 

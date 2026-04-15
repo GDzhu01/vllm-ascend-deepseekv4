@@ -43,6 +43,7 @@
 | next_tokens    | 可选属性      | 预留参数，表示attention需要和前几个Token计算关联，仅支持默认值2^63-1 | INT64          | -         |
 | cmp_ratio      | 可选属性      | 用于稀疏计算，表示key的压缩倍数。数据类型支持`int32`。Atlas A3 推理系列产品支持1/2/4/8/16/32/64/128，Ascend 950PR/Ascend 950DT支持1/4/128。 | INT32          | -         |
 | return_value      |  可选属性     | 表示是否输出`sparse_values`。True表示输出，False表示不输出；仅支持默认值False | BOOL          | -         |
+| stride      |  可选属性     | 表示key的首轴的stride | INT32          | -         |
 | sparse_indices     | 输出      | 公式中的输出Out，参与稀疏attention计算的token索引值 | INT32          | ND         |
 | sparse_values           | 输出      | 公式中的Indices输出对应的value值，**目前暂不支持返回sparse_values。** | FLOAT32         | ND          |
 

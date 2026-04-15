@@ -63,6 +63,7 @@ constexpr uint32_t COFF_ATTR_INDEX = 2;
 constexpr uint32_t NORM_EPS_ATTR_INDEX = 3;
 constexpr uint32_t ROTARY_MODE_ATTR_INDEX = 4;
 constexpr uint32_t CACHE_MODE_ATTR_INDEX = 5;
+constexpr uint32_t STATE_CACHE_STRIDE_DIM0_ATTR_INDEX = 6;
 
 // OUTPUT
 constexpr uint32_t CMP_KV_OUTPUT_INDEX = 0;
@@ -267,6 +268,7 @@ struct CompressorContext {
     const float *normEps;
     const int *rotaryMode;
     const int *cacheMode;
+    const int *stride;
     TemplateId templateId;
 
     ge::DataType dtype = ge::DT_BF16; 

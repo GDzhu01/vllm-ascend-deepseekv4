@@ -23,6 +23,52 @@ class Network(torch.nn.Module):
     def __init__(self):
         super(Network, self).__init__()
 
+def create_tensor_with_stride_padding(src_tensor, pad_len):
+    device = src_tensor.device
+    dtype = src_tensor.dtype
+    shape = list(src_tensor.shape) # [65, 128, 1, 512]
+    
+    # 1. 计算 Stride
+    row_logical_size = shape[1] * shape[2] * shape[3]
+    stride_0 = row_logical_size + pad_len
+    new_strides = [stride_0, shape[2] * shape[3], shape[3], 1]
+    
+    # 2. 直接在 NPU 上分配物理存储并填充 NaN
+    # 注意：使用 torch.full 确保底层分配后立即初始化
+    physical_numel = stride_0 * shape[0]
+    storage_tensor = torch.full((physical_numel,), float('nan'), 
+                                dtype=dtype, device=device)
+    
+    # 获取原始存储引用
+    raw_storage = storage_tensor.untyped_storage()
+
+    # 3. 构造视图并绑定 Storage
+    target_tensor = torch.empty((0,), dtype=dtype, device=device)
+    target_tensor.set_(raw_storage, 0, shape, new_strides)
+
+    # 4. 核心修正：逐行拷贝 + 强制同步
+    # 在 NPU 上，连续的 copy_ 可能会被合并。通过循环并确保每一行是独立 view 拷贝。
+    for i in range(shape[0]):
+        # .narrow(0, i, 1) 或者直接 target_tensor[i]
+        # 确保 src[i] 到 target_tensor[i] 的拷贝严格遵守 stride
+        target_tensor[i].copy_(src_tensor[i])
+
+    # 5. 关键点：NPU 是异步的，打印前必须同步，否则可能看到的是内存旧值
+    torch_npu.npu.synchronize()
+
+    # --- 验证打印 ---
+    # 同样在打印前，我们需要确保拿到的 storage_tensor 反映了最新状态
+    # 逻辑结束索引 (第一行) 65536
+    gap_start = row_logical_size
+    gap_end = row_logical_size + pad_len
+    
+    print(f"--- NPU Padding Check (Pad Len: {pad_len}) ---")
+    # 打印那段物理间隙
+    print(f"NPU Physical Gap ({gap_start-2}:{gap_end+2}):\n", storage_tensor[gap_start-2:gap_end+2])
+    
+    # 如果还是没有 nan，尝试下面的“强制间隙置 nan”法
+    return target_tensor
+
 def call_npu(input_data):
     params = input_data['params']
     metadata_input = input_data['metadata_input']
@@ -62,8 +108,8 @@ def call_npu(input_data):
     ori_win_right = tensor_input['ori_win_right']
     layout_q = tensor_input['layout_q'] if type(tensor_input['layout_q']) == type('TND') else tensor_input['layout_q'][0]
     layout_kv = tensor_input['layout_kv']
-    ori_k_in_pa_shape = tensor_input['ori_kv'].npu()
-    cmp_k_in_pa_shape = tensor_input['cmp_kv'].npu() if tensor_input['cmp_kv'] is not None else None
+    ori_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['ori_kv'].npu(), 64)
+    cmp_k_in_pa_shape = create_tensor_with_stride_padding(tensor_input['cmp_kv'].npu(), 64) if tensor_input['cmp_kv'] is not None else None
     max_seqlen_q = metadata_input['max_seqlen_q']
     ori_max_s2 = metadata_input['max_seqlen_kv']
     cmp_sparse_indices = tensor_input['cmp_sparse_indices']

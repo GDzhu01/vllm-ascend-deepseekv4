@@ -544,10 +544,13 @@ __aicore__ inline int64_t SASVectorBlock<SAST>::GetKeyGmOffset(int64_t realS2Idx
     if constexpr (KV_LAYOUT_T == SAS_LAYOUT::PA_ND) {
         int64_t blkTableIdx = realS2Idx / constInfo.paCmpBlockSize;
         int64_t blkTableOffset = realS2Idx % constInfo.paCmpBlockSize;
+        // realKeyGmOffset = cmpBlockTableGm_.GetValue(runInfo.bIdx * constInfo.cmpMaxBlockNumPerBatch + blkTableIdx) *
+        //                       static_cast<int64_t>(constInfo.paCmpBlockSize) *
+        //                       static_cast<int64_t>(constInfo.kvHeadNum) +
+        //                   blkTableOffset;
         realKeyGmOffset = cmpBlockTableGm_.GetValue(runInfo.bIdx * constInfo.cmpMaxBlockNumPerBatch + blkTableIdx) *
-                              static_cast<int64_t>(constInfo.paCmpBlockSize) *
-                              static_cast<int64_t>(constInfo.kvHeadNum) +
-                          blkTableOffset;
+                          static_cast<int64_t>(constInfo.cmpKvStride) +
+                          blkTableOffset * static_cast<int64_t>(constInfo.kvHeadNum) * static_cast<int64_t>(constInfo.headDim);
 
     } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::BSND) {
         realKeyGmOffset = runInfo.bIdx * constInfo.kvSeqSize / constInfo.cmpRatio * constInfo.kvHeadNum + realS2Idx * constInfo.kvHeadNum;
@@ -573,7 +576,7 @@ __aicore__ inline void SASVectorBlock<SAST>::CopyInSingleKv(int64_t &mte2Size, i
     DataCopyPadExtParams<KV_T> padParams;
     DataCopyPad(
         kvMergUb_[mergeMte3Idx % 2 * INPUT2_BUFFER_OFFSET / sizeof(KV_T) + (mte2Size - mte3Size) * constInfo.headDim],
-        cmpKvGm_[keyBNBOffset * constInfo.headDim], intriParams, padParams);
+        cmpKvGm_[keyBNBOffset], intriParams, padParams);
     mte2Size += validS2Count;
 }
 
@@ -593,8 +596,8 @@ __aicore__ inline void SASVectorBlock<SAST>::CopyInKv(int64_t &mte2Size, int64_t
     if constexpr (KV_LAYOUT_T == SAS_LAYOUT::PA_ND) {
         int64_t blkTableSrcStride =
         ((keyOffset1 > keyOffset2 ? (keyOffset1 - keyOffset2) :
-        (keyOffset2 - keyOffset1)) - constInfo.sparseBlockSize);
-        keySrcStride = blkTableSrcStride * constInfo.headDim * sizeof(KV_T);
+        (keyOffset2 - keyOffset1)) - constInfo.sparseBlockSize * constInfo.headDim);
+        keySrcStride = blkTableSrcStride * sizeof(KV_T);
     } else if constexpr (KV_LAYOUT_T == SAS_LAYOUT::BSND) {
         keySrcStride = ((keyOffset1 > keyOffset2 ? (keyOffset1 - keyOffset2) :
                         (keyOffset2 - keyOffset1)) - constInfo.sparseBlockSize) * constInfo.headDim * sizeof(KV_T);
@@ -620,7 +623,7 @@ __aicore__ inline void SASVectorBlock<SAST>::CopyInKv(int64_t &mte2Size, int64_t
         }
         DataCopyPad(kvMergUb_[mergeMte3Idx % 2 * INPUT2_BUFFER_OFFSET / sizeof(KV_T) +
                               (mte2Size - mte3Size) * constInfo.headDim],
-                    cmpKvGm_[startGmOffset * constInfo.headDim], intriParams, padParams);
+                    cmpKvGm_[startGmOffset], intriParams, padParams);
         mte2Size += ((keyOffset1 > -1) + (keyOffset2 > -1)) * constInfo.sparseBlockSize;
     }
 }

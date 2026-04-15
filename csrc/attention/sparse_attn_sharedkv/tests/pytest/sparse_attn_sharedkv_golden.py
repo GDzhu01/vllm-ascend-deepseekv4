@@ -645,8 +645,8 @@ def gen_data(params):
     test_sas = GeneralizedSFA(layout_q, layout_kv, q_type, ori_kv_type, cmp_kv_type, B, S1, T1, N1, N2, D, K,
                               block_num1, block_num2, block_size1, block_size2, cu_seqlens_q, seqused_kv, softmax_scale,
                               cmp_ratio, ori_mask_mode, cmp_mask_mode, ori_win_left, ori_win_right)
-    # cpu_result = test_sas.forward(q, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx, cmp_k_bnsd,
-    #                               cmp_sparse_indices, seqused_q)
+    cpu_result = test_sas.forward(q, ori_k_bnsd, cu_seqlens_q, seqused_kv, sinks, template_idx, cmp_k_bnsd,
+                                  cmp_sparse_indices, seqused_q)
     input_data = {
         # 命名用变量
         'B': B,
@@ -702,7 +702,7 @@ def gen_data(params):
             'layout_q': layout_q,
             'layout_kv': layout_kv
         },
-        # 'cpu_output': cpu_result
+        'cpu_output': cpu_result
     }
     return input_data
 

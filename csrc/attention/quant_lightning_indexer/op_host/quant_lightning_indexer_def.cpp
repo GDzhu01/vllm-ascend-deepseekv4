@@ -29,7 +29,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT8})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("weights")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
@@ -44,7 +44,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("actual_seq_lengths_query")
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32})
@@ -77,6 +77,8 @@ public:
         this->Attr("next_tokens").AttrType(OPTIONAL).Int(9223372036854775807); // 9223372036854775807: 默认值，int64的最大值
         this->Attr("cmp_ratio").AttrType(OPTIONAL).Int(1);          // 1: 压缩率
         this->Attr("return_values").AttrType(OPTIONAL).Bool(false); // 是否返回sparse_values
+        this->Attr("stride").AttrType(OPTIONAL).Int(1);             // stride参数
+        this->Attr("scale_stride").AttrType(OPTIONAL).Int(1);       // scaleStride参数
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)

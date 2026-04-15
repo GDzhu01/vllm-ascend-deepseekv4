@@ -261,6 +261,7 @@ __aicore__ inline void CompressorKernelPerf<COMP>::InitTilingData() {
     constInfo.nSize =  tilingData_->baseParams.nSize;
     constInfo.vec1TailCacheSize = tilingData_->workspaceParams.vec1TailCacheSize;
     constInfo.dbWorkspaceRatio = tilingData_->workspaceParams.dbWorkspaceRatio;
+    constInfo.stride = tilingData_->baseParams.stride;
 }
 
 template <typename COMP>

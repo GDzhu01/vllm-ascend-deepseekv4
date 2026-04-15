@@ -815,7 +815,7 @@ __aicore__ inline void CompressorBlockVectorPerf<COMP>::ReadFromCacheState(
         if (copyFinishRowCnt + copyRowCount > seqCnt) {
             copyRowCount = seqCnt - copyFinishRowCnt;
         }
-        uint64_t stateOffset = idInBlockTable * constInfo_.blockSize * 2 * coff_ * constInfo_.headDim +
+        uint64_t stateOffset = idInBlockTable * constInfo_.stride +
                                 remainRowCnt * 2 * coff_ * constInfo_.headDim +
                                 stateIdx * coff_ * constInfo_.headDim + dStartIdx;
 
@@ -844,7 +844,7 @@ __aicore__ inline void CompressorBlockVectorPerf<COMP>::WriteToCacheState(
             copyRowCount = seqCnt - copyFinishRowCnt;
         }
         if (idInBlockTable != 0) { // 32
-            uint64_t stateOffset = idInBlockTable * constInfo_.blockSize * 2 * coff_ * constInfo_.headDim +
+            uint64_t stateOffset = idInBlockTable * constInfo_.stride +
                                     remainRowCnt * 2 * coff_ * constInfo_.headDim +
                                     stateIdx * coff_ * constInfo_.headDim + dStartIdx;
             DataCopyWithOutputQue(state[stateOffset], input[copyFinishRowCnt * coff_ * dDealSize], copyRowCount,

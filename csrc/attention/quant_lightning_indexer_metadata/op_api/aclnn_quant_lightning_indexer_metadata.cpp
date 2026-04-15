@@ -97,11 +97,16 @@ aclnnStatus aclnnQuantLightningIndexerMetadataGetWorkspaceSize(
   uint32_t aivCoreNum = npuInfo.GetVectorCoreNum();
   const char* socVersion = npuInfo.GetSocLongVersion().c_str();
 
+  auto actualSeqLengthsQueryOptionalContiguous = l0op::Contiguous(actualSeqLengthsQueryOptional, uniqueExecutor.get());
+  CHECK_RET(actualSeqLengthsQueryOptionalContiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+  auto actualSeqLengthsKeyOptionalContiguous = l0op::Contiguous(actualSeqLengthsKeyOptional, uniqueExecutor.get());
+  CHECK_RET(actualSeqLengthsKeyOptionalContiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+
   auto output = l0op::QuantLightningIndexerMetadata(
-                         actualSeqLengthsQueryOptional, actualSeqLengthsKeyOptional, aicCoreNum, aivCoreNum, socVersion,
-                         numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode, batchSizeOptional, maxSeqlenQOptional,  
-                         maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional, sparseCountOptional, sparseModeOptional,
-                         preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData, uniqueExecutor.get());
+    actualSeqLengthsQueryOptionalContiguous, actualSeqLengthsKeyOptionalContiguous, aicCoreNum, aivCoreNum, socVersion,
+    numHeadsQ, numHeadsK, headDim, queryQuantMode, keyQuantMode, batchSizeOptional, maxSeqlenQOptional,  
+    maxSeqlenKOptional, layoutQueryOptional, layoutKeyOptional, sparseCountOptional, sparseModeOptional,
+    preTokensOptional, nextTokensOptional, cmpRatioOptional, metaData, uniqueExecutor.get());
   CHECK_RET(output != nullptr, ACLNN_ERR_INNER_NULLPTR);
 
   *workspaceSize = 0;
