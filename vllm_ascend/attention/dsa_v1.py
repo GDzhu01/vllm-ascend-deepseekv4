@@ -272,7 +272,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
     start_pos_decode: Optional[torch.Tensor] = None
     decode_sas_metadata: Optional[torch.Tensor] = None
     decode_qli_metadata: Optional[torch.Tensor] = None
-    ratio_to_sas_metadata: Optional = None
+    prefill_ratio_to_sas_metadata: Optional[dict] = None
+    decode_ratio_to_sas_metadata: Optional[dict] = None
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
@@ -441,7 +442,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         num_reqs = common_attn_metadata.num_reqs
         query_start_loc = common_attn_metadata.query_start_loc
         num_reqs_actual = kwargs.get("num_reqs_actual", None)
-        self.ratio_to_sas_metadata = kwargs.get("ratio_to_sas_metadata", None)
+        self.prefill_ratio_to_sas_metadata = kwargs.get("prefill_ratio_to_sas_metadata", None)
+        self.decode_ratio_to_sas_metadata = kwargs.get("decode_ratio_to_sas_metadata", None)
 
         self.num_decodes, self.num_prefills, self.num_decode_tokens, self.num_prefill_tokens = \
             split_decodes_and_prefills(common_attn_metadata, decode_threshold=self.decode_threshold)
@@ -602,8 +604,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cu_c128_cmp_seqlen_list = None
 
         if self.compressor_ratio == 1:
-            if self.ratio_to_sas_metadata.get("c1") is None:
-                self.ratio_to_sas_metadata["c1"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.prefill_ratio_to_sas_metadata.get("c1") is None:
+                self.prefill_ratio_to_sas_metadata["c1"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -624,10 +626,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=False,
                     device=str(self.seqused_q.device))
-            sas_metadata = self.ratio_to_sas_metadata["c1"]
+            sas_metadata = self.prefill_ratio_to_sas_metadata["c1"]
         elif self.compressor_ratio == 4:
-            if self.ratio_to_sas_metadata.get("c4") is None:
-                self.ratio_to_sas_metadata["c4"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.prefill_ratio_to_sas_metadata.get("c4") is None:
+                self.prefill_ratio_to_sas_metadata["c4"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -651,7 +653,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=True,
                     device=str(self.seqused_q.device))
-            sas_metadata = self.ratio_to_sas_metadata["c4"]
+            sas_metadata = self.prefill_ratio_to_sas_metadata["c4"]
         else:
             if self.ratio_to_sas_metadata.get("c128") is None:
                 self.ratio_to_sas_metadata["c128"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
@@ -816,8 +818,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         assert self.decode_sas_metadata is not None
         if self.compressor_ratio == 1:
-            if self.ratio_to_sas_metadata.get("c1") is None:
-                self.ratio_to_sas_metadata["c1"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.decode_ratio_to_sas_metadata.get("c1") is None:
+                self.decode_ratio_to_sas_metadata["c1"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -839,10 +841,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=False,
                     device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.ratio_to_sas_metadata["c1"]
+            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata["c1"]
         elif self.compressor_ratio == 4:
-            if self.ratio_to_sas_metadata.get("c4") is None:
-                self.ratio_to_sas_metadata["c4"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.decode_ratio_to_sas_metadata.get("c4") is None:
+                self.decode_ratio_to_sas_metadata["c4"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -866,10 +868,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=True,
                     device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.ratio_to_sas_metadata["c4"]
+            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata["c4"]
         else:
-            if self.ratio_to_sas_metadata.get("c128") is None:
-                self.ratio_to_sas_metadata["c128"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.decode_ratio_to_sas_metadata.get("c128") is None:
+                self.decode_ratio_to_sas_metadata["c128"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -891,7 +893,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=True,
                     device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.ratio_to_sas_metadata["c128"]
+            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata["c128"]
         assert self.decode_qli_metadata is not None
         self.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=query_start_loc[1:].clone(),
