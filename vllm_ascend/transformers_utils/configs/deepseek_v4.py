@@ -221,7 +221,7 @@ class DeepseekV4Config(PretrainedConfig):
         self.o_groups=o_groups
         self.o_lora_rank=o_lora_rank
         self.window_size=window_size
-        self.compress_ratios=compress_ratios
+        self.compress_ratios=[1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4]
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
 
