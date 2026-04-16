@@ -1560,7 +1560,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.enable_kv_tnd:
             sliding_window_kv = cat_swa_to_kv(kv, kv_state[0], actual_seq_lengths_query, attn_metadata.prefill.chunked_context, block_size=128)
         else:
-            sliding_window_kv = pad_to_blocks(kv, kv_state[0], actual_seq_lengths_query[1:]-actual_seq_lengths_query[:-1], attn_metadata.prefill.chunked_context, block_size=128)
+            sliding_window_kv = None
             # 950PR: fill cache with kv_compress_epilog
             torch.ops._C_ascend.kv_compress_epilog(
                 kv_compress_cache=cache,
