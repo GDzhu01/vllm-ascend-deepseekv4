@@ -1790,7 +1790,6 @@ class AscendDSAImpl(DSAAttentionImpl):
                 tile_size=64,
                 rope_head_dim=64,
                 softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
                 ori_mask_mode=4,
                 ori_win_left=self.window_size - 1,
                 ori_win_right=0,
