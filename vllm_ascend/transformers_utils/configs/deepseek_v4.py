@@ -162,7 +162,7 @@ class DeepseekV4Config(PretrainedConfig):
         compress_ratios=[1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4],
         # yarn
 
-        compress_rope_theta=40000,
+        compress_rope_theta=160000,
         # original_seq_len=65536,
         # rope_theta=10000,
         # rope_factor=4,
