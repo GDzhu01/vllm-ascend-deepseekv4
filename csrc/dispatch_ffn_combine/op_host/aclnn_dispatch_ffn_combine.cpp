@@ -58,7 +58,7 @@ extern "C" void __attribute__((weak)) NnopbaseSetHcclServerType(void *executor, 
 aclnnStatus aclnnDispatchFFNCombineGetWorkspaceSize(const aclTensor* x, const aclTensor* weight1, const aclTensor* weight2,
                                                     const aclTensor* expertId, const aclTensor* scale1, const aclTensor* scale2,
                                                     const aclTensor* probs,
-                                                    const char* group, int64_t maxOutputSize,
+                                                    const char* group, int64_t maxOutputSize, double swigluLimit,
                                                     const aclTensor* out,
                                                     uint64_t* workspaceSize, aclOpExecutor** executor)
 {
