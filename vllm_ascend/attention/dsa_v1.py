@@ -161,6 +161,10 @@ class AscendDSABackend(AttentionBackend):
         return AscendDSAImpl
 
     @staticmethod
+    def get_supported_kernel_block_sizes() -> list[int]:
+        return [128]
+
+    @staticmethod
     def get_supported_block_size() -> list[int]:
         return [32, 64, 128, 1024]
 
