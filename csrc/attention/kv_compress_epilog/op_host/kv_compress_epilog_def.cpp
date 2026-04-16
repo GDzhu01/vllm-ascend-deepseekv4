@@ -46,7 +46,7 @@ public:
         this->Attr("quant_mode").AttrType(OPTIONAL).Int(1);
         this->Attr("round_scale").AttrType(OPTIONAL).Int(1);
 
-        this->AICore().AddConfig("ascend910_95");
+        this->AICore().AddConfig("ascend950");
     }
 };
 

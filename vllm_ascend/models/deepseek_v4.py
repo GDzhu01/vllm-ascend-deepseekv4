@@ -80,6 +80,7 @@ from vllm.model_executor.models.utils import (
 )
 
 from vllm_ascend.ops.dsa import DSAModules,AscendDeepseekSparseAttention
+from vllm_ascend.ops.mhc import hc_split_sinkhorn_ref
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.ascend_config import get_ascend_config
@@ -367,14 +368,14 @@ class DeepseekV4MoE(nn.Module):
         # See DeepseekV2DecoderLayer for more details.
         if hidden_states.dtype != torch.float16:
             if not self.is_rocm_aiter_moe_enabled:
-                if self.shared_experts is not None:
-                    assert shared_output is not None
-                    final_hidden_states = muls_add_triton(final_hidden_states, shared_output, self.routed_scaling_factor)
-                else:
-                    final_hidden_states *= self.routed_scaling_factor
+                final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = muls_add_triton(shared_output, final_hidden_states, 1.0 / self.routed_scaling_factor)
+            shared_output *= 1.0 / self.routed_scaling_factor
+
+        if self.shared_experts is not None:
+            assert shared_output is not None
+            final_hidden_states += shared_output
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
@@ -474,11 +475,11 @@ class Compressor(nn.Module):
 
         self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32))
         self.wkv = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wkv",
             return_bias=False,)
         self.wgate = ReplicatedLinear(self.dim, coff * self.head_dim, bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wgate",
             return_bias=False,)
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
@@ -566,6 +567,7 @@ class DeepseekV4Attention(nn.Module):
                 return_bias=False,
         )
         self.q_norm = RMSNorm(self.q_lora_rank, eps=config.norm_eps)
+        self.q_norm_without_weight = RMSNorm(self.head_dim, eps=config.norm_eps, has_weight=False)
         self.wq_b = ColumnParallelLinear(
             self.q_lora_rank,
             self.n_heads * self.head_dim,
@@ -636,6 +638,7 @@ class DeepseekV4Attention(nn.Module):
         dsa_modules = DSAModules(
             wq_a = self.wq_a,
             q_norm = self.q_norm,
+            q_norm_without_weight = self.q_norm_without_weight,
             wq_b = self.wq_b,
             wkv = self.wkv,
             kv_norm = self.kv_norm,
@@ -1074,6 +1077,12 @@ class AscendDeepseekV4ForCausalLM(
             spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
             if spec_layer is not None:
                 continue  # skip spec decode layers for main model
+            
+            # import re
+
+            # layer_idx = re.findall(r"\d+", name)
+            # if len(layer_idx) > 0 and int(layer_idx[0]) >= 4:
+            #     continue
 
             # TODO: 
             if not name.startswith('model'):
@@ -1085,6 +1094,13 @@ class AscendDeepseekV4ForCausalLM(
                 name = name.replace('.w2.','.down_proj.')
             if '.w3.' in name:
                 name = name.replace('.w3.','.up_proj.')
+                
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
+            
+            # TODO 需要支持MTP
+            # if ".mtp" in name:
+            #     continue
             
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.','lm_head.')

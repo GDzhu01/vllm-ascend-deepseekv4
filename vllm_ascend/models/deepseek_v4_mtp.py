@@ -25,6 +25,9 @@ from vllm.model_executor.model_loader.weight_utils import (
 )
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
+from vllm.model_executor.layers.linear import (
+    ReplicatedLinear
+)
 
 from .deepseek_v4 import (
     DeepseekV2DecoderLayer,
@@ -74,8 +77,8 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         self.config = config
         quant_config = vllm_config.quant_config
 
-        self.e_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.h_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.e_proj = ReplicatedLinear(config.hidden_size, config.hidden_size, bias=False, quant_config=quant_config, return_bias=False)
+        self.h_proj = ReplicatedLinear(config.hidden_size, config.hidden_size, bias=False, quant_config=quant_config, return_bias=False)
 
         self.enorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.hnorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -321,6 +324,9 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
                 name = name.replace(".w2.",".down_proj.")
             if ".w3." in name:
                 name = name.replace(".w3.",".up_proj.")
+                
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
 
             if ".head." in name:
                 name = name.replace(".head.", ".shared_head.head.")

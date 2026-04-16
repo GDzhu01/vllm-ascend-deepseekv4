@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -9,7 +9,7 @@
  */
 
 /*!
- * \file sparse_attn_sharedkv_scfa_kernel.h
+ * \file kv_quant_sparse_attn_sharedkv_scfa_kernel.h
  * \brief
  */
 
@@ -21,8 +21,6 @@
 #include "kv_quant_sparse_attn_sharedkv_scfa_block_vector.h"
 #include "kernel_operator.h"
 #include "../kv_quant_sparse_attn_sharedkv_metadata.h"
-
-// 线上编包
 #include "common/matmul.h"
 #include "common/FixpipeOut.h"
 #include "common/CopyInL1.h"
@@ -67,12 +65,7 @@ private:
     TPipe *pipe;
 
     const KvQuantSparseAttnSharedkvTilingData *__restrict tilingData;
-    /* 编译期常量的基本块信息 */
-    static constexpr TPosition bmm2OutPos = CubeBlockType::bmm2OutPos;
     static constexpr uint64_t SYNC_MODE = 4;
-    static constexpr uint64_t SYNC_C1_V1_FLAG[2] = {0, 1};
-    static constexpr uint64_t SYNC_V1_C2_FLAG[3] = {2, 3, 4};
-    static constexpr uint64_t SYNC_C2_V2_FLAG[2] = {5, 6};
     static constexpr uint32_t PRELOAD_NUM = 2;
     /* 核间通道 */
     BufferManager<BufferType::GM> gmBufferManager;
@@ -87,13 +80,10 @@ private:
     BuffersPolicy3buff<BufferType::L1, SyncType::CROSS_CORE_SYNC_FORWARD> l1RightBuffers;
     CVSharedParams sharedParams;
     /* GM信息 */
-    using keyGmType = typename std::conditional<TEMPLATE_MODE == SASTemplateMode::SWA_TEMPLATE_MODE, int8_t, GlobalTensor<KV_T>>::type;
-    GlobalTensor<KV_T> oriKeyGm; // kv不连续场景需要使用来获取shape
-    keyGmType cmpKeyGm; // kv不连续场景需要使用来获取shape
     GlobalTensor<uint32_t> metadataGm;
-    __gm__ int32_t *cuSeqlensQAddr;
-    __gm__ int32_t *actualSeqKvlenAddr;
-    __gm__ int32_t *actualSeqQlenAddr;
+    __gm__ int32_t *cuSeqlensQAddr = nullptr;
+    __gm__ int32_t *actualSeqKvlenAddr = nullptr;
+    __gm__ int32_t *actualSeqQlenAddr = nullptr;
     /* 核Index信息 */
     int32_t aicIdx;
 
@@ -168,11 +158,6 @@ __aicore__ inline void KvQuantSparseAttnSharedkvScfa<CubeBlockType, VecBlockType
     __gm__ uint8_t *sequsedQ, __gm__ uint8_t *sequsedKv, __gm__ uint8_t *sinks, __gm__ uint8_t *workspace,
     const KvQuantSparseAttnSharedkvTilingData *__restrict tiling, TPipe *tPipe)
 {
-    // 初始化vector用到的global buffer
-    oriKeyGm.SetGlobalBuffer((__gm__ KV_T *)(oriKV));
-    if constexpr (TEMPLATE_MODE != SASTemplateMode::SWA_TEMPLATE_MODE) {
-        cmpKeyGm.SetGlobalBuffer((__gm__ KV_T *)(cmpKV));
-    }
     if (cuSeqlensQ != nullptr) {
         cuSeqlensQAddr = (__gm__ int32_t *)cuSeqlensQ;
     }
@@ -182,11 +167,8 @@ __aicore__ inline void KvQuantSparseAttnSharedkvScfa<CubeBlockType, VecBlockType
 
     if (sequsedQ != nullptr) {
         actualSeqQlenAddr = (__gm__ int32_t *)sequsedQ;
-    } else {
-        actualSeqQlenAddr = nullptr;
     }
 
-    uint64_t singleCoreOffset = 0;
     vecBlock.InitGlobalBuffer(oriKV, cmpKV, cmpSparseIndices, oriBlockTable, cmpBlockTable, sequsedQ, sinks);
     cubeBlock.InitCubeInput(cuSeqlensQ, constInfo);
 }
@@ -263,7 +245,6 @@ __aicore__ inline void KvQuantSparseAttnSharedkvScfa<CubeBlockType, VecBlockType
     constInfo.n2GDv = constInfo.n2Size * constInfo.gDv;
     constInfo.s2BaseN2Dv = constInfo.s2BaseSize * constInfo.n2Dv;
     constInfo.n2GS1Dv = constInfo.n2Size * constInfo.gS1Dv;
-    constInfo.layoutType = sharedParams.layoutType;
 
     if constexpr (LAYOUT_T == SAS_LAYOUT::TND) {
         // (BS)ND
@@ -313,18 +294,18 @@ __aicore__ inline void KvQuantSparseAttnSharedkvScfa<CubeBlockType, VecBlockType
 template <typename CubeBlockType, typename VecBlockType>
 __aicore__ inline void KvQuantSparseAttnSharedkvScfa<CubeBlockType, VecBlockType>::ProcessMainLoop()
 {
-    uint32_t hasLoad = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_CORE_ENABLE_INDEX, false, 0));
+    uint32_t hasLoad = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_CORE_ENABLE_INDEX, false));
     if (hasLoad == 0) {
         return;
     }
 
     // 从meta data解析分核信息
-    uint32_t bN2StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_BN2_START_INDEX, false, 0));
-    uint32_t gS1StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_M_START_INDEX, false, 0));
-    uint32_t s2StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_S2_START_INDEX, false, 0));
-    uint32_t bN2EndIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_BN2_END_INDEX, false, 0));
-    uint32_t nextGs1Idx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_M_END_INDEX, false, 0));
-    uint32_t s2EndIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_S2_END_INDEX, false, 0));
+    uint32_t bN2StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_BN2_START_INDEX, false));
+    uint32_t gS1StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_M_START_INDEX, false));
+    uint32_t s2StartIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_S2_START_INDEX, false));
+    uint32_t bN2EndIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_BN2_END_INDEX, false));
+    uint32_t nextGs1Idx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_M_END_INDEX, false));
+    uint32_t s2EndIdx = metadataGm.GetValue(GetAttrAbsIndex(aicIdx, FA_S2_END_INDEX, false));
     uint32_t s2LoopLimit = 0;
 
     if (nextGs1Idx != 0) {

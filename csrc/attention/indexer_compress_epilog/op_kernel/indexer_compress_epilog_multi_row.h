@@ -1,12 +1,11 @@
 /**
- * This program is free software, you can redistribute it and/or modify it.
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING
- * BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. See LICENSE in the root of
- * the software repository for the full text of the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -47,6 +46,7 @@ public:
             tilingData->rowFactor * RoundUp<float>(tilingData->scaleCol) * sizeof(float));
         pipe->InitBuffer(indexBuf, RoundUp<int32_t>(tilingData->rowFactor) * sizeof(int32_t));
         indexLocal = indexBuf.Get<int32_t>();
+        AscendC::SetCtrlSpr<FLOAT_OVERFLOW_MODE_CTRL, FLOAT_OVERFLOW_MODE_CTRL>(0);
     }
 
     __aicore__ inline void Process()
@@ -57,14 +57,14 @@ public:
             (curBlockIdx == GetBlockNum() - 1) ? tilingData->rowLoopOfTailBlock : tilingData->rowLoopOfFormerBlock;
         int64_t tailRowFactor = (curBlockIdx == GetBlockNum() - 1) ? tilingData->tailRowFactorOfTailBlock :
                                                                      tilingData->tailRowFactorOfFormerBlock;
-        int32_t xGmBaseOffset = curBlockIdx * tilingData->rowOfFormerBlock * tilingData->d;
+        int64_t xGmBaseOffset = curBlockIdx * tilingData->rowOfFormerBlock * tilingData->d;
         for (int64_t rowOuterIdx = 0; rowOuterIdx < rowOuterLoop; rowOuterIdx++) {
             int64_t curRowFactor = (rowOuterIdx == rowOuterLoop - 1) ? tailRowFactor : tilingData->rowFactor;
             xLocal = xQue.template AllocTensor<T0>();
             validIdx = 0;
             for (int64_t rowInnerIdx = 0; rowInnerIdx < curRowFactor; rowInnerIdx++) {
-                int32_t curSlotIdx = curBlockIdx * tilingData->rowOfFormerBlock + rowOuterIdx * tilingData->rowFactor + rowInnerIdx;
-                int32_t slot = slotMappingGm.GetValue(curSlotIdx);
+                int64_t curSlotIdx = curBlockIdx * tilingData->rowOfFormerBlock + rowOuterIdx * tilingData->rowFactor + rowInnerIdx;
+                int64_t slot = slotMappingGm.GetValue(curSlotIdx);
                 if (slot == -1) {
                     continue;
                 }
@@ -93,8 +93,8 @@ public:
             indexerCompressCacheLocal = indexerCompressCacheQue.template DeQue<T1>();
             indexerCompressCacheScaleLocal = indexerCompressCacheScaleQue.template DeQue<float>();
 
-            for (int32_t curValidIdx = 0; curValidIdx < validIdx; curValidIdx++) {
-                int32_t curSlotIdx = indexLocal.GetValue(curValidIdx);
+            for (int64_t curValidIdx = 0; curValidIdx < validIdx; curValidIdx++) {
+                int64_t curSlotIdx = indexLocal.GetValue(curValidIdx);
                 CopyOut(
                     indexerCompressCacheLocal[curValidIdx * RoundUp<T1>(tilingData->d)],
                     indexerCompressCacheGm[curSlotIdx * tilingData->d], 1, tilingData->d);

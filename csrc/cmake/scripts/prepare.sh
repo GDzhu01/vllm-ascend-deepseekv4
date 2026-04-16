@@ -106,6 +106,14 @@ while [[ $# -gt 0 ]]; do
         ENABLE_OOM="$2"
         shift 2
         ;;
+    --enable_tiling_sink)
+        ENABLE_TILING_SINK="$2"
+        shift 2
+        ;;
+    --enable_aicpu)
+        ENABLE_AICPU="$2"
+        shift 2
+        ;;
     --cann_3rd_lib_path)
         CANN_3RD_LIB_PATH="$(realpath $2)"
         shift 2
@@ -164,6 +172,8 @@ function build() {
         -DCANN_3RD_LIB_PATH=${CANN_3RD_LIB_PATH} \
         -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
         -DVERSION=${VERSION} \
+        -DENABLE_TILING_SINK=${ENABLE_TILING_SINK} \
+        -DENABLE_AICPU=${ENABLE_AICPU} \
         -DENABLE_OOM=${ENABLE_OOM}
         
     make ${JOB_NUM} prepare_build

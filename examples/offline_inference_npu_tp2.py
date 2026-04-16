@@ -20,7 +20,7 @@
 # isort: skip_file
 import os
 
-os.environ["VLLM_USE_MODELSCOPE"] = "True"
+# os.environ["VLLM_USE_MODELSCOPE"] = "True"
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 from vllm import LLM, SamplingParams
@@ -28,17 +28,17 @@ from vllm import LLM, SamplingParams
 
 def main():
     prompts = [
-        "Hello, my name is",
-        "The president of the United States is",
-        "The capital of France is",
-        "The future of AI is",
+        "Who are you?"
     ]
 
     # Create a sampling params object.
-    sampling_params = SamplingParams(max_tokens=100, temperature=0.0)
+    sampling_params = SamplingParams(max_tokens=10, temperature=0.0)
     # Create an LLM.
-    llm = LLM(model="deepseek-ai/DeepSeek-V2-Lite",
-              tensor_parallel_size=2,
+    # llm = LLM(model="/home/z00828031/weights/dummy_dsv4_layer4_es12/",
+    llm = LLM(model="/home/models/hello2026-4/",
+            #   tensor_parallel_size=4,
+            #   enable_expert_parallel=True,
+              gpu_memory_utilization=0.5,
               enforce_eager=True,
               trust_remote_code=True,
               max_model_len=1024)

@@ -33,9 +33,14 @@
 #include <c10/core/Device.h>
 #include <c10/util/Exception.h>
 #include <c10/util/Logging.h>
+#include <iostream>
+
+#include <c10/core/ScalarType.h>
 
 namespace vllm_ascend {
 const int64_t INT4_NUMS_IN_INT32 = 8;
+
+#ifdef VLLM_ENABLE_ATB_AND_DIRECT_KERNELS
 void swap_blocks_impl(torch::Tensor& src, torch::Tensor& dst,
                  const torch::Tensor& block_mapping, aclrtStream stream)
 {
@@ -567,6 +572,7 @@ at::Tensor sgmv_expand(at::Tensor &x, at::Tensor &weight, at::Tensor &lora_indic
     cmd.Run();
     return y_out;
 }
+#endif
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant(
     const at::Tensor &x, const at::Tensor &weight, const at::Tensor &weight_scale, const at::Tensor &x_scale,
@@ -2010,11 +2016,189 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_npu(
     at::Tensor scale2_out = at::empty_like(scale_out);
     std::array<bool, 2>* output_mask = nullptr;
     int64_t* dst_type = nullptr;
-
     // Execute the NPU operation
     EXEC_NPU_CMD(aclnnRmsNormDynamicQuant, x, gamma, smooth_scale, smooth_scale2, beta, epsilon, output_mask, dst_type, y_out, y2_out, scale_out, scale2_out);
     
     return std::make_tuple(y_out, scale_out);
+}
+
+void indexer_compress_epilog_npu(
+    at::Tensor& indexer_compress_cache, 
+    at::Tensor& indexer_compress_cache_scale, 
+    const at::Tensor& x, 
+    const at::Tensor& slot_mapping, 
+    int64_t quant_mode=1, 
+    bool round_scale=true)
+{
+    EXEC_NPU_CMD(aclnnIndexerCompressEpilog, indexer_compress_cache, indexer_compress_cache_scale, x, slot_mapping, quant_mode, round_scale);
+    // EXEC_NPU_CMD(aclnnIndexerCompressEpilog, x, slot_mapping, indexer_compress_cache, indexer_compress_cache_scale, quant_mode, round_scale);
+}
+
+void validate_kv_compress_epilog_inputs(
+    const at::Tensor& x,
+    const at::Tensor& slot_mapping,
+    at::Tensor& kv_compress_cache)
+{
+    // Validate x is 2D
+    TORCH_CHECK(x.dim() == 2,
+        "x must be 2D tensor, but got dimensions: ", x.dim());
+
+    // Validate x dimensions are positive
+    TORCH_CHECK(x.size(0) > 0 && x.size(1) > 0,
+        "x dimensions must be positive, but got: [", x.size(0), ", ", x.size(1), "]");
+
+    // Validate slot_mapping is 1D
+    TORCH_CHECK(slot_mapping.dim() == 1,
+        "slot_mapping must be 1D tensor, but got dimensions: ", slot_mapping.dim());
+
+    // Validate slot_mapping size matches x's first dimension
+    TORCH_CHECK(slot_mapping.size(0) == x.size(0),
+        "slot_mapping size must equal x's first dimension, "
+        "but got slot_mapping_size=", slot_mapping.size(0),
+        ", x.dim(0)=", x.size(0));
+
+    // Dtype validation
+    TORCH_CHECK(x.dtype() == at::kBFloat16,
+        "x must be BF16, but got ", x.dtype());
+    TORCH_CHECK(slot_mapping.dtype() == at::kInt || slot_mapping.dtype() == at::kLong,
+        "slot_mapping must be INT32 or INT64, but got ", slot_mapping.dtype());
+    TORCH_CHECK(kv_compress_cache.dtype() == at::ScalarType::Float8_e5m2 ||
+                kv_compress_cache.dtype() == at::ScalarType::Float8_e4m3fn,
+        "kv_compress_cache must be FP8_E5M2 or FP8_E4M3, but got ", kv_compress_cache.dtype());
+}
+
+void kv_compress_epilog_npu(
+    at::Tensor& kv_compress_cache,
+    const at::Tensor& x,
+    const at::Tensor& slot_mapping,
+    int64_t quant_group_size, 
+    int64_t quant_mode, 
+    bool round_scale_flag)
+{
+    validate_kv_compress_epilog_inputs(x, slot_mapping, kv_compress_cache);
+
+    int64_t round_scale = 0;
+    if (round_scale_flag) {
+       round_scale = 1;
+    }
+
+    // 调用NPU算子
+    EXEC_NPU_CMD(aclnnKvCompressEpilog,
+                    kv_compress_cache, x, slot_mapping, quant_group_size, quant_mode, round_scale);
+
+}
+
+std::tuple<at::Tensor, at::Tensor> construct_temp_output_tensor(const at::Tensor &q, std::string layout,
+    bool return_softmax_lse)
+{
+    for (size_t i = 0; i < q.sizes().size(); i++) {
+        TORCH_CHECK(q.size(i) > 0,
+            "All values within query's shape should be greater "
+            "than 0, but shape[",
+            i,
+            "] is ",
+            q.size(i));
+    }
+    at::Tensor output = at::empty(q.sizes(), q.options().dtype(q.dtype()));
+    at::Tensor softmax_lse;
+    if (return_softmax_lse) {
+        std::vector<int64_t> lse_sizes(q.sizes().begin(), q.sizes().end());
+        lse_sizes.back() = 1;
+        softmax_lse = at::empty(lse_sizes, q.options().dtype(c10::ScalarType::Float));
+    } else {
+        softmax_lse = at::empty({0}, q.options().dtype(c10::ScalarType::Float));
+    }
+
+    return std::tuple<at::Tensor, at::Tensor>(output, softmax_lse);
+}
+
+std::tuple<at::Tensor, at::Tensor> npu_kv_quant_sparse_attn_sharedkv_npu(const at::Tensor &q, int64_t kv_quant_mode,
+    const c10::optional<at::Tensor> &ori_kv, const c10::optional<at::Tensor> &cmp_kv,
+    const c10::optional<at::Tensor> &ori_sparse_indices, const c10::optional<at::Tensor> &cmp_sparse_indices,
+    const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table, 
+    const c10::optional<at::Tensor> &cu_seqlens_q, const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv, const c10::optional<at::Tensor> &seqused_q,
+    const c10::optional<at::Tensor> &seqused_kv, const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
+    int64_t tile_size, int64_t rope_head_dim, double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, 
+    int64_t cmp_mask_mode, int64_t ori_win_left, int64_t ori_win_right, c10::string_view layout_q,
+    c10::string_view layout_kv, bool return_softmax_lse)
+{
+    std::string layout_q_str = std::string(layout_q);
+    std::string layout_kv_str = std::string(layout_kv);
+    std::tuple<at::Tensor, at::Tensor> output = construct_temp_output_tensor(q, layout_q_str, return_softmax_lse);
+    at::Tensor attn_out = std::get<0>(output);
+    at::Tensor softmax_lse = std::get<1>(output);
+
+    // convert str
+    char *layout_q_ptr = const_cast<char *>(layout_q_str.c_str());
+    char *layout_kv_ptr = const_cast<char *>(layout_kv_str.c_str());
+    // 调用aclnn接口
+    EXEC_NPU_CMD(aclnnKvQuantSparseAttnSharedkv, q, ori_kv, cmp_kv, ori_sparse_indices, cmp_sparse_indices,
+        ori_block_table, cmp_block_table, cu_seqlens_q, cu_seqlens_ori_kv, cu_seqlens_cmp_kv, seqused_q, seqused_kv,
+        sinks, metadata, kv_quant_mode, tile_size, rope_head_dim, softmax_scale, cmp_ratio, ori_mask_mode,
+        cmp_mask_mode, ori_win_left, ori_win_right, layout_q_ptr, layout_kv_ptr, return_softmax_lse, attn_out, softmax_lse);
+    return std::tuple<at::Tensor, at::Tensor>(attn_out, softmax_lse);
+}
+
+at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_npu(
+    int64_t num_heads_q,
+    int64_t num_heads_kv,
+    int64_t head_dim,
+    int64_t kv_quant_mode,
+    const c10::optional<at::Tensor> &cu_seqlens_q,
+    const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
+    const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
+    const c10::optional<at::Tensor> &seqused_q,
+    const c10::optional<at::Tensor> &seqused_kv,
+    int64_t batch_size,
+    int64_t max_seqlen_q,
+    int64_t max_seqlen_kv,
+    int64_t ori_topk,
+    int64_t cmp_topk,
+    int64_t tile_size,
+    int64_t rope_head_dim,
+    int64_t cmp_ratio,
+    int64_t ori_mask_mode,
+    int64_t cmp_mask_mode,
+    int64_t ori_win_left,
+    int64_t ori_win_right,
+    c10::string_view layout_q,
+    c10::string_view layout_kv,
+    bool has_ori_kv,
+    bool has_cmp_kv,
+    const c10::string_view device)
+{
+    constexpr int64_t OUTPUT_SIZE = 2048;
+    at::Device output_device = at::Device(std::string(device));
+    if (cu_seqlens_q.has_value()) {
+        output_device = cu_seqlens_q.value().device();
+    } else if (cu_seqlens_ori_kv.has_value()) {
+        output_device = cu_seqlens_ori_kv.value().device();
+    } else if (cu_seqlens_cmp_kv.has_value()) {
+        output_device = cu_seqlens_cmp_kv.value().device();
+    } else if (seqused_q.has_value()) {
+        output_device = seqused_q.value().device();
+    } else if (seqused_kv.has_value()) {
+        output_device = seqused_kv.value().device();
+    }
+    at::Tensor output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(output_device));
+
+    auto cu_seqlens_q_val = get_valid_tensor(cu_seqlens_q, output_device);
+    auto cu_seqlens_ori_kv_val = get_valid_tensor(cu_seqlens_ori_kv, output_device);
+    auto cu_seqlens_cmp_kv_val = get_valid_tensor(cu_seqlens_cmp_kv, output_device);
+    auto seqused_q_val = get_valid_tensor(seqused_q, output_device);
+    auto seqused_kv_val = get_valid_tensor(seqused_kv, output_device);
+
+    std::string layout_q_str = std::string(layout_q);
+    std::string layout_kv_str = std::string(layout_kv);
+    char *layout_q_ptr = const_cast<char *>(layout_q_str.c_str());
+    char *layout_kv_ptr = const_cast<char *>(layout_kv_str.c_str());
+
+    EXEC_NPU_CMD(aclnnKvQuantSparseAttnSharedkvMetadata, cu_seqlens_q_val, cu_seqlens_ori_kv_val, cu_seqlens_cmp_kv_val, 
+                    seqused_q_val, seqused_kv_val, num_heads_q, num_heads_kv, head_dim, batch_size, max_seqlen_q, max_seqlen_kv, 
+                    ori_topk, cmp_topk, kv_quant_mode, tile_size, rope_head_dim, cmp_ratio, ori_mask_mode, cmp_mask_mode, 
+                    ori_win_left, ori_win_right, layout_q_ptr, layout_kv_ptr, has_ori_kv, has_cmp_kv, output);
+    return output;
 }
 
 } // namespace vllm_ascend
@@ -2028,6 +2212,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     // Rotary embedding
     // Apply GPT-NeoX style rotary embedding to query and key.
+    #ifdef VLLM_ENABLE_ATB_AND_DIRECT_KERNELS
     ops.def(
         "rotary_embedding(Tensor positions, Tensor! query,"
         "                 Tensor! key, int head_size,"
@@ -2079,7 +2264,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     ops.def("swap_blocks(Tensor! x, Tensor! y, Tensor z) -> ()");    
     ops.impl("swap_blocks", torch::kPrivateUse1, &vllm_ascend::swap_blocks);
-
+    #endif
     ops.def(
         "grouped_matmul_swiglu_quant(Tensor x, Tensor weight, Tensor weight_scale, Tensor x_scale,"
         "                            Tensor group_list, *, Tensor? bias=None,"
@@ -2381,6 +2566,94 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         ") -> (Tensor y_out, Tensor scale_out)"
         );
 
-        // ---- ops.impl ----
-        ops.impl("npu_rms_norm_dynamic_quant", torch::kPrivateUse1, &vllm_ascend::npu_rms_norm_dynamic_quant_npu);
+    ops.impl("npu_rms_norm_dynamic_quant", torch::kPrivateUse1, &vllm_ascend::npu_rms_norm_dynamic_quant_npu);
+
+    ops.def(
+        "indexer_compress_epilog("
+            "Tensor(a!) indexer_compress_cache, "
+            "Tensor(b!) indexer_compress_cache_scale, "
+            "Tensor x, "
+            "Tensor slot_mapping, "
+            "int quant_mode=1, "
+            "bool round_scale=True"
+        ") -> ()"
+    );
+    ops.impl("indexer_compress_epilog", torch::kPrivateUse1, &vllm_ascend::indexer_compress_epilog_npu);
+
+    ops.def(
+        "kv_compress_epilog("
+            "Tensor(a!) kv_compress_cache, "
+            "Tensor x, "
+            "Tensor slot_mapping, "
+            "int quant_group_size=64, "
+            "int quant_mode=2, "
+            "bool round_scale_flag=True"
+        ") -> ()"
+    );
+    ops.impl("kv_compress_epilog", torch::kPrivateUse1, &vllm_ascend::kv_compress_epilog_npu);
+
+    ops.def(
+        "npu_kv_quant_sparse_attn_sharedkv("
+            "Tensor q, "
+            "int kv_quant_mode, "
+            "Tensor? ori_kv=None, "
+            "Tensor? cmp_kv=None, "
+            "Tensor? ori_sparse_indices=None, "
+            "Tensor? cmp_sparse_indices=None, "
+            "Tensor? ori_block_table=None, "
+            "Tensor? cmp_block_table=None, "
+            "Tensor? cu_seqlens_q=None, "
+            "Tensor? cu_seqlens_ori_kv=None, "
+            "Tensor? cu_seqlens_cmp_kv=None, "
+            "Tensor? seqused_q=None, "
+            "Tensor? seqused_kv=None, "
+            "Tensor? sinks=None, "
+            "Tensor? metadata=None, "
+            "int tile_size=0, "
+            "int rope_head_dim=0, "
+            "float softmax_scale=0, "
+            "int cmp_ratio=0, "
+            "int ori_mask_mode=4, "
+            "int cmp_mask_mode=3, "
+            "int ori_win_left=127, "
+            "int ori_win_right=0, "
+            "str layout_q='BSND', "
+            "str layout_kv='PA_ND', "
+            "bool return_softmax_lse=False"
+        ") -> (Tensor, Tensor)"
+    );
+    ops.impl("npu_kv_quant_sparse_attn_sharedkv", torch::kPrivateUse1, &vllm_ascend::npu_kv_quant_sparse_attn_sharedkv_npu);
+
+    ops.def(
+        "npu_kv_quant_sparse_attn_sharedkv_metadata("
+            "int num_heads_q, "
+            "int num_heads_kv, "
+            "int head_dim, "
+            "int kv_quant_mode, "
+            "Tensor? cu_seqlens_q=None, "
+            "Tensor? cu_seqlens_ori_kv=None, "
+            "Tensor? cu_seqlens_cmp_kv=None, "
+            "Tensor? seqused_q=None, "
+            "Tensor? seqused_kv=None, "
+            "int batch_size=0, "
+            "int max_seqlen_q=0, "
+            "int max_seqlen_kv=0, "
+            "int ori_topk=0, "
+            "int cmp_topk=0, "
+            "int tile_size=0, "
+            "int rope_head_dim=0, "
+            "int cmp_ratio=-1, "
+            "int ori_mask_mode=4, "
+            "int cmp_mask_mode=3, "
+            "int ori_win_left=127, "
+            "int ori_win_right=0, "
+            "str layout_q='BSND', "
+            "str layout_kv='PA_ND', "
+            "bool has_ori_kv=True, "
+            "bool has_cmp_kv=True, "
+            "str device='npu'"
+        ") -> Tensor"
+    );
+    ops.impl("npu_kv_quant_sparse_attn_sharedkv_metadata", torch::kPrivateUse1, &vllm_ascend::npu_kv_quant_sparse_attn_sharedkv_metadata_npu);
+
 }

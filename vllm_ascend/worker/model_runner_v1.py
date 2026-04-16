@@ -2066,6 +2066,7 @@ class NPUModelRunner(GPUModelRunner):
             # outperforms _npu_paged_attention on all cases.
             seq_lens = SEQ_LEN_WITH_MAX_PA_WORKSPACE if is_graph_capturing and using_paged_attention(
                 num_tokens, self.vllm_config) else max_query_len
+            
             self.seq_lens.np[:num_reqs] = seq_lens
             self.seq_lens.np[num_reqs:] = 0
             self.seq_lens.copy_to_gpu()
@@ -2591,8 +2592,8 @@ class NPUModelRunner(GPUModelRunner):
             for layer_name in group.layer_names:
                 layer_index = extract_layer_index(layer_name)
                 sliding_window = _get_aligned_tensor(
-                    torch.Size([block_num, block_size, head_dim]),
-                    torch.bfloat16,
+                    torch.Size([block_num, block_size, 640]),
+                    torch.float8_e4m3fn,
                     alignment,
                 )
                 if layer_index in c4_layers:
@@ -2640,8 +2641,8 @@ class NPUModelRunner(GPUModelRunner):
             layer_index = extract_layer_index(layer_name)
             assert layer_index in c1_layers, "layer_index out of range"
             sliding_window = _get_aligned_tensor(
-                torch.Size([block_num, block_size, head_dim]),
-                torch.bfloat16,
+                torch.Size([block_num, block_size, 640]),
+                torch.float8_e4m3fn,
                 alignment,
             )
             kv_states[layer_name] = (sliding_window,)
@@ -2941,7 +2942,7 @@ class NPUModelRunner(GPUModelRunner):
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.head_size)
-                        indexer_k_cache_shape = self.attn_backend.get_kv_cache_shape(
+                        indexer_k_cache_shape = self.attn_backend.get_indexer_kcache_shape(
                             num_blocks // 4, kv_cache_spec.block_size,
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.indexer_head_size)
@@ -3355,11 +3356,11 @@ class NPUModelRunner(GPUModelRunner):
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
+                            nope_dtype=torch.float8_e4m3fn,
                             rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
+                            rope_dtype=torch.bfloat16,
                             scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
+                            scale_dtype=torch.float8_e4m3fn,
                             dtype=torch.float8_e4m3fn,
                             compress_ratio=4,
                             indexer_head_size=hf_config.index_head_dim,
@@ -3389,12 +3390,12 @@ class NPUModelRunner(GPUModelRunner):
                             num_kv_heads=1,
                             head_size=hf_config.head_dim,
                             nope_dim=hf_config.head_dim - hf_config.rope_head_dim,
-                            nope_dytpe=torch.float8_e4m3fn,
+                            nope_dtype=torch.float8_e4m3fn,
                             rope_dim=hf_config.rope_head_dim,
-                            rope_dytpe=torch.bfloat16,
+                            rope_dtype=torch.bfloat16,
                             scale_dim=7,
-                            scale_dytpe=torch.float8_e4m3fn,
-                            dtype=torch.bfloat16,
+                            scale_dtype=torch.float8_e4m3fn,
+                            dtype=torch.float8_e4m3fn,
                             compress_ratio=128,
                         )
                     else:

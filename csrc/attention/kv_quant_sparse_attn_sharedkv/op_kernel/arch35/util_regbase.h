@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
  * \brief
  */
 
-#ifndef FLASH_ATTENTION_UTIL_REGBASE_H
-#define FLASH_ATTENTION_UTIL_REGBASE_H
+#ifndef KV_QUANT_SAS_UTIL_REGBASE_H
+#define KV_QUANT_SAS_UTIL_REGBASE_H
 
 #include "util.h"
 
@@ -183,7 +183,6 @@ struct RunInfo {
     /* dq 或者attentionOut的Stride */ \
     int64_t attentionOutStride; \
     uint32_t aivIdx; \
-    uint8_t layoutType; \
     uint8_t subBlockIdx;\
 
 #define INFER_CONST_INFO \
@@ -249,4 +248,4 @@ struct CVSharedParams {
 };
 }
 
-#endif // FLASH_ATTENTION_UTIL_REGBASE_H
+#endif // KV_QUANT_SAS_UTIL_REGBASE_H

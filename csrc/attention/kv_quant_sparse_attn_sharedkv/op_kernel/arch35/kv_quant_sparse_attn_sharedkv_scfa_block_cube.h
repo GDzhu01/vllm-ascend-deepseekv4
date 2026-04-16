@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -9,11 +9,11 @@
  */
 
 /*!
- * \file sparse_attn_sharedkv_scfa_block_cube.h
+ * \file kv_quant_sparse_attn_sharedkv_scfa_block_cube.h
  * \brief
  */
-#ifndef SPARSE_ATTN_SHAREDKV_SCFA_BLOCK_CUBE_H_
-#define SPARSE_ATTN_SHAREDKV_SCFA_BLOCK_CUBE_H_
+#ifndef KV_QUANT_SPARSE_ATTN_SHAREDKV_SCFA_BLOCK_CUBE_H
+#define KV_QUANT_SPARSE_ATTN_SHAREDKV_SCFA_BLOCK_CUBE_H
 #include "common/offset_calculator.h"
 #include "common/matmul.h"
 #include "common/FixpipeOut.h"
@@ -28,8 +28,15 @@ using namespace AscendC::Impl::Detail;
 using namespace regbaseutil;
 using namespace fa_base_matmul;
 namespace BaseApi {
+struct CubeCoordInfo {
+    uint32_t curBIdx;
+    uint32_t s1Coord;
+    uint32_t s2Coord;
+};
+
 template <SAS_LAYOUT LAYOUT>
-__aicore__ inline constexpr GmFormat GetQueryGmFormat() {
+__aicore__ inline constexpr GmFormat GetQueryGmFormat()
+{
     if constexpr (LAYOUT == SAS_LAYOUT::BSND) {
         return GmFormat::BSNGD;
     } else {
@@ -121,7 +128,8 @@ __aicore__ inline void SCFABlockCube<TEMPLATE_ARGS>::InitCubeInput(__gm__ uint8_
 }
 
 TEMPLATES_DEF_NO_DEFAULT
-__aicore__ inline void SCFABlockCube<TEMPLATE_ARGS>::InitLocalBuffer() {
+__aicore__ inline void SCFABlockCube<TEMPLATE_ARGS>::InitLocalBuffer()
+{
     constexpr uint32_t mm1LeftSize = s1BaseSize * dBaseSize * sizeof(Q_T);
     constexpr uint32_t mm1RightSize = dBaseSize * s2BaseSize * sizeof(Q_T);
     l1QBuffers.Init((*l1BufferManagerPtr), mm1LeftSize);
@@ -214,13 +222,13 @@ __aicore__ inline void SCFABlockCube<TEMPLATE_ARGS>::IterateBmm1SCFA(
     Buffer<BufferType::L0C> mm1ResL0C = mmL0CBuffers.Get();
     mm1ResL0C.Wait<HardEvent::FIX_M>(); // 占用
     MMParam param = {static_cast<uint32_t>(runInfo.mRealSize),     // singleM
-                        static_cast<uint32_t>(runInfo.s2RealSize),  // singleN
-                        static_cast<uint32_t>(constInfo.dSize),   // singleK
-                        0,    // isLeftTranspose
-                        1     // isRightTranspose
+                     static_cast<uint32_t>(runInfo.s2RealSize),  // singleN
+                     static_cast<uint32_t>(constInfo.dSize),   // singleK
+                     0,    // isLeftTranspose
+                     1     // isRightTranspose
                     };
     MatmulK<Q_T, Q_T, T, s1BaseSize, s2BaseSize, dBaseMatmulSize, ABLayout::MK, ABLayout::KN>(  // m,n不切，k切128
-        inputLeftBuf.GetTensor<Q_T>(), inputRightBuf.GetTensor<Q_T>(),                // mm1B直接用tensor的数据
+        inputLeftBuf.GetTensor<Q_T>(), inputRightBuf.GetTensor<Q_T>(), // mm1B直接用tensor的数据
         mmL0ABuffers, mmL0BBuffers,
         mm1ResL0C.GetTensor<T>(),
         param);
@@ -333,4 +341,4 @@ DEFINE_CUBE_BLOCK_TRAITS(SCFABlockCubeDummy);
     CUBE_BLOCK_TRAITS_TYPE_FIELDS(GEN_ARGS_TYPE) \
     CUBE_BLOCK_TRAITS_CONST_FIELDS(GEN_ARGS_CONST)
 }
-#endif // FLASH_ATTENTION_SCORE_BLOCK_CUBE_H_
+#endif // KV_QUANT_SPARSE_ATTN_SHAREDKV_SCFA_BLOCK_CUBE_H

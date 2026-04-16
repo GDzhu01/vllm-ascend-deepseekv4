@@ -330,7 +330,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
 }
 
 ge::graphStatus HcPreSinkhornTiling::CalcOpTiling() {
-    if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         return CalcRegbaseOpTiling();
     }
     return CalcMembaseOpTiling();

@@ -1,10 +1,10 @@
 /**
- * This program is free software, you can redistribute it and/or modify it.
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
@@ -38,8 +38,8 @@ int64_t RoundUp(int64_t x, int64_t y) {
 }
 
 
-constexpr int64_t INPUT_X_IDX = 0;
-constexpr int64_t INPUT_SLOT_MAPPING_IDX = 1;
+constexpr int64_t INPUT_X_IDX = 2;
+constexpr int64_t INPUT_SLOT_MAPPING_IDX = 3;
 constexpr int64_t ATTR_QUANT_MODE_INDEX = 0;
 constexpr int64_t ATTR_ROUND_SCALE_INDEX = 1;
 constexpr int64_t BLOCK_SIZE = 32;
@@ -47,6 +47,8 @@ constexpr int64_t REPEAT_SIZE = 256;
 constexpr int64_t DOUBLE_BUFFER = 2;
 // per_block量化,每128个f16需要量化出一个scale, 因此切分尾轴时，以128为factor进行切分
 constexpr int64_t PER_BLOCK_FP16 = 128;
+constexpr int64_t NORMAL_QUANT_MODE = 1;
+constexpr int64_t SINGLE_ROW = 1;
 }
 
 ge::graphStatus IndexerCompressEpilogTiling::GetPlatformInfo()
@@ -156,11 +158,15 @@ ge::graphStatus IndexerCompressEpilogTiling::CalcOpTiling()
     int64_t roundScaleData = roundScale_ ? 1 : 0;
     tilingData_.set_roundScale(roundScaleData);
 
+    // SINGLE_ROW_NORMAL_QUANT TILING_KEY : 10001
+    // SINGLE_ROW_MXFP8_QUANT TILING_KEY : 10000
+    // MULTI_ROW_NORMAL_QUANT TILING_KEY : 10011
+    // MULTI_ROW_MXFP8_QUANT TILING_KEY : 10010
     tilingKey_ = 10000;
-    if (rowFactor_ != 1) {
+    if (rowFactor_ != SINGLE_ROW) {
         tilingKey_ += 10;
     }
-    if (quantMode_ == 1) {
+    if (quantMode_ == NORMAL_QUANT_MODE) {
         tilingKey_ += 1;
     }
 

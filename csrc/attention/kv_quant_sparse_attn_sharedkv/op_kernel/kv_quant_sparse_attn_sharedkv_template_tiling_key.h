@@ -1,20 +1,20 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
- * \file sparse_attn_sharedkv_template_tiling_key.h
+ * \file kv_quant_sparse_attn_sharedkv_template_tiling_key.h
  * \brief
  */
 
-#ifndef KVQUANT_SPARSE_ATTN_SHARED_TEMPLATE_TILING_KEY_H
-#define KVQUANT_SPARSE_ATTN_SHARED_TEMPLATE_TILING_KEY_H
+#ifndef KV_QUANT_SPARSE_ATTN_SHARED_TEMPLATE_TILING_KEY_H
+#define KV_QUANT_SPARSE_ATTN_SHARED_TEMPLATE_TILING_KEY_H
 
 #include "ascendc/host_api/tiling/template_argument.h"
 
@@ -63,4 +63,4 @@ ASCENDC_TPL_SEL(
     ),
 );
 
-#endif // TEMPLATE_TILING_KEY
+#endif // KV_QUANT_SPARSE_ATTN_SHARED_TEMPLATE_TILING_KEY_H

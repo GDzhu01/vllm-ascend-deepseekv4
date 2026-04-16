@@ -87,6 +87,7 @@ private:
     __aicore__ inline void InitWorkspace(__gm__ uint8_t *workspace);
     // ================================Process functions================================
     __aicore__ inline void InitTilingData();
+    __aicore__ inline void SetBaseSize();
     __aicore__ inline uint32_t CalcSIdxOfLastTc();
     // 获取基本块数量
     __aicore__ inline void CalcCmpBlockInfo(CmpBlockInfo &cmpBlockInfo);
@@ -195,6 +196,7 @@ __aicore__ inline void CompressorKernelPerf<COMP>::Init(
     constInfo.bIdxOfLastTc = constInfo.batchSize - 1;
     constInfo.sIdxOfLastTc = CalcSIdxOfLastTc();
     // 1. 计算基本块数量
+    SetBaseSize(); // 设置基本块大小
     constInfo.tcBasicBlockNum = GetBasicBlockNum();
     // 2. 计算head_dim的切分大小, 构建ConstInfo的其他信息
     CalcSplitCoreInfo();
@@ -248,6 +250,75 @@ __aicore__ inline void CompressorKernelPerf<COMP>::InitTilingData() {
     constInfo.curMm1ResSize = tilingData_->workspaceParams.curMm1ResSize;
     constInfo.nSize =  tilingData_->baseParams.nSize;
     constInfo.vec1ResSize = tilingData_->workspaceParams.vec1ResSize;
+}
+
+template <typename COMP>
+__aicore__ inline void CompressorKernelPerf<COMP>::SetBaseSize()
+{
+    uint32_t mSize = 0;
+    uint32_t minMBaseSize = 0;
+    bool sameSeqUsed = true;
+    uint32_t firstBatchSeqUsed = tools_.GetSeqUsed(0);
+    for (uint32_t i = 0; i < constInfo.batchSize; i++) {
+        uint32_t bSeqUsed = tools_.GetSeqUsed(i);
+        uint32_t bStartPos = tools_.GetStartPos(i);
+        // 获取m大小
+        mSize += bSeqUsed;
+        // 获取是否等长
+        if (sameSeqUsed && (bSeqUsed != firstBatchSeqUsed)) {
+            sameSeqUsed = false;
+        }
+        // 获取m轴最小切分大小
+        if (minMBaseSize != constInfo.cmpRatio) {
+            uint32_t startCmpIdx = bStartPos / constInfo.cmpRatio;
+            uint32_t endCmpIdx = (bStartPos + bSeqUsed) / constInfo.cmpRatio;
+            if (startCmpIdx == endCmpIdx) {
+                if (bSeqUsed > minMBaseSize) {
+                    minMBaseSize = bSeqUsed;
+                }
+            } else if (startCmpIdx + 1 == endCmpIdx) {
+                uint32_t startCmpValidSeqCnt = constInfo.cmpRatio - (bStartPos % constInfo.cmpRatio);
+                uint32_t endCmpValidSeqCnt = (bStartPos + bSeqUsed) % constInfo.cmpRatio;
+                if (startCmpValidSeqCnt > minMBaseSize) {
+                    minMBaseSize = startCmpValidSeqCnt;
+                }
+                if (endCmpValidSeqCnt > minMBaseSize) {
+                    minMBaseSize = endCmpValidSeqCnt;
+                }
+            } else {
+                minMBaseSize = constInfo.cmpRatio;
+            }
+        }
+    }
+
+    uint32_t aiCoreNum = GetBlockNum();
+    constInfo.dBaseSize = 64;
+    uint32_t dBaseBlockNum = constInfo.headDim / constInfo.dBaseSize;
+    if (sameSeqUsed && mSize <= (constInfo.mBaseSize * (aiCoreNum / dBaseBlockNum))) {
+        if constexpr (COMP::coff == COFF::OVERLAP) {
+            if (constInfo.headDim == 128) {
+                dBaseBlockNum = 4;
+            } else if (constInfo.headDim == 512) {
+                dBaseBlockNum = 8;
+            }
+        } else {
+            if (constInfo.headDim == 128) {
+                dBaseBlockNum = 4;
+            } else if (constInfo.headDim == 512) {
+                dBaseBlockNum = 8;
+            }
+        }
+        // 核数足够时, 修改才生效
+        if (aiCoreNum >= dBaseBlockNum) {
+            constInfo.dBaseSize = constInfo.headDim / dBaseBlockNum;
+            // 开启全核
+            uint32_t coreGroupNum = aiCoreNum / dBaseBlockNum;
+            uint32_t newMBaseSize = (constInfo.batchSize + coreGroupNum - 1) / coreGroupNum * firstBatchSeqUsed;
+            if (newMBaseSize > minMBaseSize && newMBaseSize < constInfo.mBaseSize) {
+                constInfo.mBaseSize = newMBaseSize;
+            }
+        }
+    }
 }
 
 template <typename COMP>
@@ -429,14 +500,14 @@ __aicore__ inline void CompressorKernelPerf<COMP>::CalcCurCoreStartIdx(
 template <typename COMP>
 __aicore__ inline void CompressorKernelPerf<COMP>::CalcSplitCoreInfo()
 {
-    // 计算D的切分大小
-    constInfo.dBaseSize = 64; // 默认按照64切分
-    uint32_t maxEnableCoreNum = constInfo.tcBasicBlockNum * (constInfo.headDim / constInfo.dBaseSize);
-    uint32_t minEnableCoreNum = 16;
-    if (maxEnableCoreNum < minEnableCoreNum) {
-        // headDim=128时, dBaseSize=8; headDim=512时, dBaseSize=32
-        constInfo.dBaseSize = constInfo.headDim / minEnableCoreNum;
-    }
+    // // 计算D的切分大小
+    // constInfo.dBaseSize = 64; // 默认按照64切分
+    // uint32_t maxEnableCoreNum = constInfo.tcBasicBlockNum * (constInfo.headDim / constInfo.dBaseSize);
+    // uint32_t minEnableCoreNum = 16;
+    // if (maxEnableCoreNum < minEnableCoreNum) {
+    //     // headDim=128时, dBaseSize=8; headDim=512时, dBaseSize=32
+    //     constInfo.dBaseSize = constInfo.headDim / minEnableCoreNum;
+    // }
 
     // D方向的基本块数量
     constInfo.dBasicBlockNum = constInfo.headDim / constInfo.dBaseSize;

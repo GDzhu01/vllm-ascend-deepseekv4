@@ -405,7 +405,7 @@ __aicore__ inline void CompressorBlockCubePerf<COMP>::ComputeMm1(const RunInfo &
 
     // hSize为K_SIZE=512的倍数
     uint32_t hSize = constInfo_.hSize;
-    uint32_t hIdxStart = (constInfo_.aiCoreIdx % constInfo_.dBasicBlockNum) * (hSize / constInfo_.dBasicBlockNum);  // 每组核内的h循环起始不同
+    uint32_t hIdxStart = (constInfo_.aiCoreIdx % constInfo_.dBasicBlockNum) * K_L1_BASE;  // 每组核内的h循环起始不同
     for (uint32_t h = 0; h < hSize; h += K_SIZE) {
         for (uint32_t k = 0; k < K_SIZE; k += K_L1_BASE) {
             bool isFirst = (h == 0 && k == 0);

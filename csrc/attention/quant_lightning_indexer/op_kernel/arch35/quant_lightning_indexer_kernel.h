@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -100,8 +100,7 @@ protected:
     uint64_t keyScaleCoreOffset = 0ULL;
     uint64_t weightsCoreOffset = 0ULL;
     uint64_t indiceOutCoreOffset = 0ULL;
-    bool usedCoreNumFlag = false;
-    bool zeroCoreFlag = false;
+    bool isUsedCoreEqZero = false;
     // ================================Global Buffer区=================================
     GlobalTensor<Q_T> queryGm;
     GlobalTensor<K_T> keyGm;
@@ -131,15 +130,12 @@ protected:
     __aicore__ inline void InitBuffers();
     __aicore__ inline void InitActualSeqLen(__gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK);
     // ================================Split Core================================
-    __aicore__ inline void SplitCore(uint32_t curCoreIdx, uint32_t &coreNum, QLICommon::SplitCoreInfo &info);
     __aicore__ inline void SplitCoreByAICPU(uint32_t curCoreIdx, GlobalTensor<uint32_t> &metadataGm);
     __aicore__ inline uint32_t GetS2BaseBlockNumOnMask(uint32_t s1gIdx, uint32_t actS1Size, uint32_t actS2SizeOrig);
-    __aicore__ inline uint32_t GetTotalBaseBlockNum();
     // ================================Process functions================================
     __aicore__ inline void ProcessMain();
     __aicore__ inline void ProcessBaseBlock(uint32_t loop, uint64_t s2LoopIdx,
                                             QLICommon::RunInfo runInfo);
-    __aicore__ inline void ProcessDecode();
     __aicore__ inline void ProcessInvalid();
     // ================================Params Calc=====================================
     __aicore__ inline void CalcGS1LoopParams(uint32_t bN2Idx);
@@ -167,6 +163,7 @@ __aicore__ inline void QLIPreload<QLIT>::InitTilingData(const QLITilingData *__r
     constInfo.maxBlockNumPerBatch = tilingData->maxBlockNumPerBatch;
     constInfo.sparseCount = tilingData->sparseCount;
     constInfo.cmpRatio = tilingData->cmpRatio;
+    constInfo.batchSupperFlag = tilingData->batchSupperFlag;
     constInfo.outputLayout = Q_LAYOUT_T;  // 输出和输入形状一致
     if (Q_LAYOUT_T == LI_LAYOUT::TND) {
         constInfo.isAccumSeqS1 = true;
@@ -200,7 +197,7 @@ __aicore__ inline void QLIPreload<QLIT>::InitActualSeqLen(__gm__ uint8_t *actual
     if (actualSeqLengthsQ == nullptr) {
         constInfo.actualLenQDims = 0;
     } else {
-        constInfo.actualLenQDims = constInfo.batchSize;
+        constInfo.actualLenQDims = (constInfo.batchSupperFlag) ? constInfo.batchSize + 1 : constInfo.batchSize;
         actualSeqLengthsGmQ.SetGlobalBuffer((__gm__ uint32_t *)actualSeqLengthsQ, constInfo.actualLenQDims);
     }
     if (actualSeqLengthsK == nullptr) {
@@ -216,6 +213,7 @@ __aicore__ inline uint32_t QLIPreload<QLIT>::GetActualSeqLen(uint32_t bIdx, uint
                                                              GlobalTensor<uint32_t> &actualSeqLengthsGm,
                                                              uint32_t defaultSeqLen)
 {
+    bIdx = (constInfo.batchSupperFlag)? bIdx + 1 : bIdx; // 如果为B+1情况，则向后移动一位
     if (actualLenDims == 0) {
         return defaultSeqLen;
     } else if (isAccumSeq && bIdx > 0) {
@@ -265,110 +263,6 @@ __aicore__ inline uint32_t QLIPreload<QLIT>::GetS2BaseBlockNumOnMask(uint32_t s1
 }
 
 template <typename QLIT>
-__aicore__ inline uint32_t QLIPreload<QLIT>::GetTotalBaseBlockNum()
-{
-    uint32_t totalBlockNum = 0;
-    uint32_t actS1Size, actS2Size, actS2SizeOrig;
-    uint32_t s1GBaseNum, s2BaseNum;
-    for (uint32_t bIdx = 0; bIdx < constInfo.batchSize; bIdx++) {
-        GetS1S2ActualSeqLen(bIdx, actS1Size, actS2Size, actS2SizeOrig);
-        s1GBaseNum = CeilDiv(actS1Size, constInfo.s1BaseSize);
-        if (!constInfo.attenMaskFlag) {
-            s2BaseNum = constInfo.isLDOpen ? CeilDiv(actS2Size, constInfo.s2BaseSize) : (actS2Size > 0 ? 1 : 0);
-            totalBlockNum += s1GBaseNum * s2BaseNum * constInfo.kHeadNum;
-            continue;
-        }
-        for (uint32_t s1gIdx = 0; s1gIdx < s1GBaseNum; s1gIdx++) {
-            s2BaseNum = constInfo.isLDOpen ? GetS2BaseBlockNumOnMask(s1gIdx, actS1Size, actS2SizeOrig) : (actS2Size > 0 ? 1 : 0);
-            totalBlockNum += s2BaseNum * constInfo.kHeadNum;
-        }
-    }
-    return totalBlockNum;
-}
-
-// 多核版本，双闭区间。基本原则：计算每个核最少处理的块数, 剩余的部分前面的核每个核多处理一块
-template <typename QLIT>
-__aicore__ void inline QLIPreload<QLIT>::SplitCore(uint32_t curCoreIdx, uint32_t &coreNum,
-                                                   QLICommon::SplitCoreInfo &info)
-{
-    uint32_t totalBlockNum = GetTotalBaseBlockNum();
-    uint32_t minBlockPerCore = totalBlockNum / coreNum;
-    uint32_t deal1MoreBlockCoreNum = totalBlockNum % coreNum;
-    uint32_t coreIdx = 0;
-    uint32_t lastGS1RemainBlockCnt = 0;
-    uint32_t coreDealBlockCnt = coreIdx < deal1MoreBlockCoreNum ? minBlockPerCore + 1 : minBlockPerCore;
-    coreNum = minBlockPerCore == 0 ? deal1MoreBlockCoreNum : coreNum;
-
-    bool findLastCoreEnd = true;
-    uint32_t actS1Size, actS2Size, actS2SizeOrig;
-    uint32_t s1GBaseNum, s2BaseNum, s2Loop;
-    for (uint32_t bN2Idx = 0; bN2Idx < constInfo.batchSize * constInfo.kHeadNum; bN2Idx++) {
-        uint32_t bIdx = bN2Idx / constInfo.kHeadNum;
-        if (bN2Idx % constInfo.kHeadNum == 0) {
-            GetS1S2ActualSeqLen(bIdx, actS1Size, actS2Size, actS2SizeOrig);
-            s1GBaseNum = CeilDiv(actS1Size, constInfo.s1BaseSize);
-            s2BaseNum = CeilDiv(actS2Size, constInfo.s2BaseSize);
-        }
-        if constexpr (Q_LAYOUT_T == LI_LAYOUT::BSND) {
-            if (findLastCoreEnd && (s1GBaseNum == 0U || s2BaseNum == 0U)) {
-                info.bN2Start = bN2Idx;
-                info.gS1Start = 0;
-                info.s2Start = 0;
-                findLastCoreEnd = false;
-            }
-        }
-        for (uint32_t gS1Idx = 0; gS1Idx < s1GBaseNum; gS1Idx++) {
-            if (constInfo.attenMaskFlag) {
-                s2BaseNum = GetS2BaseBlockNumOnMask(gS1Idx, actS1Size, actS2SizeOrig);
-            }
-            if (findLastCoreEnd && s2BaseNum == 0U) {
-                info.bN2Start = bN2Idx;
-                info.gS1Start = gS1Idx;
-                info.s2Start = 0;
-                findLastCoreEnd = false;
-            }
-            s2Loop = constInfo.isLDOpen ? s2BaseNum : (actS2Size > 0 ? 1 : 0);
-            for (uint32_t s2Idx = 0; s2Idx < s2Loop;) {
-                if (findLastCoreEnd) {
-                    info.bN2Start = bN2Idx;
-                    info.gS1Start = gS1Idx;
-                    info.s2Start = s2Idx;
-                    findLastCoreEnd = false;
-                }
-                uint32_t s2RemainBaseNum = s2Loop - s2Idx;
-                if (lastGS1RemainBlockCnt + s2RemainBaseNum >= coreDealBlockCnt) {
-                    info.bN2End = bN2Idx;
-                    info.gS1End = gS1Idx;
-                    info.s2End = constInfo.isLDOpen ? s2Idx + coreDealBlockCnt - lastGS1RemainBlockCnt - 1 : s2BaseNum - 1;
-
-                    if (coreIdx == curCoreIdx) {
-                        // S2被切N核，那么只有第一个核需要处理LD，其他核不用
-                        if (s2Idx == 0 && info.s2End + 1 < s2BaseNum) {
-                            info.isLD = true;
-                        }
-                        // 最后一个核处理的不是最后一个Batch，表明后面的Batch为空块(S2=0), 调整终点坐标以便清理输出
-                        if (coreIdx == coreNum - 1 && info.bN2End != constInfo.batchSize - 1) {
-                            info.bN2End = constInfo.batchSize - 1;
-                            info.gS1End = 0;
-                            info.s2End = 0;
-                        }
-                        return;
-                    }
-                    coreIdx++;
-                    findLastCoreEnd = true;
-                    s2Idx = info.s2End + 1;
-                    lastGS1RemainBlockCnt = 0;
-                    coreDealBlockCnt = coreIdx < deal1MoreBlockCoreNum ? minBlockPerCore + 1 : minBlockPerCore;
-                } else {
-                    lastGS1RemainBlockCnt += s2RemainBaseNum;
-                    break;
-                }
-            }
-        }
-    }
-}
-
-template <typename QLIT>
 __aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx,  GlobalTensor<uint32_t> &metadataGm)
 {
     uint32_t liCoreEnableIndex = GetAttrAbsIndex(curCoreIdx, LI_CORE_ENABLE_INDEX);    
@@ -381,11 +275,13 @@ __aicore__ inline void QLIPreload<QLIT>::SplitCoreByAICPU(uint32_t curCoreIdx,  
 
     uint32_t liZeroCoreEnableIndex = GetAttrAbsIndex(0, LI_CORE_ENABLE_INDEX);
     if (metadataGm.GetValue(liZeroCoreEnableIndex) == 0) {
-        zeroCoreFlag = true;
+        isUsedCoreEqZero = true; 
     }
     if (metadataGm.GetValue(liCoreEnableIndex) == 0) {
-        usedCoreNumFlag = true;
-        return ;
+        splitCoreInfo.isCoreEnable = false;
+        return;
+    } else {
+        splitCoreInfo.isCoreEnable = true;
     }
 
     splitCoreInfo.bN2Start = metadataGm.GetValue(bN2StartIndex);
@@ -448,8 +344,10 @@ __aicore__ inline void QLIPreload<QLIT>::DealActSeqLenIsZero(uint32_t bIdx, uint
 {
     if ASCEND_IS_AIV {
         if (constInfo.outputLayout == LI_LAYOUT::TND) {
-            uint32_t tSize = actualSeqLengthsGmQ.GetValue(constInfo.batchSize - 1);
-            uint32_t tBase = bIdx == 0 ? 0 : actualSeqLengthsGmQ.GetValue(bIdx - 1);
+            uint32_t tSizeIdx = (constInfo.batchSupperFlag) ? constInfo.batchSize : constInfo.batchSize - 1;
+            uint32_t tBaseIdx = (constInfo.batchSupperFlag) ? bIdx : bIdx - 1;
+            uint32_t tSize = actualSeqLengthsGmQ.GetValue(tSizeIdx);
+            uint32_t tBase = bIdx == 0 ? 0 : actualSeqLengthsGmQ.GetValue(tBaseIdx);
             uint32_t s1Count = tempLoopInfo.actS1Size;
 
             for (uint32_t s1Idx = s1Start; s1Idx < s1Count; s1Idx++) {
@@ -489,37 +387,18 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
     InitTilingData(tiling);
     InitActualSeqLen(actualSeqLengthsQ, actualSeqLengthsK);
 
-    // 计算分核
-    if (metadata != nullptr) {
-        metadataGm.SetGlobalBuffer((__gm__ uint32_t *)metadata);
-        SplitCoreByAICPU(aiCoreIdx, metadataGm);
-    } else {
-        SplitCore(aiCoreIdx, usedCoreNum, splitCoreInfo);
-    }
+    // 获取分核信息
+    metadataGm.SetGlobalBuffer((__gm__ uint32_t *)metadata);
+    SplitCoreByAICPU(aiCoreIdx, metadataGm);
 
     pipe = tPipe;
-    // workspace 内存排布
-    // |scoreGm(存Score)|LDScoreGm(存LD score)|vec1ParamGm(存LD参数)
-    // |Core0_mm1ResDB0-Core0_mm1ResDB1-Core1_mm1ResDB0....Core23_mm1ResDB0-Core23_mm1ResDB1|Core0_vec1Res...
+
     uint64_t offset = 0;
-
-
     //vec 把整个s2的score存储在GM，大小为s1BaseSize * 16K * 4
     GlobalTensor<SCORE_T> scoreGm; //存放vec核写出的score
     uint64_t singleCoreScoreSize = constInfo.s1BaseSize * QLICommon::Align((uint64_t)constInfo.kSeqSize, (uint64_t)constInfo.s2BaseSize)  * sizeof(SCORE_T);
     scoreGm.SetGlobalBuffer((__gm__ SCORE_T *)(workspace + aiCoreIdx * singleCoreScoreSize));
     offset += GetBlockNum() * singleCoreScoreSize;
-
-    //vec 存储需要LD的s1对应的s2的score，大小为s1BaseSize * 16K * 4，一个核内最多有两个s1BaseSize需要LD
-    GlobalTensor<SCORE_T> LDScoreGm; //存放进行LD的s2 score
-    LDScoreGm.SetGlobalBuffer((__gm__ SCORE_T *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * QLICommon::Align((uint64_t)constInfo.kSeqSize, (uint64_t)constInfo.s2BaseSize) * sizeof(SCORE_T);
-
-    // (aic, 8, 2, 16)
-    // (aic, s1_cube, 头尾，16ele)
-    GlobalTensor<int64_t> LDParamGm;  // 存放LD参数信息
-    LDParamGm.SetGlobalBuffer((__gm__ int64_t *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * LD_PARAM_NUM * sizeof(int64_t);
 
     if ASCEND_IS_AIV {
         vectorService.InitParams(constInfo, tiling);
@@ -529,7 +408,7 @@ __aicore__ inline void QLIPreload<QLIT>::Init(__gm__ uint8_t *query, __gm__ uint
         kScaleGm.SetGlobalBuffer((__gm__ float *)keyScale);
         blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
         vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, blockTableGm);
-        vectorService.InitVecWorkspaceTensor(scoreGm, LDScoreGm, LDParamGm);
+        vectorService.InitVecWorkspaceTensor(scoreGm);
     } else {
         matmulService.InitParams(constInfo);
         queryGm.SetGlobalBuffer((__gm__ Q_T *)query);
@@ -631,7 +510,8 @@ __aicore__ inline void QLIPreload<QLIT>::CalcRunInfo(uint32_t loop, uint32_t s2L
     if (runInfo.isFirstS2InnerLoop) {
         uint64_t actualSeqQPrefixSum;
         if constexpr (Q_LAYOUT_T == LI_LAYOUT::TND) {
-            actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : actualSeqLengthsGmQ.GetValue(runInfo.bIdx - 1);
+            uint32_t actualSeqLengthsGmQIdx = (constInfo.batchSupperFlag) ? runInfo.bIdx : runInfo.bIdx - 1;
+            actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : actualSeqLengthsGmQ.GetValue(actualSeqLengthsGmQIdx);
         } else {  // BSND
             actualSeqQPrefixSum = (runInfo.bIdx <= 0) ? 0 : runInfo.bIdx * constInfo.qSeqSize;
         }
@@ -647,6 +527,7 @@ __aicore__ inline void QLIPreload<QLIT>::CalcRunInfo(uint32_t loop, uint32_t s2L
     uint64_t actualSeqKPrefixSum;
     if constexpr (K_LAYOUT_T == LI_LAYOUT::TND) { // T N2 D
         actualSeqKPrefixSum = (runInfo.bIdx <= 0) ? 0 : actualSeqLengthsGm.GetValue(runInfo.bIdx - 1);
+        actualSeqKPrefixSum = actualSeqKPrefixSum / constInfo.cmpRatio;
     } else {
         actualSeqKPrefixSum = (runInfo.bIdx <= 0) ? 0 : runInfo.bIdx * constInfo.kSeqSize;
     }
@@ -663,15 +544,13 @@ __aicore__ inline void QLIPreload<QLIT>::CalcRunInfo(uint32_t loop, uint32_t s2L
 template <typename QLIT>
 __aicore__ inline void QLIPreload<QLIT>::Process()
 {
-    if (usedCoreNum == 0 || zeroCoreFlag) {
+    if (isUsedCoreEqZero) {
         // 没有计算任务，直接清理输出
         ProcessInvalid();
         return;
     }
 
     ProcessMain();
-
-    ProcessDecode();
 }
 
 template <typename QLIT>
@@ -696,9 +575,7 @@ __aicore__ inline void QLIPreload<QLIT>::ProcessInvalid()
 template <typename QLIT>
 __aicore__ inline void QLIPreload<QLIT>::ProcessMain()
 {
-    if(usedCoreNumFlag){
-    //if (aiCoreIdx >= usedCoreNum) {
-        // 无任务核直接返回
+    if(!splitCoreInfo.isCoreEnable){
         return;
     }
 
@@ -755,17 +632,5 @@ __aicore__ inline void QLIPreload<QLIT>::ProcessBaseBlock(uint32_t loop, uint64_
     }
 }
 
-template <typename QLIT>
-__aicore__ inline void QLIPreload<QLIT>::ProcessDecode()
-{
-    if ASCEND_IS_AIV {
-        vectorService.InitLDBuffers(pipe);
-        ICachePreLoad(LD_PREFETCH_LEN);
-        SyncAll();
-        if (splitCoreInfo.isLD) {
-            vectorService.ProcessLD();
-        }
-    }
-}
 }  // namespace QLIKernel
 #endif  // quant_lightning_indexer_KERNEL_H
