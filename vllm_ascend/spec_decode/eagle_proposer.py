@@ -43,6 +43,7 @@ from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX, set_ascend_forward_context
 from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
+from vllm_ascend.attention.dsa_v1 import AscendDSAMetadataBuilder
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 from vllm_ascend.compilation.acl_graph import ACLGraphWrapper, update_full_graph_params
 from vllm_ascend.ops.triton.spec_decode.utils import prepare_inputs_padded_kernel
@@ -602,10 +603,12 @@ class SpecDecodeBaseProposer(EagleProposer):
         # FIXME(woosuk): The below two ops cause synchronization. Optimize.
         assert len(self.draft_attn_groups) > 0
         builder = self.draft_attn_groups[0].get_metadata_builder()
-        extra_attn_metadata_args = dict(
-                    prefill_ratio_to_sas_metadata=dict(),
-                    decode_ratio_to_sas_metadata=dict(),
-                    common_ratio_to_sas_metadata=dict())
+        extra_attn_metadata_args = {}
+        if isinstance(builder, AscendDSAMetadataBuilder):
+            extra_attn_metadata_args = dict(
+                        prefill_ratio_to_sas_metadata=dict(),
+                        decode_ratio_to_sas_metadata=dict(),
+                        common_ratio_to_sas_metadata=dict())
         attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model(), **extra_attn_metadata_args)
 
         if self.uses_mrope:
@@ -1117,10 +1120,12 @@ class SpecDecodeBaseProposer(EagleProposer):
             # 2.
             # Recompute the slot mapping based on the new positions and
             # rejection mask.
-            # Use the first draft attention group's kv_cache_spec for block_size
-            # (all draft layers share the same kv-cache group)
-            assert len(self.draft_attn_groups) > 0
-            block_size = self.draft_attn_groups[0].kv_cache_spec.block_size
+            # Use the draft kernel block size rather than the physical
+            # KV-cache block size. Hybrid/compressed groups can expose a
+            # larger physical block size than the slot_mapping expects.
+            block_size = self.kernel_block_size
+            if not isinstance(block_size, int):
+                block_size = 128
 
             new_slot_mapping = compute_new_slot_mapping(
                 cad=cad,
@@ -1284,10 +1289,12 @@ class SpecDecodeBaseProposer(EagleProposer):
             common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
 
         attn_metadata_builder = attn_group.get_metadata_builder()
-        extra_attn_metadata_args = dict(
-                    prefill_ratio_to_sas_metadata=dict(),
-                    decode_ratio_to_sas_metadata=dict(),
-                    common_ratio_to_sas_metadata=dict())
+        extra_attn_metadata_args = {}
+        if isinstance(attn_metadata_builder, AscendDSAMetadataBuilder):
+            extra_attn_metadata_args = dict(
+                        prefill_ratio_to_sas_metadata=dict(),
+                        decode_ratio_to_sas_metadata=dict(),
+                        common_ratio_to_sas_metadata=dict())
         attn_metadata = attn_metadata_builder.build(
             0,
             common_attn_metadata,
