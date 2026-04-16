@@ -89,6 +89,7 @@ from vllm.v1.worker.ubatch_utils import (
     maybe_create_ubatch_slices,
 )
 from vllm.v1.worker.utils import AttentionGroup
+from vllm.v1.worker.utils import select_common_block_size
 
 # yapf: enable
 from vllm_ascend.ascend_config import get_ascend_config
@@ -2969,13 +2970,10 @@ class NPUModelRunner(GPUModelRunner):
         layer_kv_cache_spec = self._get_layer_kv_cache_specs(kv_cache_config)
         for group in self._kv_cache_spec_attn_group_iterator():
             attn_backend = group.backend
-            # TODO(Angazenn): need to align with current implementation
             current_kv_cache_spec = group.kv_cache_spec
             for layer_name in group.layer_names:
                 if layer_name in self.runner_only_attn_layers:
                     continue
-
-                # current_kv_cache_spec = layer_kv_cache_spec[layer_name]
 
                 if isinstance(current_kv_cache_spec, SWAAttentionSpec) or \
                     isinstance(current_kv_cache_spec, CompressAttentionSpec):
@@ -3229,10 +3227,9 @@ class NPUModelRunner(GPUModelRunner):
                 attn_groups = self.attn_groups[kv_cache_group_id]
                 kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
                 selected_kernel_size = select_common_block_size(
-                    kv_manager_block_size, attn_groups
+                    kv_manager_block_size, [attn_group.backend for attn_group in attn_groups]
                 )
                 self.kernel_block_sizes.append([selected_kernel_size])
-                
                 # try:
                 #     attn_groups = self.attn_groups[kv_cache_group_id]
                 # except IndexError:

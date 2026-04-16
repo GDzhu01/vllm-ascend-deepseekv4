@@ -46,7 +46,6 @@ class CompressAttentionManager(FullAttentionManager):
 
         num_tokens //= self.compress_ratio
         num_tokens_main_model //= self.compress_ratio
-
         return super().get_num_blocks_to_allocate(request_id, num_tokens,
                                                   new_computed_blocks, total_computed_tokens, num_tokens_main_model)
 
