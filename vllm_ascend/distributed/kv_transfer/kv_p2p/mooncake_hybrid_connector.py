@@ -42,13 +42,14 @@ from vllm.distributed.parallel_state import (
 )
 from vllm.distributed.utils import get_pp_indices
 from vllm.logger import logger
+from vllm.utils.math_utils import cdiv
 from vllm.utils.network_utils import get_ip, make_zmq_path, make_zmq_socket
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.kv_cache_interface import (
     FullAttentionSpec,
     KVCacheConfig,
     MambaSpec,
-    UniformTypeKVCacheSpecs,
+    SlidingWindowSpec,
 )
 from vllm.v1.request import RequestStatus
 
@@ -316,6 +317,7 @@ class KVCacheRecvingThread(threading.Thread):
         side_channel_port: int,
         local_kv_caches_base_addr: list[int],
         block_len_per_addr: list[int],
+        addr_group_idx: list[int],
         mamba_ssm_size: tuple[int, int],
         is_hma_required,
         has_mamba,
@@ -339,6 +341,7 @@ class KVCacheRecvingThread(threading.Thread):
         self.kv_caches_base_addr: dict[str, dict[int, list[int]]] = SizedDict()
         self.kv_caches_base_addr[local_engine_id][local_handshake_port] = local_kv_caches_base_addr
         self.block_len_per_addr = block_len_per_addr
+        self.addr_group_idx = addr_group_idx
         self.hma_group_size = hma_group_size
         self.mamba_ssm_size = mamba_ssm_size
         self.remote_te_port: dict[str, dict[int, int]] = SizedDict()
@@ -385,8 +388,8 @@ class KVCacheRecvingThread(threading.Thread):
         self,
         request_id: str,
         remote_request_id: str,
-        local_block_ids: list[int],
-        remote_block_ids: list[int],
+        local_block_ids: BlockIds,
+        remote_block_ids: BlockIds,
         remote_engine_id: str,
         remote_host: str,
         remote_handshake_port: int,
@@ -499,7 +502,6 @@ class KVCacheRecvingThread(threading.Thread):
             return
 
         num_remote_blocks = sum(len(group_block_ids) for group_block_ids in remote_block_ids)
-        assert num_local_blocks == num_remote_blocks, "Mooncake connector does not support prefix cache with Mamba now."
         # Check if we have the remote metadata cached.
         if (
             remote_engine_id not in self.kv_caches_base_addr
@@ -520,6 +522,8 @@ class KVCacheRecvingThread(threading.Thread):
             for k, (src_layer_base_addr, dst_layer_base_addr) in enumerate(
                 zip(local_kv_caches_base_addrs, remote_kv_caches_base_addrs)
             ):
+                if self.addr_group_idx and i not in self.addr_group_idx[k]:
+                    continue
                 block_len = self.block_len_per_addr[k]
                 for remote_block_id, local_block_id in zip(grouped_remote_block_ids, grouped_local_block_ids):
                     src = src_layer_base_addr + local_block_id[0] * block_len
@@ -918,21 +922,13 @@ class MooncakeConnector(KVConnectorBase_V1, SupportsHMA):
         assert self.connector_scheduler is not None
         return self.connector_scheduler.build_connector_meta(scheduler_output)
 
-    def request_finished(
-        self,
-        request: "Request",
-        block_ids: list[int],
-    ) -> tuple[bool, dict[str, Any] | None]:
-        assert self.connector_scheduler is not None
-        return self.connector_scheduler.request_finished(request, (block_ids,))
-
     def request_finished_all_groups(
         self,
         request: "Request",
         block_ids: tuple[list[int], ...],
     ) -> tuple[bool, dict[str, Any] | None]:
         assert self.connector_scheduler is not None
-        return self.connector_scheduler.request_finished(request, block_ids)
+        return self.connector_scheduler.request_finished_all_groups(request, block_ids)
 
     ############################################################
     # Worker Side Methods
@@ -1030,6 +1026,85 @@ class MooncakeConnectorScheduler:
         # master-slave meta information for cross-nodes
         self.multi_nodes_meta_mapping: dict[str, dict[str, Any]] = {}
 
+        # hybrid model config
+        self.use_hybrid = not vllm_config.scheduler_config.disable_hybrid_kv_cache_manager and any(
+            not isinstance(g.kv_cache_spec, FullAttentionSpec) for g in kv_cache_config.kv_cache_groups
+        )
+        self.use_mamba = any(
+            isinstance(g.kv_cache_spec, MambaSpec)
+            for g in kv_cache_config.kv_cache_groups
+        )
+        sw_sizes_tokens: list[tuple[int, int]] = [
+            (g.kv_cache_spec.sliding_window, g.kv_cache_spec.block_size)
+            if isinstance(g.kv_cache_spec, SlidingWindowSpec)
+            else (0, self.block_size)
+            for g in kv_cache_config.kv_cache_groups
+        ]
+        self.num_swa_blocks = [
+            cdiv(n_tokens, block_size) + 1 if n_tokens else 0
+            for n_tokens, block_size in sw_sizes_tokens
+        ]
+
+    def get_sw_clipped_blocks(self, block_ids: BlockIds) -> BlockIds:
+        """
+        Clip the number of blocks to the sliding window size for each kv cache group
+        that employs SWA.
+        This is necessary because the KV Cache manager initially allocates blocks for
+        the entire sequence length, and successively cleans up blocks that are outside
+        the window prior to the `request_finished_all_groups` hook.
+        """
+        if len(block_ids) == 0 or not self.use_hybrid:
+            # No blocks to clip eg Full prefix cache hit or not a hybrid model.
+            return block_ids
+        # NOTE (NickLucche) This logic is currently handled at the connector level
+        # because offloading connectors might want to receive the whole sequence even
+        # for SWA groups. We will abstract this logic once the interface is more stable
+        assert len(block_ids) == len(self.num_swa_blocks), (
+            "Number of KV cache groups must match"
+        )
+        # For non-SWA groups, num_swa_blocks is 0 so we return all block_ids unchanged
+        return tuple(
+            [
+                blocks[-self.num_swa_blocks[i] :]
+                if self.num_swa_blocks[i] > 0
+                else blocks
+                for i, blocks in enumerate(block_ids)
+            ]
+        )
+
+    def _mamba_prefill_token_count(self, num_prompt_tokens: int) -> int:
+        """D-side only. Returns N-1 for Mamba models since the decoder
+        always recomputes the last token and must start from h(N-1)."""
+        if self.use_mamba and num_prompt_tokens > 1:
+            return num_prompt_tokens - 1
+        return num_prompt_tokens
+
+    def _truncate_mamba_request_for_prefill(self, request: "Request") -> None:
+        """P-side only: drop the last prompt token so the prefiller computes
+        h(N-1) instead of h(N). The decoder recomputes the last token to
+        derive h(N) correctly.
+
+        Guarded by ``_p_side_truncated`` to avoid repeated truncation if the
+        request is preempted and rescheduled."""
+        params = request.kv_transfer_params
+        if (
+            params is not None
+            # Guard against repeated truncation after preemption/reschedule.
+            and not params.get("_p_side_truncated")
+            and request.num_prompt_tokens > 1
+        ):
+            if request.prompt_token_ids is not None:
+                request.prompt_token_ids.pop()
+            elif request.prompt_embeds is not None:
+                request.prompt_embeds = request.prompt_embeds[:-1]
+            else:
+                return
+
+            request._all_token_ids.pop()
+            request.num_prompt_tokens -= 1
+            request.max_tokens = 1
+            params["_p_side_truncated"] = True
+
     def get_num_new_matched_tokens(self, request: "Request", num_computed_tokens: int) -> tuple[int, bool]:
         """
         For remote prefill, pull all prompt blocks from remote
@@ -1055,10 +1130,14 @@ class MooncakeConnectorScheduler:
 
         if params is not None and params.get("do_remote_prefill"):
             # Remote prefill: get all prompt blocks from remote.
-            assert num_computed_tokens % self.block_size == 0
-            # Note: We use the full token count as transmit data here.
-            count = max(len(request.prompt_token_ids) - num_computed_tokens, 0)
-            return count, count > 0
+            token_ids = request.prompt_token_ids or []
+            actual = self._mamba_prefill_token_count(len(token_ids))
+            count = actual - num_computed_tokens
+            if count > 0:
+                return count, True
+
+        if params is not None and params.get("do_remote_decode") and self.use_mamba:
+            self._truncate_mamba_request_for_prefill(request)
 
         # No remote prefill for this request.
         return 0, False
@@ -1114,7 +1193,7 @@ class MooncakeConnectorScheduler:
 
         return meta
 
-    def request_finished(
+    def request_finished_all_groups(
         self,
         request: "Request",
         block_ids: BlockIds,
@@ -1142,6 +1221,7 @@ class MooncakeConnectorScheduler:
         if delay_free_blocks:
             logger.info("Delaying free of %d blocks for request %s", len(computed_block_ids), request.request_id)
             self._reqs_need_send[request.request_id] = time.time()
+            computed_block_ids = self.get_sw_clipped_blocks(computed_block_ids)
 
         num_prompt_blocks = math.ceil(len(request.prompt_token_ids) / self.block_size)
 
@@ -1210,24 +1290,24 @@ class MooncakeConnectorWorker:
 
         # kv cache config
         self.kv_cache_config = kv_cache_config
-        self._is_hma_required = not vllm_config.scheduler_config.disable_hybrid_kv_cache_manager and any(
+        self.use_hybrid = not vllm_config.scheduler_config.disable_hybrid_kv_cache_manager and any(
             not isinstance(g.kv_cache_spec, FullAttentionSpec) for g in kv_cache_config.kv_cache_groups
         )
-        self._layer_specs = {
-            layer: group.kv_cache_spec for group in kv_cache_config.kv_cache_groups for layer in group.layer_names
-        }
         self.hma_group_size = len(kv_cache_config.kv_cache_groups)
 
         # Mamba metadata
         self._is_mamba_group = [isinstance(group.kv_cache_spec, MambaSpec) for group in kv_cache_config.kv_cache_groups]
         mamba_ssm_size = (0, 0)
-        self._has_mamba = any(self._is_mamba_group)
-        if self._has_mamba:
-            assert self._is_hma_required
+        self.use_mamba = any(self._is_mamba_group)
+        if self.use_mamba:
+            assert self.use_hybrid
             assert self._prefill_tp_size == self._decode_tp_size, (
                 "Mooncake connector does not support different TP size with Mamba."
             )
-            mamba_spec = next(spec for spec in self._layer_specs.values() if isinstance(spec, MambaSpec))
+            self.layer_specs = {
+                layer: group.kv_cache_spec for group in kv_cache_config.kv_cache_groups for layer in group.layer_names
+            }
+            mamba_spec = next(spec for spec in self.layer_specs.values() if isinstance(spec, MambaSpec))
             conv_nbytes, ssm_nbytes = (
                 torch.tensor([], dtype=mamba_spec.dtypes[0]).element_size(),  # type: ignore[misc]
                 torch.tensor([], dtype=mamba_spec.dtypes[1]).element_size(),  # type: ignore[misc]
@@ -1241,6 +1321,7 @@ class MooncakeConnectorWorker:
                 ssm_shape.numel() * ssm_nbytes,
             )
         self._mamba_ssm_size = mamba_ssm_size
+        self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
 
         # Handshake base port
         self.side_channel_port = (
@@ -1303,16 +1384,14 @@ class MooncakeConnectorWorker:
 
         self.num_blocks = self.kv_cache_config.num_blocks
         logger.info("num_blocks: %s", self.num_blocks)
-        self.block_len_per_addr = list[int]()
         self.kv_caches = kv_caches
-        kv_caches_base_addr = []
+        self.kv_caches_base_addr = []
+        self.block_len_per_addr: list[int] = []
+        self.addr_group_idx: list[int] = []
         ptrs = []
         lengths = []
-        if not self._is_hma_required:
+        if not self.use_hybrid:
             for layer_name, kv_cache_tuple in kv_caches.items():
-                layer_spec = self._layer_specs[layer_name]
-                if isinstance(layer_spec, UniformTypeKVCacheSpecs):
-                    layer_spec = layer_spec.kv_cache_specs[layer_name]
                 if isinstance(kv_cache_tuple, (list, tuple)) is False:
                     kv_cache_tuple = [kv_cache_tuple]
                 for single_kv_cache in kv_cache_tuple:
@@ -1322,10 +1401,10 @@ class MooncakeConnectorWorker:
                     self.block_len_per_addr.append(
                         single_kv_cache.element_size() * math.prod(block_shape) * block_size_scale
                     )
-                    kv_caches_base_addr.append(single_kv_cache.data_ptr())
+                    self.kv_caches_base_addr.append(single_kv_cache.data_ptr())
                     ptrs.append(single_kv_cache.data_ptr())
                     lengths.append(single_kv_cache.element_size() * math.prod(single_kv_cache.shape))
-        elif self._has_mamba:
+        elif self.use_mamba:
             for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
                 share_tensor_addr = []
                 for layer_name in kv_cache_tensor.shared_by:
@@ -1333,7 +1412,7 @@ class MooncakeConnectorWorker:
                     if isinstance(kv_cache_tuple, (list, tuple)) is False:
                         kv_cache_tuple = [kv_cache_tuple]
                     for single_kv_cache in kv_cache_tuple:
-                        if single_kv_cache.data_ptr() in kv_caches_base_addr:
+                        if single_kv_cache.data_ptr() in self.kv_caches_base_addr:
                             continue
                         tensor_num_blocks = single_kv_cache.shape[0]
                         block_size_scale = tensor_num_blocks // self.num_blocks
@@ -1341,11 +1420,45 @@ class MooncakeConnectorWorker:
                         self.block_len_per_addr.append(
                             single_kv_cache.element_size() * math.prod(block_shape) * block_size_scale
                         )
-                        kv_caches_base_addr.append(single_kv_cache.data_ptr())
+                        self.kv_caches_base_addr.append(single_kv_cache.data_ptr())
                         share_tensor_addr.append(single_kv_cache.data_ptr())
                 if share_tensor_addr:
                     ptrs.append(min(share_tensor_addr))
                     lengths.append(kv_cache_tensor.size)
+        elif self.use_compress:
+            for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
+                share_tensor_addr = []
+                share_tensor_len = []
+                layer_group_idx = defaultdict(list)
+                cur_tensor_group_idx = []
+                for i, group in enumerate(self.kv_cache_config.kv_cache_groups):
+                    for layer_name in group.layer_names:
+                        layer_group_idx[layer_name].append(i)
+                for layer_name in kv_cache_tensor.shared_by:
+                    cur_tensor_group_idx.extend(layer_group_idx[layer_name])
+                    kv_cache_tuple = kv_caches[layer_name]
+                    # tensor_total_addrs = []
+                    # TODO: A5 check stride addr
+                    # for single_tensor in kv_cache_tuple:
+                    #     tensor_addr = single_tensor.data_ptr()
+                    #     if tensor_addr in share_tensor_addr:
+                    #         continue
+                    #     tensor_total_addrs.append(tensor_addr)
+                    for single_tensor in kv_cache_tuple:
+                        tensor_addr = single_tensor.data_ptr()
+                        if tensor_addr in share_tensor_addr:
+                            continue
+                        share_tensor_addr.append(tensor_addr)
+                        tensor_total_size = single_tensor.numel() * single_tensor.element_size()
+                        assert tensor_total_size % self.num_blocks == 0, "Tensor size cannot divide by num_blocks. "
+                        tensor_block_len = tensor_total_size // self.num_blocks
+                        share_tensor_len.append(tensor_block_len)
+                cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
+                self.kv_caches_base_addr.extend(share_tensor_addr)
+                self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
+                self.block_len_per_addr.extend(share_tensor_len)
+                ptrs.append(min(share_tensor_addr))
+                lengths.append(kv_cache_tensor.size)
         else:
             raise TypeError("Mooncake connector does not support this type kv_cache now.")
 
@@ -1355,7 +1468,7 @@ class MooncakeConnectorWorker:
             engine_id=self.engine_id,
             te_rpc_port=self.te_rpc_port,
             block_size=self.block_size,
-            kv_caches_base_addr=kv_caches_base_addr,
+            kv_caches_base_addr=self.kv_caches_base_addr,
             num_blocks=self.num_blocks,
             block_lens=self.block_len_per_addr,
             ssm_sizes=self._mamba_ssm_size,
@@ -1386,11 +1499,12 @@ class MooncakeConnectorWorker:
                 self.engine_id,
                 self.handshake_port,
                 self.side_channel_port,
-                kv_caches_base_addr,
+                self.kv_caches_base_addr,
                 self.block_len_per_addr,
+                self.addr_group_idx,
                 self._mamba_ssm_size,
-                self._is_hma_required,
-                self._has_mamba,
+                self.use_hybrid,
+                self.use_mamba,
                 self.hma_group_size,
                 ready_event,
                 self.vllm_config,
@@ -1446,7 +1560,7 @@ class MooncakeConnectorWorker:
             tp_num_need_pulls = self._get_tp_num_need_pulls(prefill_tp_size)
             remote_req_id = meta.remote_request_id
 
-            if self._has_mamba:
+            if self.use_mamba:
                 assert self.kv_recv_thread is not None
                 chosen_rank_list = self._get_remote_rank(remote_req_id, prefill_tp_size)
                 remote_handshake_port_list = [[x + meta.remote_port] for x in chosen_rank_list]
@@ -1508,7 +1622,7 @@ class MooncakeConnectorWorker:
                     self.kv_send_thread.add_not_transfer_request(req_id)
 
     def _get_tp_num_need_pulls(self, prefill_tp_size: int) -> int:
-        if self._has_mamba:
+        if self.use_mamba:
             assert prefill_tp_size == self.tp_size, "Mooncake connector does not support different TP size with Mamba."
             return prefill_tp_size
         if prefill_tp_size is None:
