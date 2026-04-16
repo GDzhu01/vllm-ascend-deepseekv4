@@ -6,6 +6,7 @@ from vllm.config.cache import CacheDType
 from vllm.v1.attention.backend import AttentionBackend, AttentionType
 from vllm.v1.attention.selector import _cached_get_attn_backend
 
+
 class AttentionSelectorConfig(NamedTuple):
     head_size: int
     dtype: torch.dtype
@@ -16,6 +17,7 @@ class AttentionSelectorConfig(NamedTuple):
     use_compress: bool = False
     use_sparse: bool = False
     use_mm_prefix: bool = False
+    use_per_head_quant_scales: bool = False
     attn_type: str = AttentionType.DECODER
 
     def __repr__(self):
@@ -28,6 +30,7 @@ class AttentionSelectorConfig(NamedTuple):
                 f"use_compress={self.use_compress}, "
                 f"use_sparse={self.use_sparse}, "
                 f"use_mm_prefix={self.use_mm_prefix}, "
+                f"use_per_head_quant_scales={self.use_per_head_quant_scales}, "
                 f"attn_type={self.attn_type})")
 
 
@@ -35,13 +38,15 @@ def get_attn_backend(
     head_size: int,
     dtype: torch.dtype,
     kv_cache_dtype: str | None,
-    block_size: int | None,
+    block_size: int | None = None,
     use_mla: bool = False,
     has_sink: bool = False,
     use_compress: bool = False,
     use_sparse: bool = False,
     use_mm_prefix: bool = False,
+    use_per_head_quant_scales: bool = False,
     attn_type: str | None = None,
+    num_heads: int | None = None,
 ) -> type[AttentionBackend]:
     """Selects which attention backend to use and lazily imports it."""
 
@@ -55,6 +60,9 @@ def get_attn_backend(
 
     vllm_config = get_current_vllm_config()
     backend_enum = vllm_config.attention_config.backend
+    cache_config = vllm_config.cache_config
+    if block_size is None and cache_config is not None and cache_config.user_specified_block_size:
+        block_size = cache_config.block_size
 
     attn_selector_config = AttentionSelectorConfig(
         head_size=head_size,
@@ -66,12 +74,14 @@ def get_attn_backend(
         use_compress=use_compress,
         use_sparse=use_sparse,
         use_mm_prefix=use_mm_prefix,
+        use_per_head_quant_scales=use_per_head_quant_scales,
         attn_type=attn_type or AttentionType.DECODER,
     )
 
     return _cached_get_attn_backend(
         backend=backend_enum,
         attn_selector_config=attn_selector_config,
+        num_heads=num_heads,
     )
 
 

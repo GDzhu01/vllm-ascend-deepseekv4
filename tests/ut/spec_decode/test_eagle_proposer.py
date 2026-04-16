@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import unittest
 
@@ -486,3 +488,148 @@ class TestEagleProposerHelperMethods(TestBase):
         ):
             return_attn, indices = self.proposer.prepare_inputs(mock_attn, num_rejected)
             self.assertEqual(indices.tolist(), [1, 2, 4])
+
+    def test_set_inputs_first_pass_uses_kernel_block_size(self):
+        metadata_builder = MagicMock()
+        metadata_builder.kv_cache_spec.block_size = 32
+        draft_attn_group = MagicMock()
+        draft_attn_group.get_metadata_builder.return_value = metadata_builder
+        draft_attn_group.kv_cache_spec.block_size = 128
+        self.proposer.draft_attn_groups = [draft_attn_group]
+        self.proposer.kernel_block_size = 128
+        self.proposer.needs_extra_input_slots = True
+        self.proposer.pass_hidden_states_to_model = False
+        self.proposer.parallel_drafting_token_id = 0
+        self.proposer.extra_slots_per_request = 1
+        self.proposer.net_num_new_slots_per_request = 1
+
+        cad = MagicMock()
+        cad.query_start_loc = torch.tensor([0, 1, 2], dtype=torch.int32)
+        cad.batch_size.return_value = 2
+
+        target_token_ids = torch.tensor([11, 12], dtype=torch.int32)
+        next_token_ids = torch.tensor([21, 22], dtype=torch.int32)
+        target_positions = torch.tensor([0, 1], dtype=torch.int32)
+        target_hidden_states = torch.zeros((2, self.proposer.hidden_size), dtype=self.vllm_config.model_config.dtype)
+
+        total_num_output_tokens = target_token_ids.shape[0] + cad.batch_size() * self.proposer.net_num_new_slots_per_request
+        copy_and_expand_outputs = (
+            torch.zeros(total_num_output_tokens, dtype=torch.int32),
+            torch.arange(total_num_output_tokens, dtype=torch.int32),
+            torch.zeros(total_num_output_tokens, dtype=torch.bool),
+            torch.zeros(total_num_output_tokens, dtype=torch.bool),
+            torch.tensor([0, 2], dtype=torch.int32),
+            torch.zeros(target_token_ids.shape[0], dtype=torch.int64),
+        )
+
+        with (
+            patch.object(
+                torch.ops._C_ascend,
+                "npu_copy_and_expand_eagle_inputs",
+                create=True,
+                return_value=copy_and_expand_outputs,
+            ),
+            patch(
+                "vllm_ascend.spec_decode.eagle_proposer.compute_new_slot_mapping",
+                return_value=torch.zeros(total_num_output_tokens, dtype=torch.int32),
+            ) as mock_compute_new_slot_mapping,
+            patch(
+                "vllm_ascend.spec_decode.eagle_proposer.extend_all_queries_by_N",
+                return_value=MagicMock(),
+            ),
+        ):
+            self.proposer.set_inputs_first_pass(
+                target_token_ids=target_token_ids,
+                next_token_ids=next_token_ids,
+                target_positions=target_positions,
+                target_hidden_states=target_hidden_states,
+                token_indices_to_sample=None,
+                cad=cad,
+                num_rejected_tokens_gpu=None,
+            )
+
+        self.assertEqual(mock_compute_new_slot_mapping.call_args.kwargs["block_size"], 128)
+
+    def test_propose_omits_dsa_kwargs_for_non_dsa_builder(self):
+        builder = MagicMock()
+        builder.build.return_value = SimpleNamespace(num_prefills=0)
+        draft_attn_group = MagicMock()
+        draft_attn_group.get_metadata_builder.return_value = builder
+        self.proposer.draft_attn_groups = [draft_attn_group]
+        self.proposer.attn_layer_names = ["layer0"]
+        self.proposer.num_speculative_tokens = 1
+        self.proposer.use_cuda_graph = False
+        self.proposer.supports_mm_inputs = False
+        self.proposer.parallel_drafting = False
+        self.proposer.positions = torch.zeros(4, dtype=torch.int32)
+        self.proposer.slot_mapping_group = [torch.full((4,), -1, dtype=torch.int32)]
+        self.proposer.token_indices_to_sample = torch.zeros(4, dtype=torch.int32)
+        self.proposer._runnable = MagicMock(return_value=torch.zeros((1, 1), dtype=torch.int64))
+        self.runner.get_model.return_value = MagicMock()
+        self.runner._sync_metadata_across_dp.return_value = (1, 1, None)
+        self.runner.input_batch.lora_id_to_lora_request = {}
+
+        common_attn_metadata = SimpleNamespace(
+            batch_size=lambda: 1,
+            slot_mapping=torch.tensor([0], dtype=torch.int32),
+            block_table_tensor=torch.zeros((1, 1), dtype=torch.int32),
+            num_reqs=1,
+        )
+
+        with (
+            patch.object(
+                self.proposer,
+                "set_inputs_first_pass",
+                return_value=(1, torch.tensor([0], dtype=torch.int32), common_attn_metadata, None),
+            ),
+            patch("vllm_ascend.spec_decode.eagle_proposer.set_ascend_forward_context", return_value=nullcontext()),
+            patch(
+                "vllm_ascend.spec_decode.eagle_proposer.get_forward_context",
+                return_value=SimpleNamespace(cudagraph_runtime_mode=CUDAGraphMode.NONE, moe_layer_index=0),
+            ),
+        ):
+            self.proposer._propose(
+                target_token_ids=torch.tensor([11], dtype=torch.int32),
+                target_positions=torch.tensor([0], dtype=torch.int32),
+                target_hidden_states=torch.zeros((1, self.proposer.hidden_size), dtype=self.vllm_config.model_config.dtype),
+                next_token_ids=torch.tensor([21], dtype=torch.int32),
+                token_indices_to_sample=torch.tensor([0], dtype=torch.int32),
+                common_attn_metadata=common_attn_metadata,
+                target_model_batch_desc=SimpleNamespace(uniform=False),
+                sampling_metadata=MagicMock(),
+            )
+
+        self.assertEqual(builder.build.call_args.kwargs, {})
+
+    def test_attn_update_stack_num_spec_norm_omits_dsa_kwargs_for_non_dsa_builder(self):
+        builder = MagicMock()
+        builder.build.return_value = SimpleNamespace(decode=None)
+        attn_group = MagicMock()
+        attn_group.get_metadata_builder.return_value = builder
+        self.proposer.kernel_block_size = 128
+        self.proposer.slot_mapping_group = [
+            torch.full((4,), -1, dtype=torch.int32),
+            torch.full((4,), -1, dtype=torch.int32),
+        ]
+        self.runner.get_model.return_value = MagicMock()
+
+        old_common_attn_metadata = SimpleNamespace(
+            block_table_tensor=torch.zeros((1, 1), dtype=torch.int32),
+            seq_lens=torch.tensor([1], dtype=torch.int32),
+            seq_lens_cpu=torch.tensor([1], dtype=torch.int32),
+            num_computed_tokens_cpu=torch.tensor([0], dtype=torch.int32),
+            positions=torch.tensor([0], dtype=torch.int32),
+        )
+
+        self.proposer.attn_update_stack_num_spec_norm(
+            draft_step=1,
+            old_attn_metadata=MagicMock(),
+            old_common_metadata=old_common_attn_metadata,
+            batch_size=1,
+            input_batch_size=1,
+            used_update_positions=torch.tensor([0], dtype=torch.int32),
+            aclgraph_runtime_mode=CUDAGraphMode.NONE,
+            attn_group=attn_group,
+        )
+
+        self.assertEqual(builder.build.call_args.kwargs, {})
