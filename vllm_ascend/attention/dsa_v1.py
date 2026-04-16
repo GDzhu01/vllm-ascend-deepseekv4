@@ -287,6 +287,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         metadata_cls: type[AscendDSAMetadata] | None = None,
         supports_dcp_with_varlen: bool = False,
     ):
+        self.kv_cache_spec = kv_cache_spec
         self.metadata_cls = (metadata_cls if metadata_cls is not None else
                              AscendDSAMetadata)
         self.vllm_config = vllm_config
@@ -1097,6 +1098,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         if attn_metadata is None:
             # Profiling run.
             return output.fill_(0)
+        if not isinstance(attn_metadata, list):
+            attn_metadata = [attn_metadata]
         output_padded = output
         # Process for Flash Comm V1
         hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(

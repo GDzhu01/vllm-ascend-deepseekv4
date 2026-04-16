@@ -93,6 +93,7 @@ class SpecDecodeBaseProposer(EagleProposer):
         super().__init__(vllm_config, device, runner)
 
         self.use_async_scheduling = self.vllm_config.scheduler_config.async_scheduling
+        self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
         self.pass_hidden_states_to_model = pass_hidden_states_to_model
         self.decode_threshold = 1 + self.num_speculative_tokens
         self.query_start_loc = self.runner._make_buffer(self.runner.max_num_reqs + 2, dtype=torch.int32)
@@ -139,6 +140,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 self.use_cuda_graph
                 and not self.use_async_scheduling
                 and not self.speculative_config.disable_padded_drafter_batch
+                and not self.use_compress
             )
 
         # TODO: Remove it when the bug of fx-graph is solved
@@ -156,6 +158,11 @@ class SpecDecodeBaseProposer(EagleProposer):
         ]
 
         self._runnable = self._run_merged_draft
+        self.query_lens = torch.ones(
+            self.vllm_config.scheduler_config.max_num_seqs,
+            dtype=torch.int32,
+            device=self.device,
+        )
         self.is_multimodal_model = self.vllm_config.model_config.is_multimodal_model
         if self.uses_mrope:
             self.mrope_positions = torch.zeros((3, self.max_num_tokens + 1), dtype=torch.int32, device=device)
@@ -292,8 +299,12 @@ class SpecDecodeBaseProposer(EagleProposer):
                     )
             else:
                 # MTP model
-                share_embeddings = True
-                logger.info("Detected MTP model. Sharing target model embedding weights with the draft model.")
+                share_embeddings = not self.use_compress
+                if share_embeddings:
+                    logger.info(
+                        "Detected MTP model. "
+                        "Sharing target model embedding weights with the draft model."
+                    )
 
             if share_embeddings:
                 if hasattr(self.model.model, "embed_tokens"):
@@ -591,7 +602,7 @@ class SpecDecodeBaseProposer(EagleProposer):
         # FIXME(woosuk): The below two ops cause synchronization. Optimize.
         assert len(self.draft_attn_groups) > 0
         builder = self.draft_attn_groups[0].get_metadata_builder()
-        attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model())
+        attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model(), ratio_to_sas_metadata=dict())
 
         if self.uses_mrope:
             used_update_positions = self.mrope_positions[:, token_indices_to_sample]
@@ -1244,6 +1255,8 @@ class SpecDecodeBaseProposer(EagleProposer):
             # However, in vllm-ascend, the above value can be multiple of `kernel_block_size`,
             # which is not correct for computing `slot_mapping` below.
             block_size = self.kernel_block_size
+            if not isinstance(block_size, int):
+                block_size = 128
 
             # Compute the slot mapping.
             if self.uses_mrope:
@@ -1268,9 +1281,11 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         attn_metadata_builder = attn_group.get_metadata_builder()
 
-        attn_metadata = attn_metadata_builder.build_for_drafting(
-            common_attn_metadata=common_attn_metadata,
-            draft_index=draft_step,
+        attn_metadata = attn_metadata_builder.build(
+            0,
+            common_attn_metadata,
+            self.runner.get_model(),
+            ratio_to_sas_metadata=dict(),
         )
 
         if self.pcp_size * self.dcp_size > 1:
@@ -1443,6 +1458,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
+            positions_cpu=common_attn_metadata.positions_cpu[token_indices],
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,
@@ -1521,6 +1537,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
             positions=common_attn_metadata.positions,
+            positions_cpu=common_attn_metadata.positions_cpu,
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             num_computed_tokens_cpu=common_attn_metadata.num_computed_tokens_cpu,
