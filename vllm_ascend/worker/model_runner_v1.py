@@ -2208,7 +2208,8 @@ class NPUModelRunner(GPUModelRunner):
             attn_gid: int,
             common_attn_metadata: CommonAttentionMetadata,
             num_reqs_actual: int,
-            ratio_to_sas_metadata: dict,
+            prefill_ratio_to_sas_metadata: dict,
+            decode_ratio_to_sas_metadata: dict,
             ubid: int | None = None,
         ) -> None:
             attn_group = self.attn_groups[kv_cache_gid][attn_gid]
@@ -2232,13 +2233,15 @@ class NPUModelRunner(GPUModelRunner):
                 if for_cudagraph_capture:
                     extra_attn_metadata_args = dict(
                         compress_ratio=compress_ratio,
-                        ratio_to_sas_metadata=dict())
+                        prefill_ratio_to_sas_metadata=dict(),
+                        decode_ratio_to_sas_metadata=dict())
                 else:
                     # TODO(zxr)
                     extra_attn_metadata_args = dict(
                         compress_ratio=compress_ratio,
                         num_reqs_actual=num_reqs_actual,
-                        ratio_to_sas_metadata=ratio_to_sas_metadata,)
+                        prefill_ratio_to_sas_metadata=prefill_ratio_to_sas_metadata,
+                        decode_ratio_to_sas_metadata=decode_ratio_to_sas_metadata)
 
             if for_cudagraph_capture and not isinstance(builder, AscendDSAMetadataBuilder):
                 attn_metadata_i = builder.build_for_cudagraph_capture(common_attn_metadata)
@@ -2254,7 +2257,8 @@ class NPUModelRunner(GPUModelRunner):
                     and isinstance(builder, GDNAttentionMetadataBuilder) and attn_metadata_i.num_prefills == 0:
                     if attn_metadata_i.num_decodes == 0 and attn_metadata_i.num_spec_decodes > 0:
                         attn_metadata_i.spec_state_indices_tensor[attn_metadata_i.num_spec_decodes:].fill_(0)
-            ratio_to_sas_metadata = builder.ratio_to_sas_metadata
+            prefill_ratio_to_sas_metadata = builder.prefill_ratio_to_sas_metadata
+            decode_ratio_to_sas_metadata = builder.decode_ratio_to_sas_metadata
 
             if ubid is None:
                 assert isinstance(attn_metadata, dict)
@@ -2268,7 +2272,8 @@ class NPUModelRunner(GPUModelRunner):
 
         # Prepare the attention metadata for each KV cache group and make layers
         # in the same group share the same metadata.
-        ratio_to_sas_metadata = dict()
+        prefill_ratio_to_sas_metadata = dict()
+        decode_ratio_to_sas_metadata = dict()
         spec_decode_common_attn_metadata = None
         for kv_cache_gid, kv_cache_group in enumerate(self.kv_cache_config.kv_cache_groups):
             cm = copy(cm_base)  # shallow copy
@@ -2301,7 +2306,7 @@ class NPUModelRunner(GPUModelRunner):
                     spec_decode_common_attn_metadata = cm
 
             for attn_gid in range(len(self.attn_groups[kv_cache_gid])):
-                _build_attn_group_metadata(kv_cache_gid, attn_gid, cm, num_reqs_actual, ratio_to_sas_metadata)
+                _build_attn_group_metadata(kv_cache_gid, attn_gid, cm, num_reqs_actual, prefill_ratio_to_sas_metadata, decode_ratio_to_sas_metadata)
         if self.is_mm_prefix_lm:
             req_doc_ranges = {}
             for req_id in self.input_batch.req_ids:
