@@ -2202,18 +2202,16 @@ class NPUModelRunner(GPUModelRunner):
             # check
             if isinstance(builder, AscendDSAMetadataBuilder):
                 compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
-                if for_cudagraph_capture:
-                    extra_attn_metadata_args = dict(
-                        compress_ratio=compress_ratio,
-                        prefill_ratio_to_sas_metadata=dict(),
-                        decode_ratio_to_sas_metadata=dict())
-                else:
-                    # TODO(zxr)
-                    extra_attn_metadata_args = dict(
-                        compress_ratio=compress_ratio,
-                        num_reqs_actual=num_reqs_actual,
-                        prefill_ratio_to_sas_metadata=prefill_ratio_to_sas_metadata,
-                        decode_ratio_to_sas_metadata=decode_ratio_to_sas_metadata)
+                if prefill_ratio_to_sas_metadata is None:
+                    prefill_ratio_to_sas_metadata = dict()
+                if decode_ratio_to_sas_metadata is None:
+                    decode_ratio_to_sas_metadata = dict()
+                # TODO(zxr)
+                extra_attn_metadata_args = dict(
+                    compress_ratio=compress_ratio,
+                    num_reqs_actual=num_reqs_actual,
+                    prefill_ratio_to_sas_metadata=prefill_ratio_to_sas_metadata,
+                    decode_ratio_to_sas_metadata=decode_ratio_to_sas_metadata)
 
             if for_cudagraph_capture and not isinstance(builder, AscendDSAMetadataBuilder):
                 attn_metadata_i = builder.build_for_cudagraph_capture(common_attn_metadata)
