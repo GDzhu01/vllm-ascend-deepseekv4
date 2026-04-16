@@ -516,6 +516,8 @@ class KVCacheRecvingThread(threading.Thread):
         req_start_time = time.perf_counter()
         src_list, dst_list, length_list = [], [], []
         for i in range(self.hma_group_size):
+            if not remote_block_ids:
+                continue
             grouped_remote_block_ids, grouped_local_block_ids = group_concurrent_contiguous(
                 remote_block_ids[i], local_block_ids[i]
             )
@@ -1000,6 +1002,8 @@ class MooncakeConnectorScheduler:
 
         self.side_channel_host = get_ip()
         self.tp_size = vllm_config.parallel_config.tensor_parallel_size
+        self.pcp_size = vllm_config.parallel_config.prefill_context_parallel_size
+        self.dcp_size = vllm_config.parallel_config.decode_context_parallel_size
         assert self.pcp_size * self.dcp_size == 1, (
             "Mooncake Hybrid Connector only support cp_world_size == 1. "
         )
@@ -1063,14 +1067,18 @@ class MooncakeConnectorScheduler:
             "Number of KV cache groups must match"
         )
         # For non-SWA groups, num_swa_blocks is 0 so we return all block_ids unchanged
-        return tuple(
-            [
-                blocks[-self.num_swa_blocks[i] :]
-                if self.num_swa_blocks[i] > 0
-                else blocks
-                for i, blocks in enumerate(block_ids)
-            ]
-        )
+        new_block_ids = []
+        for i, blocks in enumerate(block_ids):
+            if self.num_swa_blocks[i] > 0:
+                clipped_block_ids = blocks[-self.num_swa_blocks[i] :]
+                nozero_block_ids = []
+                for blk_id in clipped_block_ids:
+                    if blk_id > 0:
+                        nozero_block_ids.append(blk_id)
+                new_block_ids.append(nozero_block_ids)
+            else:
+                new_block_ids.append(blocks)
+        return tuple(new_block_ids)
 
     def _mamba_prefill_token_count(self, num_prompt_tokens: int) -> int:
         """D-side only. Returns N-1 for Mamba models since the decoder
@@ -1426,14 +1434,15 @@ class MooncakeConnectorWorker:
                     ptrs.append(min(share_tensor_addr))
                     lengths.append(kv_cache_tensor.size)
         elif self.use_compress:
+            layer_group_idx = defaultdict(list)
+            for i, group in enumerate(self.kv_cache_config.kv_cache_groups):
+                for layer_name in group.layer_names:
+                    layer_group_idx[layer_name].append(i)
             for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
                 share_tensor_addr = []
                 share_tensor_len = []
-                layer_group_idx = defaultdict(list)
+                share_tensor_total_len = []
                 cur_tensor_group_idx = []
-                for i, group in enumerate(self.kv_cache_config.kv_cache_groups):
-                    for layer_name in group.layer_names:
-                        layer_group_idx[layer_name].append(i)
                 for layer_name in kv_cache_tensor.shared_by:
                     cur_tensor_group_idx.extend(layer_group_idx[layer_name])
                     kv_cache_tuple = kv_caches[layer_name]
@@ -1446,19 +1455,35 @@ class MooncakeConnectorWorker:
                     #     tensor_total_addrs.append(tensor_addr)
                     for single_tensor in kv_cache_tuple:
                         tensor_addr = single_tensor.data_ptr()
-                        if tensor_addr in share_tensor_addr:
+                        if tensor_addr in share_tensor_addr or tensor_addr in self.kv_caches_base_addr:
                             continue
                         share_tensor_addr.append(tensor_addr)
                         tensor_total_size = single_tensor.numel() * single_tensor.element_size()
                         assert tensor_total_size % self.num_blocks == 0, "Tensor size cannot divide by num_blocks. "
                         tensor_block_len = tensor_total_size // self.num_blocks
                         share_tensor_len.append(tensor_block_len)
-                cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
-                self.kv_caches_base_addr.extend(share_tensor_addr)
-                self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
-                self.block_len_per_addr.extend(share_tensor_len)
-                ptrs.append(min(share_tensor_addr))
-                lengths.append(kv_cache_tensor.size)
+                        share_tensor_total_len.append(tensor_total_size)
+                if share_tensor_addr:
+                    cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
+                    self.kv_caches_base_addr.extend(share_tensor_addr)
+                    self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
+                    self.block_len_per_addr.extend(share_tensor_len)
+                    addr_desc = [[x[0], x[1]] for x in zip(share_tensor_addr, share_tensor_total_len)]
+                    addr_desc = sorted(addr_desc, key=lambda x: x[0])
+                    merged_addr = []
+                    cur_ptr, cur_len = addr_desc[0]
+                    cur_end = cur_ptr + cur_len
+                    for ptr, length in addr_desc[1:]:
+                        end = ptr + length
+                        if ptr <= cur_end:
+                            cur_end = max(cur_end, end)
+                        else:
+                            merged_addr.append(cur_ptr)
+                            cur_ptr, cur_end = ptr, end
+
+                    merged_addr.append(cur_ptr)
+                    ptrs.extend(merged_addr)
+                    lengths.extend([kv_cache_tensor.size] * len(merged_addr))
         else:
             raise TypeError("Mooncake connector does not support this type kv_cache now.")
 
