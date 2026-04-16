@@ -27,6 +27,7 @@ if USE_MULTI_GROUPS_KV_CACHE:
     import vllm_ascend.patch.platform.patch_kv_cache_coordinator
     import vllm_ascend.patch.platform.patch_core
     import vllm_ascend.patch.platform.patch_kv_cache_utils
+    import vllm_ascend.patch.platform.patch_speculative_config
 
 
 
