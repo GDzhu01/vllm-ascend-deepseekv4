@@ -655,8 +655,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     device=str(self.seqused_q.device))
             sas_metadata = self.prefill_ratio_to_sas_metadata["c4"]
         else:
-            if self.ratio_to_sas_metadata.get("c128") is None:
-                self.ratio_to_sas_metadata["c128"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            if self.prefill_ratio_to_sas_metadata.get("c128") is None:
+                self.prefill_ratio_to_sas_metadata["c128"] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
                     num_heads_kv=1,
                     head_dim=self.model_config.get_head_size(),
@@ -678,7 +678,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     has_ori_kv=True,
                     has_cmp_kv=True,
                     device=str(self.seqused_q.device))
-            sas_metadata = self.ratio_to_sas_metadata["c128"]
+            sas_metadata = self.prefill_ratio_to_sas_metadata["c128"]
         qli_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=prefill_query_start_loc[1:].clone(),
             actual_seq_lengths_key=self.seq_lens[reqs_start:].clone(),
