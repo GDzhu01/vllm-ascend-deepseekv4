@@ -19,11 +19,12 @@ from vllm.v1.core.kv_cache_utils import (
 )
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttentionSpec
 
-from vllm_ascend.core.multi_block_pool import MultiBlockPool
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
 from math import lcm
 
+from vllm_ascend import envs
+USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
 
 class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
     """
