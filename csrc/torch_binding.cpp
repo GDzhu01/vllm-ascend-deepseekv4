@@ -1599,10 +1599,10 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
              static_cast<void (*)(const at::Tensor&)>(&vllm_ascend::device_print));
 
     ops.def(
-        "grouped_matmul_swiglu_quant(Tensor x, Tensor weight, Tensor weight_scale, Tensor x_scale,"
+        "grouped_matmul_swiglu_quant_weight_nz(Tensor x, Tensor weight, Tensor weight_scale, Tensor x_scale,"
         "                            Tensor group_list, *, Tensor? bias=None,"
-        "                            Tensor? offset=None) -> (Tensor output, Tensor output_scale, Tensor output_offset)");
-    ops.impl("grouped_matmul_swiglu_quant", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant);
+        "                            Tensor? offset=None, float swiglu_limit=-1000000.0) -> (Tensor output, Tensor output_scale, Tensor output_offset)");
+    ops.impl("grouped_matmul_swiglu_quant_weight_nz", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_weight_nz);
 
     ops.def(
         "dispatch_gmm_combine_decode(Tensor x, Tensor expert_ids, Tensor[] gmm1_permuted_weight,"
@@ -1621,7 +1621,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
     ops.def(
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list(Tensor x, Tensor[] weight, Tensor[] weight_scale, Tensor x_scale,"
         "                                                  Tensor group_list, *,"
-        "                                                  Tensor? bias=None, Tensor? offset=None) ->"
+        "                                                  Tensor? bias=None, Tensor? offset=None, float swiglu_limit=-1) ->"
         "                                                  (Tensor output, Tensor output_scale, Tensor output_offset)"
     );
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_weight_nz_tensor_list);

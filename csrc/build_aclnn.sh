@@ -52,6 +52,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
         "hc_post"
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
+        "grouped_matmul_swiglu_quant"
     )
 
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
@@ -134,6 +135,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "hc_post"
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
+        "grouped_matmul_swiglu_quant"
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"

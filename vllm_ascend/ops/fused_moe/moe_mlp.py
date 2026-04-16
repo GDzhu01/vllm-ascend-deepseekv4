@@ -152,14 +152,23 @@ def quant_apply_mlp(
             )
         elif use_gmm_swiglu_quant_fusion:
             # gmm1: gate_up_proj & act_fn: swiglu
-            hidden_states, swiglu_out_scale, _ = DeviceOperator.npu_grouped_matmul_swiglu_quant(
+            # hidden_states, swiglu_out_scale, _ = DeviceOperator.npu_grouped_matmul_swiglu_quant(
+            #     x=hidden_states,
+            #     weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
+            #     group_list=cumsum_group_list(group_list, group_list_type, 0),
+            #     weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
+            #     x_scale=pertoken_scale,
+            #     bias=None,
+            #     use_mxfp_quant=use_mxfp_quant,
+            # )
+            hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                 x=hidden_states,
                 weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
                 group_list=cumsum_group_list(group_list, group_list_type, 0),
                 weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
                 x_scale=pertoken_scale,
                 bias=None,
-                use_mxfp_quant=use_mxfp_quant,
+                swiglu_limit=10
             )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
@@ -257,14 +266,24 @@ def quant_apply_mlp(
                 bias=bias1,
             )
         elif use_gmm_swiglu_quant_fusion:
-            hidden_states, swiglu_out_scale, _ = DeviceOperator.npu_grouped_matmul_swiglu_quant(
+            # hidden_states, swiglu_out_scale, _ = DeviceOperator.npu_grouped_matmul_swiglu_quant(
+            #     x=hidden_states,
+            #     weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
+            #     group_list=cumsum_group_list(group_list, group_list_type, 0),
+            #     weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
+            #     x_scale=pertoken_scale,
+            #     bias=bias1,
+            #     use_mxfp_quant=use_mxfp_quant,
+            # )
+            print(f'swiglu_limit is set to 10, remove it plz')
+            hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                 x=hidden_states,
                 weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
                 group_list=cumsum_group_list(group_list, group_list_type, 0),
                 weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
                 x_scale=pertoken_scale,
                 bias=bias1,
-                use_mxfp_quant=use_mxfp_quant,
+                swiglu_limit=10
             )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
