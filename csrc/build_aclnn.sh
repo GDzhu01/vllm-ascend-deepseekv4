@@ -25,10 +25,10 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
     CUSTOM_OPS_ARRAY=(
+        "grouped_matmul_swiglu_quant"
         "sparse_flash_attention"
         "lightning_indexer"
-        # TODO(maoqi): This is not used anymore
-        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
 
         "add_rms_norm_bias"
@@ -105,8 +105,9 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "dispatch_layout"
     #     "notify_dispatch"
     # )
-    # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
     CUSTOM_OPS_ARRAY=(
+        "grouped_matmul_swiglu_quant"
+        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
         "notify_dispatch"
         "dispatch_ffn_combine"
         "dispatch_gmm_combine_decode"

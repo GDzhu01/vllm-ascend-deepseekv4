@@ -30,27 +30,24 @@ def gmm_swiglu_quant(x: torch.Tensor, weight: torch.Tensor,
     """
     # Perform matrix multiplication with int32 precision
     c_temp1 = torch.matmul(x.to(torch.int32), weight.to(torch.int32))
-    c_temp1 = c_temp1.to(torch.float32)  # Convert back to float32 for scaling
+    c_temp1 = c_temp1.to(torch.float32)  # 转换回 float32 以便进行缩放
 
-    # Apply per-channel and per-token scaling
+    # 应用每个通道和每个 token 的缩放
     c_temp2 = torch.mul(c_temp1, perChannelScale)
     c_temp3 = torch.mul(c_temp2, perTokenScale.reshape(m, 1))
 
-    # Split the result into two parts to apply SwiGLU activation function
+    # 将结果分成两部分以应用 SwiGLU 激活函数
     gate, up = c_temp3.chunk(2, dim=-1)
     if swiglu_limit>0:
         up = torch.clamp(up,min= -swiglu_limit,max = swiglu_limit)
         gate = torch.clamp(gate,max = swiglu_limit)
     c_temp6 = gate * torch.sigmoid(gate) * up  # Element-wise multiplication with gating values
 
-    # Quantize the output
-    max = torch.max(
-        torch.abs(c_temp6),
-        -1).values  # Find maximum absolute value to calculate scaling factor
-    quantScaleOutput = 127 / max  # Calculate quantization scaling factor
-    quantOutput = torch.round(c_temp6 * quantScaleOutput.reshape(m, 1)).to(
-        torch.int8)  # Quantize to int8
-    quantScaleOutput = 1 / quantScaleOutput  # Inverse quantization scaling factor for subsequent dequantization
+    # 对输出进行量化
+    abs_max = torch.max(torch.abs(c_temp6), -1).values  # 找到最大绝对值以计算缩放因子
+    quantScaleOutput = 127 / abs_max  # 计算量化缩放因子
+    quantOutput = torch.round(c_temp6 * quantScaleOutput.reshape(m, 1)).to(torch.int8)  # 量化为 int8
+    quantScaleOutput = 1 / quantScaleOutput  # 反向量化缩放因子以便后续反量化
 
     return quantOutput, quantScaleOutput
 
@@ -98,7 +95,28 @@ def process_groups(x: torch.Tensor, weight: torch.Tensor,
         start_idx += tempV  # Update starting index to process the next group
     return quantOutput, quantScaleOutput
 
+def generate_non_decreasing_sequence(length, upper_limit):
+        """
+        生成一个随机非减的一维 Tensor，且最后一个值小于上限。
 
+        参数:
+            length (int): 序列的长度。
+            upper_limit (int): 最后一个值的上限。
+
+        返回:
+            torch.Tensor: 生成的一维 Tensor。
+        """
+        # 生成随机递增序列
+        random_increments = torch.randint(0, 128, (length,))  # 随机增量，范围 0~9
+        sequence = torch.cumsum(random_increments, dim=0)  # 累加生成非减序列
+
+        # 确保最后一个值小于上限
+        if sequence[-1] >= upper_limit:
+            scale_factor = upper_limit / sequence[-1]  # 计算缩放因子
+            sequence = (sequence * scale_factor).to(torch.int64)  # 缩放并转换为整数
+
+        return sequence
+    
 @torch.inference_mode()
 def test_gmm_swiglu_quant_weight_nz_tensor_list():
     M, K, E, N = 8192, 7168, 4, 4096
@@ -112,13 +130,7 @@ def test_gmm_swiglu_quant_weight_nz_tensor_list():
     # weight_scale (E, N) - float32
     weight_scale = torch.rand(E, N) * 0.9 + 0.1  # uniform(0.1, 1.0)
     weight_scale = weight_scale.to(torch.float32)
-
-    weight_nz_npu = []
-    weight_scale_npu = []
-    for i in range(E):
-        weight_nz_npu.append(torch_npu.npu_format_cast(weight[i].npu(), 29))
-        weight_scale_npu.append(weight_scale[i].npu())
-
+    weight_npu = torch_npu.npu_format_cast(weight.npu(), 29)
     # x_scale (M,) - float32
     x_scale = torch.rand(M) * 0.9 + 0.1  # uniform(0.1, 1.0)
     x_scale = x_scale.to(torch.float32)
@@ -128,9 +140,9 @@ def test_gmm_swiglu_quant_weight_nz_tensor_list():
     output_cpu, output_scale_cpu = process_groups(x, weight, weight_scale,
                                                   x_scale, group_list,swiglu_limit)
     output_npu, output_scale_npu, _ = \
-        torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz_tensor_list(x.npu(),
-                                                                              weight_nz_npu,
-                                                                              weight_scale_npu,
+        torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(x.npu(),
+                                                                              weight_npu,
+                                                                              weight_scale.npu(),
                                                                               x_scale.npu(),
                                                                               group_list.npu(),swiglu_limit=swiglu_limit)
     output_npu_valid = output_npu[:group_list[-1], :]
