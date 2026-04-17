@@ -329,7 +329,6 @@ class FusedMC2CommImpl(MoECommMethod):
                 swiglu_limit=10.0,
                 out=out,
             )
-            print('zylllllllllllllllll')
         elif envs_ascend.VLLM_ASCEND_ENABLE_FUSED_MC2 == 2:
             assert expert_map is not None, "expert_map cannot be None."
             group_list_type = 1
