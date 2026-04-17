@@ -1628,7 +1628,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv = rotate_activation(kv, indexer_kv_scale_metadata.hadamard)
 
         weights = self.weights_proj(x) * (self.indexer_softmax_scale *
-                                          self.indexcom_head_dim**-0.5)
+                                          self.indexer_heads ** -0.5)
 
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5
