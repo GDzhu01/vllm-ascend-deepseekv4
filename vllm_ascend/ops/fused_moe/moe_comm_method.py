@@ -326,8 +326,10 @@ class FusedMC2CommImpl(MoECommMethod):
                 probs=topk_weights.to(torch.float32),
                 group=self.token_dispatcher.moe_all_to_all_group_name,
                 max_output_size=65536,
+                swiglu_limit=10.0,
                 out=out,
             )
+            print('zylllllllllllllllll')
         elif envs_ascend.VLLM_ASCEND_ENABLE_FUSED_MC2 == 2:
             assert expert_map is not None, "expert_map cannot be None."
             group_list_type = 1
