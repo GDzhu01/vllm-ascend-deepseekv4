@@ -1152,7 +1152,21 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if olora_tp_enable():
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            o_proj_input, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o_proj_input, dst_type=torch.float8_e4m3fn)
+            o_proj_input = torch_npu.npu_transpose_quant_batchmatmul(
+                o_proj_input,
+                self.wo_a.weight,
+                dtype=torch.bfloat16,
+                bias=None,
+                group_sizes=(0, 0, 32),
+                x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu),
+                x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu),
+                perm_x1=(1,0,2),
+                perm_x2=(0,1,2),
+                perm_y=(1,0,2))
+            o_proj_input = o_proj_input.reshape(num_tokens, -1)
+        elif olora_tp_enable():
             o_proj_input = self.wo_a(o_proj_input)
         else:
             # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
@@ -1226,9 +1240,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
 
         # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
-            swa_cache.view(-1, kv.shape[-1]),
-            swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            torch.ops._C_ascend.kv_compress_epilog(
+                swa_kv_cache.view(-1, kv.shape[-1]),
+                x=kv.view(-1, kv.shape[-1]),
+                slot_mapping=swa_metadata.prefill.slot_mapping.unsqueeze(-1),
+                quant_group_size=64,
+                quant_mode=2,
+                round_scale_flag=True
+            )
+        else:
+            torch_npu.npu_scatter_nd_update_(
+                swa_cache.view(-1, kv.shape[-1]),
+                swa_metadata.prefill.slot_mapping.unsqueeze(-1),
+                kv)
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
         if self.compress_ratio > 1:
@@ -1276,10 +1301,20 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressed_kv = None
 
             # kv_compress_epilog
-            torch_npu.npu_scatter_nd_update_(
-                compressor_attn_cache.view(-1, compressed_kv.shape[-1]),
-                compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
-                compressed_kv.view(-1, compressed_kv.shape[-1]))
+            if get_ascend_device_type() in {AscendDeviceType.A5}:
+                torch.ops._C_ascend.kv_compress_epilog(
+                    kv_compress_cache=compress_kv_cache.view(-1, compressed_kv.shape[-1]),
+                    x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
+                    slot_mapping=compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
+                    quant_group_size=64,
+                    quant_mode=2,
+                    round_scale_flag=True
+                )
+            else:
+                torch_npu.npu_scatter_nd_update_(
+                    compressor_attn_cache.view(-1, compressed_kv.shape[-1]),
+                    compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
+                    compressed_kv.view(-1, compressed_kv.shape[-1]))
 
         sliding_window_kv = kv if self.enable_kv_tnd else swa_cache
 
@@ -1562,7 +1597,8 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
             isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
-            qr_pertoken_scale is not None:
+            qr_pertoken_scale is not None and \
+            get_ascend_device_type() not in {AscendDeviceType.A5}:
             q = torch_npu.npu_quant_matmul(
                 qr,
                 self.inderxer_wq_b.weight,
@@ -1635,7 +1671,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                           } else torch.int8
 
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
-        if kv is not None:
+        if kv is not None and get_ascend_device_type() not in {AscendDeviceType.A5}:
             kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
             kv_scale = kv_scale.unsqueeze(-1)
 
@@ -1648,25 +1684,45 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
-                    indexer_kv_cache.view(-1, kv.shape[-1]),
-                    indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
-                    kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
-                    indexer_scale_cache.view(-1, kv_scale.shape[-1]),
-                    indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
-                    kv_scale.view(-1, kv_scale.shape[-1]))
+                if soc_version in {AscendDeviceType.A5}:
+                    torch.ops._C_ascend.indexer_compress_epilog(
+                        indexer_compress_cache=indexer_kv_cache.view(-1, kv.shape[-1]),
+                        indexer_compress_cache_scale=indexer_scale_cache.view(-1, indexer_scale_cache.shape[-1]),
+                        x=kv, 
+                        slot_mapping=attn_metadata.prefill.slot_mapping.unsqueeze(-1), 
+                        quant_mode=1, 
+                        round_scale=True
+                    )
+                else:
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_kv_cache.view(-1, kv.shape[-1]),
+                        indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
+                        kv.view(-1, kv.shape[-1]))
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_scale_cache.view(-1, kv_scale.shape[-1]),
+                        indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
+                        kv_scale.view(-1, kv_scale.shape[-1]))
         else:
             assert indexer_kv_scale_metadata.decode is not None
             if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
-                    indexer_kv_cache.view(-1, kv.shape[-1]),
-                    indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
-                    kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
-                    indexer_scale_cache.view(-1, kv_scale.shape[-1]),
-                    indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
-                    kv_scale.view(-1, kv_scale.shape[-1]))
+                if soc_version in {AscendDeviceType.A5}:
+                    torch.ops._C_ascend.indexer_compress_epilog(
+                        indexer_compress_cache=indexer_kv_cache.view(-1, kv.shape[-1]),
+                        indexer_compress_cache_scale=indexer_scale_cache.view(-1, indexer_scale_cache.shape[-1]),
+                        x=kv, 
+                        slot_mapping=attn_metadata.decode.slot_mapping.unsqueeze(-1), 
+                        quant_mode=1, 
+                        round_scale=True
+                    )
+                else:
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_kv_cache.view(-1, kv.shape[-1]),
+                        indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
+                        kv.view(-1, kv.shape[-1]))
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_scale_cache.view(-1, kv_scale.shape[-1]),
+                        indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
+                        kv_scale.view(-1, kv_scale.shape[-1]))
 
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
