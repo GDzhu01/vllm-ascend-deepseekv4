@@ -34,7 +34,7 @@ extern "C" {
  * @param [out] executor: 返回op执行器，包含算子计算流程。
  * @return aclnnStatus: 返回状态码。
  */
-__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSize(
+__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantClampGetWorkspaceSize(
     const aclTensor *x, const aclTensor *weight, const aclTensor *bias, const aclTensor *offset,
     const aclTensor *weightScale, const aclTensor *xScale, const aclTensor *groupList, double limited, aclTensor *output,
     aclTensor *outputScale, aclTensor *outputOffset, uint64_t *workspaceSize, aclOpExecutor **executor);
@@ -49,7 +49,7 @@ __attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuant
  * @return aclnnStatus: 返回状态码。
  */
 __attribute__((visibility("default"))) aclnnStatus
-aclnnGroupedMatmulSwigluQuant(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream);
+aclnnGroupedMatmulSwigluQuantClamp(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream);
 
 #ifdef __cplusplus
 }

@@ -11,20 +11,20 @@
 #include "opdev/op_log.h"
 #include "opdev/op_dfx.h"
 #include "opdev/make_op_executor.h"
-#include "grouped_matmul_swiglu_quant.h"
+#include "grouped_matmul_swiglu_quant_clamp.h"
 
 using namespace op;
 
 namespace l0op {
-OP_TYPE_REGISTER(GroupedMatmulSwigluQuant);
+OP_TYPE_REGISTER(GroupedMatmulSwigluQuantClamp);
 
 const std::tuple<aclTensor *, aclTensor *>
-GroupedMatmulSwigluQuant(const aclTensor *x, const aclTensor *weight, const aclTensor *perChannelScale,
+GroupedMatmulSwigluQuantClamp(const aclTensor *x, const aclTensor *weight, const aclTensor *perChannelScale,
                          const aclTensor *perTokenScale, const aclTensor *groupList, double limited,
                          const aclTensor *weightAssistanceMatrix, bool isEnableWeightAssistanceMatrix, int dequantMode,
                          aclOpExecutor *executor)
 {
-    L0_DFX(GroupedMatmulSwigluQuant, x, weight, perChannelScale, perTokenScale, weightAssistanceMatrix, groupList, limited,
+    L0_DFX(GroupedMatmulSwigluQuantClamp, x, weight, perChannelScale, perTokenScale, weightAssistanceMatrix, groupList, limited,
            isEnableWeightAssistanceMatrix, dequantMode);
     if (x == nullptr) {
         OP_LOGE(ACLNN_ERR_PARAM_INVALID, "x is nullptr.");
@@ -37,7 +37,7 @@ GroupedMatmulSwigluQuant(const aclTensor *x, const aclTensor *weight, const aclT
     gert::Shape scaleOutShape({m});
     auto out = executor->AllocTensor(outShape, DataType::DT_INT8, ge::FORMAT_ND);
     auto scaleOut = executor->AllocTensor(scaleOutShape, DataType::DT_FLOAT, ge::FORMAT_ND);
-    auto ret = INFER_SHAPE(GroupedMatmulSwigluQuant,
+    auto ret = INFER_SHAPE(GroupedMatmulSwigluQuantClamp,
                            OP_INPUT(x, weight, perChannelScale, perTokenScale, weightAssistanceMatrix, groupList),
                            OP_OUTPUT(out, scaleOut), OP_ATTR(isEnableWeightAssistanceMatrix, dequantMode, limited));
     if (ret != ACLNN_SUCCESS) {
@@ -45,7 +45,7 @@ GroupedMatmulSwigluQuant(const aclTensor *x, const aclTensor *weight, const aclT
         return std::tuple(nullptr, nullptr);
     }
     ret = ADD_TO_LAUNCHER_LIST_AICORE(
-        GroupedMatmulSwigluQuant,
+        GroupedMatmulSwigluQuantClamp,
         OP_INPUT(x, weight, perChannelScale, perTokenScale, weightAssistanceMatrix, groupList),
         OP_OUTPUT(out, scaleOut), OP_ATTR(isEnableWeightAssistanceMatrix, dequantMode, limited));
     if (ret != ACLNN_SUCCESS) {

@@ -35,7 +35,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weigh
     double swiglu_limit_f = static_cast<double>(swiglu_limit);
 
     EXEC_NPU_CMD(
-        aclnnGroupedMatmulSwigluQuantWeightNZ,
+        aclnnGroupedMatmulSwigluQuantClampWeightNZ,
         x,
         weight,
         bias,

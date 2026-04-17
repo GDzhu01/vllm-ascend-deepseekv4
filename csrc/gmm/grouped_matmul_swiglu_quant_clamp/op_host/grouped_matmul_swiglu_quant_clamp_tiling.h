@@ -9,7 +9,7 @@
  */
 
 /*!
- * \file grouped_matmul_swiglu_quant_tiling.h
+ * \file grouped_matmul_swiglu_quant_clamp_tiling.h
  * \brief
  */
 #ifndef AIR_CXX_RUNTIME_V2_OP_IMPL_GROUPED_MATMUL_SWIGLU_QUANT_H
@@ -52,7 +52,7 @@ TILING_DATA_FIELD_DEF_STRUCT(GMMSwiglu, gmmSwiglu);
 TILING_DATA_FIELD_DEF_STRUCT(TCubeTiling, mmTilingData);
 END_TILING_DATA_DEF;
 
-REGISTER_TILING_DATA_CLASS(GroupedMatmulSwigluQuant, GMMSwigluQuantTilingData)
+REGISTER_TILING_DATA_CLASS(GroupedMatmulSwigluQuantClamp, GMMSwigluQuantTilingData)
 } // namespace optiling
 
 namespace GroupedMatmulSwigluQuantTiling {

@@ -9,10 +9,10 @@
  */
 
 /*!
- * \file grouped_matmul_swiglu_quant.cpp
+ * \file grouped_matmul_swiglu_quant_clamp.cpp
  * \brief
  */
-#include "grouped_matmul_swiglu_quant.h"
+#include "grouped_matmul_swiglu_quant_clamp.h"
 #include "grouped_matmul_swiglu_pipeline.h"
 #include "grouped_matmul_swiglu_quant_utils.h"
 #include <typeinfo>
@@ -61,7 +61,7 @@ using namespace GROUPED_MATMUL_SWIGLU_QUANT;
         op.Process();                                                                                                  \
     } while (0)
 
-extern "C" __global__ __aicore__ void grouped_matmul_swiglu_quant(GM_ADDR x, GM_ADDR weight, GM_ADDR weightScale,
+extern "C" __global__ __aicore__ void grouped_matmul_swiglu_quant_clamp(GM_ADDR x, GM_ADDR weight, GM_ADDR weightScale,
                                                                   GM_ADDR xScale, GM_ADDR weightAssistanceMatrix,
                                                                   GM_ADDR groupList, GM_ADDR y, GM_ADDR yScale,
                                                                   GM_ADDR workspace, GM_ADDR tiling)

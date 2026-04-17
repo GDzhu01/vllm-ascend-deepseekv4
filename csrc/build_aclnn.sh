@@ -25,7 +25,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
     CUSTOM_OPS_ARRAY=(
-        "grouped_matmul_swiglu_quant"
+        "grouped_matmul_swiglu_quant_clamp"
         "sparse_flash_attention"
         "lightning_indexer"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
@@ -106,7 +106,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "notify_dispatch"
     # )
     CUSTOM_OPS_ARRAY=(
-        "grouped_matmul_swiglu_quant"
+        "grouped_matmul_swiglu_quant_clamp"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
         "notify_dispatch"
         "dispatch_ffn_combine"

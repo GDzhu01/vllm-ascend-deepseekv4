@@ -17,7 +17,7 @@
 #define ASCENDC_GROUPED_MATMUL_SWIGLU_QUANT_A8W4_MSD_MID_H
 
 #include "grouped_matmul_swiglu_quant_utils.h"
-#include "grouped_matmul_swiglu_quant.h"
+#include "grouped_matmul_swiglu_quant_clamp.h"
 
 #ifdef GMM_SWIGLU_QUANT_A8W4_MSD
 namespace GROUPED_MATMUL_SWIGLU_QUANT {

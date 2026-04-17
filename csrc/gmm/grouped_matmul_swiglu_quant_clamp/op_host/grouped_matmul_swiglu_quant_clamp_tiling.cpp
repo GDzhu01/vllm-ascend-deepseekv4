@@ -18,7 +18,7 @@
 #include "log/log.h"
 #include "err/ops_err.h"
 #include "tiling_base/tiling_base.h"
-#include "grouped_matmul_swiglu_quant_tiling.h"
+#include "grouped_matmul_swiglu_quant_clamp_tiling.h"
 using namespace ge;
 using namespace AscendC;
 using namespace GroupedMatmulSwigluQuantTiling;
@@ -283,7 +283,7 @@ ASCENDC_EXTERN_C graphStatus TilingPrepareForGMMSwigluQuant(gert::TilingParseCon
     return GRAPH_SUCCESS;
 }
 
-IMPL_OP_OPTILING(GroupedMatmulSwigluQuant)
+IMPL_OP_OPTILING(GroupedMatmulSwigluQuantClamp)
     .Tiling(TilingGMMSwigluQuant)
     .TilingParse<GMMSwigluCompileInfo>(TilingPrepareForGMMSwigluQuant);
 } // namespace optiling

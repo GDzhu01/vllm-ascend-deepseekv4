@@ -9,12 +9,12 @@
  */
 
 /*!
- * \file grouped_matmul_swiglu_quant.cpp
+ * \file grouped_matmul_swiglu_quant_clamp.cpp
  * \brief
  */
 #ifndef ASCENDC_GROUPED_MATMUL_SWIGLU_QUANT_PIPELINE_H
 #define ASCENDC_GROUPED_MATMUL_SWIGLU_QUANT_PIPELINE_H
-#include "grouped_matmul_swiglu_quant.h"
+#include "grouped_matmul_swiglu_quant_clamp.h"
 #include <typeinfo>
 #include "grouped_matmul_swiglu_quant_a8w4_msd_pre.h"
 #include "grouped_matmul_swiglu_quant_a8w4_msd_mid.h"

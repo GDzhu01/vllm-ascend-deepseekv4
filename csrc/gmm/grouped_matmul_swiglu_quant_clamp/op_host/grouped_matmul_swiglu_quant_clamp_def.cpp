@@ -15,9 +15,9 @@
 
 #include "register/op_def_registry.h"
 namespace ops {
-class GroupedMatmulSwigluQuant : public OpDef {
+class GroupedMatmulSwigluQuantClamp : public OpDef {
 public:
-    explicit GroupedMatmulSwigluQuant(const char *name) : OpDef(name)
+    explicit GroupedMatmulSwigluQuantClamp(const char *name) : OpDef(name)
     {
         this->Input("x")
             .ParamType(REQUIRED)
@@ -118,5 +118,5 @@ private:
     }
 };
 
-OP_ADD(GroupedMatmulSwigluQuant);
+OP_ADD(GroupedMatmulSwigluQuantClamp);
 } // namespace ops

@@ -23,9 +23,9 @@
 #include "opdev/shape_utils.h"
 #include "opdev/tensor_view_utils.h"
 #include "opdev/make_op_executor.h"
-#include "grouped_matmul_swiglu_quant.h"
-#include "aclnn_grouped_matmul_swiglu_quant_weight_nz.h"
-#include "aclnn_grouped_matmul_swiglu_quant.h"
+#include "grouped_matmul_swiglu_quant_clamp.h"
+#include "aclnn_grouped_matmul_swiglu_quant_clamp_weight_nz.h"
+#include "aclnn_grouped_matmul_swiglu_quant_clamp.h"
 
 using namespace op;
 
@@ -408,7 +408,7 @@ static aclnnStatus CheckParams(const aclTensor *x, const aclTensor *weight, cons
     return ACLNN_SUCCESS;
 }
 
-static aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSizeCommon(
+static aclnnStatus aclnnGroupedMatmulSwigluQuantClampGetWorkspaceSizeCommon(
     const aclTensor *x, const aclTensor *weight, const aclTensor *bias, const aclTensor *offset,
     const aclTensor *weightScale, const aclTensor *xScale, const aclTensor *groupList, double limited, aclTensor *output,
     aclTensor *outputScale, aclTensor *outputOffset, uint64_t *workspaceSize, aclOpExecutor **executor)
@@ -452,7 +452,7 @@ static aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSizeCommon(
     if (isEnableWeightAssistanceMatrix && weightScale->GetViewShape().GetDimNum() == WEIGHT_SCALE_PERGROUP_DIM_LIMIT) {
         dequantMode = 1;
     }
-    auto ret_0 = l0op::GroupedMatmulSwigluQuant(x, weight, weightScale, xScale, groupList, limited, bias,
+    auto ret_0 = l0op::GroupedMatmulSwigluQuantClamp(x, weight, weightScale, xScale, groupList, limited, bias,
                                                 isEnableWeightAssistanceMatrix, dequantMode, uniqueExecutor.get());
     CHECK_RET(ret_0 != std::tuple(nullptr, nullptr), ACLNN_ERR_INNER_NULLPTR);
     auto out0 = std::get<OUTPUT_IDX_0>(ret_0);
@@ -466,7 +466,7 @@ static aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSizeCommon(
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSize(const aclTensor *x, const aclTensor *weight,
+aclnnStatus aclnnGroupedMatmulSwigluQuantClampGetWorkspaceSize(const aclTensor *x, const aclTensor *weight,
                                                           const aclTensor *bias, const aclTensor *offset,
                                                           const aclTensor *weightScale, const aclTensor *xScale,
                                                           const aclTensor *groupList, double limited, aclTensor *output,
@@ -474,15 +474,15 @@ aclnnStatus aclnnGroupedMatmulSwigluQuantGetWorkspaceSize(const aclTensor *x, co
                                                           uint64_t *workspaceSize, aclOpExecutor **executor)
 {
     OP_CHECK_COMM_INPUT(workspaceSize, executor);
-    L2_DFX_PHASE_1(aclnnGroupedMatmulSwigluQuant, DFX_IN(x, weight, bias, offset, weightScale, xScale, groupList, limited),
+    L2_DFX_PHASE_1(aclnnGroupedMatmulSwigluQuantClamp, DFX_IN(x, weight, bias, offset, weightScale, xScale, groupList, limited),
                    DFX_OUT(output, outputScale, outputOffset));
     // 固定写法，创建OpExecutor
-    return aclnnGroupedMatmulSwigluQuantGetWorkspaceSizeCommon(x, weight, bias, offset, weightScale, xScale, groupList, limited,
+    return aclnnGroupedMatmulSwigluQuantClampGetWorkspaceSizeCommon(x, weight, bias, offset, weightScale, xScale, groupList, limited,
                                                                output, outputScale, outputOffset, workspaceSize,
                                                                executor);
 }
 
-aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZGetWorkspaceSize(const aclTensor *x, const aclTensor *weight,
+aclnnStatus aclnnGroupedMatmulSwigluQuantClampWeightNZGetWorkspaceSize(const aclTensor *x, const aclTensor *weight,
                                                                   const aclTensor *bias, const aclTensor *offset,
                                                                   const aclTensor *weightScale, const aclTensor *xScale,
                                                                   const aclTensor *groupList, double limited, aclTensor *output,
@@ -490,7 +490,7 @@ aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZGetWorkspaceSize(const aclTenso
                                                                   uint64_t *workspaceSize, aclOpExecutor **executor)
 {
     OP_CHECK_COMM_INPUT(workspaceSize, executor);
-    L2_DFX_PHASE_1(aclnnGroupedMatmulSwigluQuantWeightNZ,
+    L2_DFX_PHASE_1(aclnnGroupedMatmulSwigluQuantClampWeightNZ,
                    DFX_IN(x, weight, bias, offset, weightScale, xScale, groupList),
                    DFX_OUT(output, outputScale, outputOffset));
     // weight在该场景下强制绑定StorageFormat 和 ViewFormat 为NZ
@@ -499,7 +499,7 @@ aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZGetWorkspaceSize(const aclTenso
     auto viewShape = weight->GetViewShape();
     aclTensor *weightNZ = const_cast<aclTensor *>(weight);
     CHECK_COND((storgeShape.GetDimNum() == WEIGHT_NZ_DIM_LIMIT), ACLNN_ERR_PARAM_INVALID,
-               "aclnnGroupedMatmulSwigluQuantWeightNZ, The dimnum of storageShape for second input (weight)"
+               "aclnnGroupedMatmulSwigluQuantClampWeightNZ, The dimnum of storageShape for second input (weight)"
                "must be 5. \n But StorageShape got %s , and dimNum is %lu.",
                op::ToString(storgeShape).GetString(), storgeShape.GetDimNum());
     // weight的StorageFormat无条件视为NZ
@@ -512,24 +512,24 @@ aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZGetWorkspaceSize(const aclTenso
         weightNZ->SetViewFormat(op::Format::FORMAT_ND);
     }
     // 调用公共接口
-    return aclnnGroupedMatmulSwigluQuantGetWorkspaceSizeCommon(x, weight, bias, offset, weightScale, xScale, groupList, limited,
+    return aclnnGroupedMatmulSwigluQuantClampGetWorkspaceSizeCommon(x, weight, bias, offset, weightScale, xScale, groupList, limited,
                                                                output, outputScale, outputOffset, workspaceSize,
                                                                executor);
 }
 
-aclnnStatus aclnnGroupedMatmulSwigluQuant(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor,
+aclnnStatus aclnnGroupedMatmulSwigluQuantClamp(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor,
                                           aclrtStream stream)
 {
-    L2_DFX_PHASE_2(aclnnGroupedMatmulSwigluQuant);
+    L2_DFX_PHASE_2(aclnnGroupedMatmulSwigluQuantClamp);
     CHECK_COND(CommonOpExecutorRun(workspace, workspaceSize, executor, stream) == ACLNN_SUCCESS, ACLNN_ERR_INNER,
-               "This is an error in GroupedMatmulSwigluQuant launch aicore");
+               "This is an error in GroupedMatmulSwigluQuantClamp launch aicore");
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZ(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor,
+aclnnStatus aclnnGroupedMatmulSwigluQuantClampWeightNZ(void *workspace, uint64_t workspaceSize, aclOpExecutor *executor,
                                                   aclrtStream stream)
 {
-    L2_DFX_PHASE_2(aclnnGroupedMatmulSwigluQuantWeightNZ);
+    L2_DFX_PHASE_2(aclnnGroupedMatmulSwigluQuantClampWeightNZ);
     CHECK_COND(CommonOpExecutorRun(workspace, workspaceSize, executor, stream) == ACLNN_SUCCESS, ACLNN_ERR_INNER,
                "This is an error in GroupedMatmulSwigluQuantWeightNZ launch aicore");
     return ACLNN_SUCCESS;

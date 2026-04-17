@@ -9,7 +9,7 @@
  */
 
 /*!
- * \file grouped_matmul_swiglu_quant.h
+ * \file grouped_matmul_swiglu_quant_clamp.h
  * \brief
  */
 #ifndef ASCENDC_GROUPED_MATMUL_SWIGLU_QUANT_H

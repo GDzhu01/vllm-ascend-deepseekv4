@@ -7,8 +7,8 @@
  * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
  */
-#ifndef OP_API_INC_GROUPED_MATMUL_SWIGLU_QUANT_WEIGHT_NZ_H
-#define OP_API_INC_GROUPED_MATMUL_SWIGLU_QUANT_WEIGHT_NZ_H
+#ifndef OP_API_INC_GROUPED_MATMUL_SWIGLU_QUANT_CLAMP_WEIGHT_NZ_H
+#define OP_API_INC_GROUPED_MATMUL_SWIGLU_QUANT_CLAMP_WEIGHT_NZ_H
 #include "aclnn/aclnn_base.h"
 
 #ifdef __cplusplus
@@ -34,7 +34,7 @@ extern "C" {
  * @param [out] executor: 返回op执行器，包含算子计算流程。
  * @return aclnnStatus: 返回状态码。
  */
-__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZGetWorkspaceSize(
+__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantClampWeightNZGetWorkspaceSize(
     const aclTensor *x, const aclTensor *weight, const aclTensor *bias, const aclTensor *offset,
     const aclTensor *weightScale, const aclTensor *xScale, const aclTensor *groupList, double limited, aclTensor *output,
     aclTensor *outputScale, aclTensor *outputOffset, uint64_t *workspaceSize, aclOpExecutor **executor);
@@ -48,7 +48,7 @@ __attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuant
  * @param [in] executor: op执行器，包含了算子计算流程。
  * @return aclnnStatus: 返回状态码。
  */
-__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNZ(void *workspace,
+__attribute__((visibility("default"))) aclnnStatus aclnnGroupedMatmulSwigluQuantClampWeightNZ(void *workspace,
                                                                                          uint64_t workspaceSize,
                                                                                          aclOpExecutor *executor,
                                                                                          aclrtStream stream);

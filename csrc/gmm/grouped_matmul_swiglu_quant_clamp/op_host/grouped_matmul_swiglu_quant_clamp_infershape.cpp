@@ -47,7 +47,7 @@ static graphStatus InferDataType4GroupedMatmulSwigluQuant(gert::InferDataTypeCon
     return GRAPH_SUCCESS;
 }
 
-IMPL_OP_INFERSHAPE(GroupedMatmulSwigluQuant)
+IMPL_OP_INFERSHAPE(GroupedMatmulSwigluQuantClamp)
     .InferShape(InferShape4GroupedMatmulSwigluQuant)
     .InferDataType(InferDataType4GroupedMatmulSwigluQuant);
 } // namespace ops
