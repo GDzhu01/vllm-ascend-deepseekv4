@@ -1765,7 +1765,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif self.indexer.compressor.rotate:
             kv = rotate_activation(kv, attn_metadata)
 
-        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexcom_head_dim ** -0.5)
+        weights = self.weights_proj(x) * (self.indexer_softmax_scale * self.indexer_heads ** -0.5)
 
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
