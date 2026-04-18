@@ -1034,10 +1034,11 @@ class MooncakeConnectorScheduler:
         self.use_hybrid = not vllm_config.scheduler_config.disable_hybrid_kv_cache_manager and any(
             not isinstance(g.kv_cache_spec, FullAttentionSpec) for g in kv_cache_config.kv_cache_groups
         )
-        self.use_mamba = any(
+        self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
+        self.need_truncate = any(
             isinstance(g.kv_cache_spec, MambaSpec)
             for g in kv_cache_config.kv_cache_groups
-        )
+        ) or self.use_compress
         sw_sizes_tokens: list[tuple[int, int]] = [
             (g.kv_cache_spec.sliding_window, g.kv_cache_spec.block_size)
             if isinstance(g.kv_cache_spec, SlidingWindowSpec)
@@ -1080,14 +1081,14 @@ class MooncakeConnectorScheduler:
                 new_block_ids.append(blocks)
         return tuple(new_block_ids)
 
-    def _mamba_prefill_token_count(self, num_prompt_tokens: int) -> int:
+    def _state_prefill_token_count(self, num_prompt_tokens: int) -> int:
         """D-side only. Returns N-1 for Mamba models since the decoder
         always recomputes the last token and must start from h(N-1)."""
-        if self.use_mamba and num_prompt_tokens > 1:
+        if self.need_truncate and num_prompt_tokens > 1:
             return num_prompt_tokens - 1
         return num_prompt_tokens
 
-    def _truncate_mamba_request_for_prefill(self, request: "Request") -> None:
+    def _truncate_request_for_prefill(self, request: "Request") -> None:
         """P-side only: drop the last prompt token so the prefiller computes
         h(N-1) instead of h(N). The decoder recomputes the last token to
         derive h(N) correctly.
@@ -1139,13 +1140,13 @@ class MooncakeConnectorScheduler:
         if params is not None and params.get("do_remote_prefill"):
             # Remote prefill: get all prompt blocks from remote.
             token_ids = request.prompt_token_ids or []
-            actual = self._mamba_prefill_token_count(len(token_ids))
+            actual = self._state_prefill_token_count(len(token_ids))
             count = actual - num_computed_tokens
             if count > 0:
                 return count, True
 
-        if params is not None and params.get("do_remote_decode") and self.use_mamba:
-            self._truncate_mamba_request_for_prefill(request)
+        if params is not None and params.get("do_remote_decode") and self.need_truncate:
+            self._truncate_request_for_prefill(request)
 
         # No remote prefill for this request.
         return 0, False
