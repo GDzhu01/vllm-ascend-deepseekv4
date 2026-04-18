@@ -42,7 +42,6 @@ namespace {
     constexpr uint32_t WEIGHT_INDEX = 1;
     constexpr uint32_t WEIGHT2_INDEX = 2;
     constexpr uint32_t EXPERTID_INDEX = 3;
-    constexpr uint32_t ATTR_SWIGLU_LIMIT = 4;
     constexpr uint32_t BLOCK_NUM = 20;
     constexpr uint32_t SYSTEM_NEED_WORKSPACE = 16 * 1024 * 1024;
     constexpr uint64_t MB_SIZE = 1024 * 1024UL;
@@ -93,7 +92,6 @@ static ge::graphStatus DispatchFFNCombineCheckAttrAndSetTiling(gert::TilingConte
     auto maxOutputSizePtr = attrs->GetAttrPointer<int>(ATTR_MAX_OUTPUT_SIZE_INDEX);
     auto is_trans_b = attrs->GetAttrPointer<bool>(ATTR_IS_TRANS_B);
     auto weight_nz = attrs->GetAttrPointer<bool>(ATTR_WEIGHT_NZ);
-    auto swiglu_limit = attrs->GetAttrPointer<float>(ATTR_SWIGLU_LIMIT);
     OP_TILING_CHECK(groupPtr == nullptr || strlen(groupPtr) == 0,
     OP_LOGE(K_INNER_DEBUG, "group is invalid."), return GRAPH_FAILED);
 
@@ -105,7 +103,6 @@ static ge::graphStatus DispatchFFNCombineCheckAttrAndSetTiling(gert::TilingConte
     info.maxOutputSize = *maxOutputSizePtr;
     info.isTransposeB = *is_trans_b;
     info.isWeightNz = *weight_nz;
-    info.swigluLimit = swiglu_limit != nullptr ? *swiglu_limit : 0.0f;
 
     int64_t rankSize;
     (void)ge::HcomTopoInfo::Instance().GetGroupRankSize(groupPtr, rankSize);
@@ -113,7 +110,6 @@ static ge::graphStatus DispatchFFNCombineCheckAttrAndSetTiling(gert::TilingConte
 
     OP_LOGD(K_INNER_DEBUG, "maxOutputSize=%d ", info.maxOutputSize);
     OP_LOGD(K_INNER_DEBUG, "rankSize=%d ", info.worldSize);
-    OP_LOGD(K_INNER_DEBUG, "swigluLimit=%f ", info.swigluLimit);
 
     return ge::GRAPH_SUCCESS;
 }

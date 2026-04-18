@@ -136,7 +136,6 @@ public:
         uint32_t epilogueCoreNum;
         uint32_t epilogueGranularity;
         optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData;
-        float swigluLimit;
         //--------------
 
         // Methods
@@ -159,7 +158,7 @@ public:
             GM_ADDR moeInitRoutingQuantV2Offset_,
             GM_ADDR expertTokensBeforeCapacity_, GM_ADDR probs_,
             GM_ADDR ptrWorkspace_, GM_ADDR gmExpertTokenNums_, int32_t ubMoveNum_,
-            optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData_, float swigluLimit_
+            optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData_
         ) : problemShape(problemShape_),
             EP(EP_), listLen(listLen_), expertPerRank(expertPerRank_), maxOutputSize(maxOutputSize_),
             rank(rank_), rankSize(rankSize_), topK(topK_),
@@ -175,7 +174,7 @@ public:
             moeInitRoutingQuantV2Offset(moeInitRoutingQuantV2Offset_), 
             expertTokensBeforeCapacity(expertTokensBeforeCapacity_), probs(probs_),
             ptrWorkspace(ptrWorkspace_), ptrExpertTokenNums(gmExpertTokenNums_), ubMoveNum(ubMoveNum_),
-            moeInitRoutingQuantV2TilingData(moeInitRoutingQuantV2TilingData_), swigluLimit(swigluLimit_)
+            moeInitRoutingQuantV2TilingData(moeInitRoutingQuantV2TilingData_)
         {
         }
     };
@@ -861,8 +860,7 @@ private:
             LayoutC layoutC{dequantSum1, params.problemShape.n()};
             int64_t gmOffsetC = layoutC.GetOffset(offsetC);
             int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
-            blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
-                gmPerTokenScale2[rowStartThisCore], params.epilogueCoreNum, params.swigluLimit);
+            blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], params.epilogueCoreNum);
         }
         AscendC::SyncAll<true>();
         // Synchronization signal: SwiGLU notifies GMM2 [1]
@@ -880,8 +878,7 @@ private:
                 LayoutC layoutC{dequantLen, params.problemShape.n()};
                 int64_t gmOffsetC = layoutC.GetOffset(offsetC);
                 int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
-                blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
-                    gmPerTokenScale2[rowStartThisCore], coreNum, params.swigluLimit);
+                blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], coreNum);
             }
             AscendC::SyncAll<true>();
             // Synchronization signal: SwiGLU notifies GMM2 [2]
