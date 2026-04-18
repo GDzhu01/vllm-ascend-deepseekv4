@@ -188,6 +188,7 @@ std::tuple<at::Tensor&, at::Tensor&> dispatch_ffn_combine_meta(
     const at::Tensor& probs,
     c10::string_view group,
     int64_t max_output_size,
+    double swiglu_limit,
     at::Tensor& out,
     at::Tensor& expert_token_nums
 ) {
