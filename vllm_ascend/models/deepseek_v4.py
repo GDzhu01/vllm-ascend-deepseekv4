@@ -330,6 +330,7 @@ class DeepseekV4MoE(nn.Module):
             if self.is_fusion_moe_shared_experts_enabled else 0,
             hash=layer_idx < config.n_hash_layers and not is_draft_layer,
             tid2eid=self.gate.tid2eid)
+        self.experts.swiglu_limit = config.swiglu_limit
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -629,14 +630,12 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wo_b",
             return_bias=False,
         )
-        self.compress_ratio = config.compress_ratios[layer_idx]
-
-        if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 160000
-            rope_groups = ['default', f'c{self.compress_ratio}']
-        else:
-            config.rope_parameters['rope_theta'] = 10000
-            rope_groups = ['default']
+        self.compress_ratio = config.get_layer_compress_ratio(layer_idx)
+        rope_theta = config.get_rope_theta_for_compress_ratio(
+            self.compress_ratio)
+        config.rope_parameters['rope_theta'] = rope_theta
+        rope_groups = config.get_rope_groups_for_compress_ratio(
+            self.compress_ratio)
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
             layername=f'{prefix}.attn',
@@ -645,7 +644,7 @@ class DeepseekV4Attention(nn.Module):
             max_position_embeddings=max_position_embeddings,
             is_neox_style=False,
             scaling_factor=config.rope_parameters['factor'],
-            base=config.rope_parameters['rope_theta'],
+            base=rope_theta,
             beta_fast=config.rope_parameters['beta_fast'],
             beta_slow=config.rope_parameters['beta_slow'],
             rope_groups=rope_groups)
