@@ -317,13 +317,15 @@ class KVCacheRecvingThread(threading.Thread):
         side_channel_port: int,
         local_kv_caches_base_addr: list[int],
         block_len_per_addr: list[int],
+        block_stride_per_addr: list[int],
         addr_group_idx: list[int],
         mamba_ssm_size: tuple[int, int],
-        is_hma_required,
+        use_hybrid,
         has_mamba,
         hma_group_size,
         ready_event: threading.Event,
         vllm_config: VllmConfig,
+        kv_cache_config: KVCacheConfig,
         kv_caches: dict[str, Any],
         prefill_pp_layer_partition: str | None = None,
     ):
@@ -341,6 +343,7 @@ class KVCacheRecvingThread(threading.Thread):
         self.kv_caches_base_addr: dict[str, dict[int, list[int]]] = SizedDict()
         self.kv_caches_base_addr[local_engine_id][local_handshake_port] = local_kv_caches_base_addr
         self.block_len_per_addr = block_len_per_addr
+        self.block_stride_per_addr = block_stride_per_addr
         self.addr_group_idx = addr_group_idx
         self.hma_group_size = hma_group_size
         self.mamba_ssm_size = mamba_ssm_size
@@ -363,10 +366,14 @@ class KVCacheRecvingThread(threading.Thread):
         self.timeout = 1.0  # seconds
 
         self.vllm_config = vllm_config
+        self.kv_cache_config = kv_cache_config
         self.model_config = self.vllm_config.model_config
         self.use_mla = self.model_config.is_deepseek_mla
-        self.is_hma_required = is_hma_required
+        self.use_hybrid = use_hybrid
         self.has_mamba = has_mamba
+        self.kv_cache_specs = [
+            g.kv_cache_spec for g in kv_cache_config.kv_cache_groups 
+        ]
         self.block_size = self.vllm_config.cache_config.block_size
         self.num_layers = self.model_config.hf_text_config.num_hidden_layers
         self.pp_layer_indices = {
@@ -450,7 +457,7 @@ class KVCacheRecvingThread(threading.Thread):
 
         try:
             logger.debug(f"Starting to transfer KV cache for request {remote_request_id}.")
-            if not self.is_hma_required:
+            if not self.use_hybrid:
                 self._transfer_kv_cache(req_meta)
             else:
                 self._transfer_kv_cache_all_groups(req_meta)
@@ -516,10 +523,15 @@ class KVCacheRecvingThread(threading.Thread):
         req_start_time = time.perf_counter()
         src_list, dst_list, length_list = [], [], []
         for i in range(self.hma_group_size):
-            if not remote_block_ids:
+            if not remote_block_ids[i]:
                 continue
+            cur_remote_block_ids = remote_block_ids[i]
+            cur_local_block_ids = local_block_ids[i]
+            if not isinstance(self.kv_cache_specs[i], MambaSpec) and \
+                len(cur_local_block_ids) < len(cur_remote_block_ids):
+                cur_remote_block_ids = cur_remote_block_ids[-len(cur_local_block_ids):]
             grouped_remote_block_ids, grouped_local_block_ids = group_concurrent_contiguous(
-                remote_block_ids[i], local_block_ids[i]
+                cur_remote_block_ids, cur_local_block_ids
             )
             for k, (src_layer_base_addr, dst_layer_base_addr) in enumerate(
                 zip(local_kv_caches_base_addrs, remote_kv_caches_base_addrs)
@@ -527,9 +539,10 @@ class KVCacheRecvingThread(threading.Thread):
                 if self.addr_group_idx and i not in self.addr_group_idx[k]:
                     continue
                 block_len = self.block_len_per_addr[k]
+                block_stride = self.block_stride_per_addr[k]
                 for remote_block_id, local_block_id in zip(grouped_remote_block_ids, grouped_local_block_ids):
-                    src = src_layer_base_addr + local_block_id[0] * block_len
-                    dst = dst_layer_base_addr + remote_block_id[0] * block_len
+                    src = src_layer_base_addr + local_block_id[0] * block_stride
+                    dst = dst_layer_base_addr + remote_block_id[0] * block_stride
                     length = block_len * len(local_block_id)
                     src_list.append(src)
                     dst_list.append(dst)
@@ -1061,25 +1074,18 @@ class MooncakeConnectorScheduler:
         if len(block_ids) == 0 or not self.use_hybrid:
             # No blocks to clip eg Full prefix cache hit or not a hybrid model.
             return block_ids
-        # NOTE (NickLucche) This logic is currently handled at the connector level
-        # because offloading connectors might want to receive the whole sequence even
-        # for SWA groups. We will abstract this logic once the interface is more stable
         assert len(block_ids) == len(self.num_swa_blocks), (
             "Number of KV cache groups must match"
         )
         # For non-SWA groups, num_swa_blocks is 0 so we return all block_ids unchanged
-        new_block_ids = []
-        for i, blocks in enumerate(block_ids):
-            if self.num_swa_blocks[i] > 0:
-                clipped_block_ids = blocks[-self.num_swa_blocks[i] :]
-                nozero_block_ids = []
-                for blk_id in clipped_block_ids:
-                    if blk_id > 0:
-                        nozero_block_ids.append(blk_id)
-                new_block_ids.append(nozero_block_ids)
-            else:
-                new_block_ids.append(blocks)
-        return tuple(new_block_ids)
+        return tuple(
+            [
+                blocks[-self.num_swa_blocks[i] :]
+                if self.num_swa_blocks[i] > 0
+                else blocks
+                for i, blocks in enumerate(block_ids)
+            ]
+        )
 
     def _state_prefill_token_count(self, num_prompt_tokens: int) -> int:
         """D-side only. Returns N-1 for Mamba models since the decoder
@@ -1396,6 +1402,7 @@ class MooncakeConnectorWorker:
         self.kv_caches = kv_caches
         self.kv_caches_base_addr = []
         self.block_len_per_addr: list[int] = []
+        self.block_stride_per_addr: list[int] = []
         self.addr_group_idx: list[int] = []
         ptrs = []
         lengths = []
@@ -1442,18 +1449,11 @@ class MooncakeConnectorWorker:
             for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
                 share_tensor_addr = []
                 share_tensor_len = []
-                share_tensor_total_len = []
+                share_tensor_stride = []
                 cur_tensor_group_idx = []
                 for layer_name in kv_cache_tensor.shared_by:
                     cur_tensor_group_idx.extend(layer_group_idx[layer_name])
                     kv_cache_tuple = kv_caches[layer_name]
-                    # tensor_total_addrs = []
-                    # TODO: A5 check stride addr
-                    # for single_tensor in kv_cache_tuple:
-                    #     tensor_addr = single_tensor.data_ptr()
-                    #     if tensor_addr in share_tensor_addr:
-                    #         continue
-                    #     tensor_total_addrs.append(tensor_addr)
                     for single_tensor in kv_cache_tuple:
                         tensor_addr = single_tensor.data_ptr()
                         if tensor_addr in share_tensor_addr or tensor_addr in self.kv_caches_base_addr:
@@ -1463,28 +1463,14 @@ class MooncakeConnectorWorker:
                         assert tensor_total_size % self.num_blocks == 0, "Tensor size cannot divide by num_blocks. "
                         tensor_block_len = tensor_total_size // self.num_blocks
                         share_tensor_len.append(tensor_block_len)
-                        share_tensor_total_len.append(tensor_total_size)
-                if share_tensor_addr:
-                    cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
-                    self.kv_caches_base_addr.extend(share_tensor_addr)
-                    self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
-                    self.block_len_per_addr.extend(share_tensor_len)
-                    addr_desc = [[x[0], x[1]] for x in zip(share_tensor_addr, share_tensor_total_len)]
-                    addr_desc = sorted(addr_desc, key=lambda x: x[0])
-                    merged_addr = []
-                    cur_ptr, cur_len = addr_desc[0]
-                    cur_end = cur_ptr + cur_len
-                    for ptr, length in addr_desc[1:]:
-                        end = ptr + length
-                        if ptr <= cur_end:
-                            cur_end = max(cur_end, end)
-                        else:
-                            merged_addr.append(cur_ptr)
-                            cur_ptr, cur_end = ptr, end
-
-                    merged_addr.append(cur_ptr)
-                    ptrs.extend(merged_addr)
-                    lengths.extend([kv_cache_tensor.size] * len(merged_addr))
+                        share_tensor_stride.append(single_tensor.stride(0))
+                cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
+                self.kv_caches_base_addr.extend(share_tensor_addr)
+                self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
+                self.block_stride_per_addr.extend(share_tensor_stride)
+                self.block_len_per_addr.extend(share_tensor_len)
+                ptrs.append(min(share_tensor_addr))
+                lengths.append(kv_cache_tensor.size)
         else:
             raise TypeError("Mooncake connector does not support this type kv_cache now.")
 
@@ -1527,6 +1513,7 @@ class MooncakeConnectorWorker:
                 self.side_channel_port,
                 self.kv_caches_base_addr,
                 self.block_len_per_addr,
+                self.block_stride_per_addr,
                 self.addr_group_idx,
                 self._mamba_ssm_size,
                 self.use_hybrid,
@@ -1534,6 +1521,7 @@ class MooncakeConnectorWorker:
                 self.hma_group_size,
                 ready_event,
                 self.vllm_config,
+                self.kv_cache_config,
                 self.kv_caches,
                 self._prefill_pp_layer_partition,
             )

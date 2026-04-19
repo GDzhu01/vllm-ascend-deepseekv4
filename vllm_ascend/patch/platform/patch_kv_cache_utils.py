@@ -626,7 +626,7 @@ def  get_kv_cache_config_from_groups_multispec(
                                 used_layer_kv_cache_group_idx[layer_name].add(gid)
                         if group_used is True:
                             continue
-                        shared_by.extend([layer_name] * len(used_layer_kv_cache_group_idx[layer_name]))
+                        shared_by.append(layer_name)
                         used_group_idx_set.extend(layer_kv_cache_group_idx[layer_name])
                         if len(used_layer_kv_cache_group_idx[layer_name]) == len(layer_kv_cache_group_idx[layer_name]):
                             allocate_complete_layers.append(layer_name)
