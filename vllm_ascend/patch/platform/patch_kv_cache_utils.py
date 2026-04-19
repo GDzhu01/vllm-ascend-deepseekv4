@@ -235,10 +235,6 @@ def unify_kv_cache_spec_page_size_with_multi_groups(
                     new_kv_cache_spec_list[layer_name] = [layer_spec]
             else:
                 layer_page_size = layer_spec.page_size_bytes
-                print(f"{layer_name=}")
-                print(f"{max_page_size=}")
-                print(f"{layer_spec=}")
-                print(f"{layer_page_size=}")
                 if max_page_size % layer_page_size != 0:
                     raise NotImplementedError(
                         "The page size of the layer is not divisible by the "
