@@ -101,6 +101,7 @@ def quant_apply_mlp(
     scale_type: torch.dtype | None = None,
     per_token_scale_type: torch.dtype | None = None,
     use_bf16: bool = True,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     input_hidden_dtype = hidden_states.dtype
     use_gmm_swiglu_quant_fusion = use_mxfp_quant or (fusion and not dynamic_eplb)
@@ -161,6 +162,8 @@ def quant_apply_mlp(
             #     bias=None,
             #     use_mxfp_quant=use_mxfp_quant,
             # )
+            if swiglu_limit is None:
+                raise ValueError("swiglu_limit must be set for grouped_matmul_swiglu_quant_weight_nz.")
             hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                 x=hidden_states,
                 weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
@@ -168,7 +171,7 @@ def quant_apply_mlp(
                 weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
                 x_scale=pertoken_scale,
                 bias=None,
-                swiglu_limit=10
+                swiglu_limit=swiglu_limit,
             )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
@@ -275,6 +278,8 @@ def quant_apply_mlp(
             #     bias=bias1,
             #     use_mxfp_quant=use_mxfp_quant,
             # )
+            if swiglu_limit is None:
+                raise ValueError("swiglu_limit must be set for grouped_matmul_swiglu_quant_weight_nz.")
             hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                 x=hidden_states,
                 weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
@@ -282,7 +287,7 @@ def quant_apply_mlp(
                 weight_scale=_require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale"),
                 x_scale=pertoken_scale,
                 bias=bias1,
-                swiglu_limit=10.0
+                swiglu_limit=swiglu_limit,
             )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
@@ -458,4 +463,5 @@ def unified_apply_mlp(*, mlp_compute_input: MoEMlpComputeInput) -> torch.Tensor:
         scale_type=scale_type,
         per_token_scale_type=per_token_scale_type,
         use_bf16=use_bf16,
+        swiglu_limit=mlp_compute_input.swiglu_limit,
     )

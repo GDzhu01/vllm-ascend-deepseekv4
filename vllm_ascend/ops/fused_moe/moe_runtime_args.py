@@ -144,6 +144,7 @@ def build_fused_experts_input(
     w2_scale_bias: torch.Tensor | None = None,
     w1_offset: torch.Tensor | None = None,
     w2_offset: torch.Tensor | None = None,
+    swiglu_limit: float | None = None,
 ) -> MoEFusedExpertsInput:
     return MoEFusedExpertsInput(
         hidden_states=hidden_states,
@@ -172,6 +173,7 @@ def build_fused_experts_input(
         activation=activation,
         need_trans=need_trans,
         dynamic_eplb=dynamic_eplb,
+        swiglu_limit=swiglu_limit,
         quant=MoEQuantParams(
             quant_type=quant_type,
             comm_quant_mode=comm_quant_mode,
@@ -222,6 +224,7 @@ def build_mlp_compute_input(
         activation=fused_experts_input.activation,
         need_trans=fused_experts_input.need_trans,
         dynamic_eplb=fused_experts_input.dynamic_eplb,
+        swiglu_limit=fused_experts_input.swiglu_limit,
     )
 
 
