@@ -1,14 +1,67 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import warnings
+
 from transformers import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
+
+DEFAULT_COMPRESS_RATIOS = [
+    1,
+    1,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+    128,
+    4,
+]
+DEFAULT_ROPE_THETA = 10000.0
+DEFAULT_COMPRESS_ROPE_THETA = 160000.0
+SUPPORTED_COMPRESS_RATIOS = frozenset({0, 1, 4, 128})
 
 
 class DeepseekV4Config(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`DeepseekV3Model`]. It is used to instantiate an DeepSeek
-    model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
-    defaults will yield a similar configuration to that of the DeepSeek-V3.
+    This is the configuration class to store the configuration of a
+    [`DeepseekV3Model`]. It is used to instantiate an DeepSeek model according
+    to the specified arguments, defining the model architecture.
+    Instantiating a configuration with the defaults will yield a similar
+    configuration to that of the DeepSeek-V3.
     e.g. [bzantium/tiny-deepseek-v3](https://huggingface.co/bzantium/tiny-deepseek-v3)
     Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
     documentation from [`PretrainedConfig`] for more information.
@@ -55,7 +108,8 @@ class DeepseekV4Config(PretrainedConfig):
         n_group (`int`, *optional*, defaults to 8):
             Number of groups for routed experts.
         topk_group (`int`, *optional*, defaults to 4):
-            Number of selected groups for each token(for each token, ensuring the selected experts is only within `topk_group` groups).
+            Number of selected groups for each token(for each token, ensuring
+            the selected experts is only within `topk_group` groups).
         num_experts_per_tok (`int`, *optional*, defaults to 8):
             Number of selected experts, None means dense model.
         first_k_dense_replace (`int`, *optional*, defaults to 3):
@@ -117,8 +171,7 @@ class DeepseekV4Config(PretrainedConfig):
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",
         "layers.*.mlp.experts.*.up_proj": "local_colwise",
         "layers.*.mlp.experts.*.down_proj": "local_rowwise",
-        "layers.*.mlp.experts.*":
-        "local",  # each expert is wrapped in a module list
+        "layers.*.mlp.experts.*": "local",  # each expert is wrapped in a module list
         "layers.*.mlp.shared_experts.gate_proj": "local_colwise",
         "layers.*.mlp.shared_experts.up_proj": "local_colwise",
         "layers.*.mlp.shared_experts.down_proj": "local_rowwise",
@@ -126,14 +179,54 @@ class DeepseekV4Config(PretrainedConfig):
         "layers.*.mlp.gate_proj": "local_colwise",
         "layers.*.mlp.up_proj": "local_colwise",
         "layers.*.mlp.down_proj": "local_rowwise",
-        "layers.*.mlp":
-        "gather",  # This is the only moment where results are gathered
+        "layers.*.mlp": "gather",  # This is the only moment where results are gathered
     }
     base_model_pp_plan = {
         "embed_tokens": (["input_ids"], ["inputs_embeds"]),
         "layers": (["hidden_states", "attention_mask"], ["hidden_states"]),
         "norm": (["hidden_states"], ["hidden_states"]),
     }
+
+    @staticmethod
+    def _normalize_compress_ratios(
+        compress_ratios: list[int],
+        num_hidden_layers: int,
+    ) -> list[int]:
+        normalized = list(compress_ratios)
+
+        if len(normalized) < num_hidden_layers:
+            warnings.warn(
+                "compress_ratios provides fewer entries than num_hidden_layers; "
+                f"got {len(normalized)} values for {num_hidden_layers} hidden "
+                "layers. The remaining layers will be padded with 0.",
+                stacklevel=2,
+            )
+            normalized.extend([0] * (num_hidden_layers - len(normalized)))
+        elif len(normalized) > num_hidden_layers:
+            extra_count = len(normalized) - num_hidden_layers
+            warnings.warn(
+                "compress_ratios provides more entries than num_hidden_layers; "
+                f"got {len(normalized)} values for {num_hidden_layers} hidden "
+                "layers. The trailing "
+                f"{extra_count} value(s) will be preserved as "
+                "mtp_compress_ratios. TODO: MTP compress is not implemented "
+                "yet.",
+                stacklevel=2,
+            )
+
+        invalid_ratios = sorted(set(normalized) - SUPPORTED_COMPRESS_RATIOS)
+        if invalid_ratios:
+            raise ValueError(
+                "compress_ratios contains unsupported values "
+                f"{invalid_ratios}. Supported values are "
+                f"{sorted(SUPPORTED_COMPRESS_RATIOS)}."
+            )
+
+        return normalized
+
+    @staticmethod
+    def _to_runtime_compress_ratio(compress_ratio: int) -> int:
+        return 1 if compress_ratio == 0 else compress_ratio
 
     def __init__(
         self,
@@ -162,13 +255,10 @@ class DeepseekV4Config(PretrainedConfig):
         o_groups=8,
         o_lora_rank=1024,
         window_size=128,
-        compress_ratios=[
-            1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
-            128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
-            128, 4, 128, 4, 128, 4, 128, 4, 128, 4
-        ],
+        compress_ratios=None,
+        swiglu_limit=None,
         # yarn
-        compress_rope_theta=40000,
+        compress_rope_theta=DEFAULT_COMPRESS_ROPE_THETA,
         # original_seq_len=65536,
         # rope_theta=10000,
         # rope_factor=4,
@@ -177,9 +267,8 @@ class DeepseekV4Config(PretrainedConfig):
         # rope_theta=10000.0,
         # rope_scaling=None,
         max_seq_len=65536,
-        rope_theta=10000.0,
+        rope_theta=DEFAULT_ROPE_THETA,
         rope_scaling=None,
-
         # index
         index_n_heads=64,
         index_head_dim=128,
@@ -190,7 +279,6 @@ class DeepseekV4Config(PretrainedConfig):
         hc_eps: float = 1e-6,
         dtype="bfloat16",
         scale_fmt="ue8m0",
-
         #
         pad_token_id=0,
         bos_token_id=1,
@@ -227,7 +315,11 @@ class DeepseekV4Config(PretrainedConfig):
         self.o_groups = o_groups
         self.o_lora_rank = o_lora_rank
         self.window_size = window_size
-        self.compress_ratios = [1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4]
+        self.compress_ratios = self._normalize_compress_ratios(
+            DEFAULT_COMPRESS_RATIOS if compress_ratios is None else compress_ratios,
+            self.num_hidden_layers,
+        )
+        self.swiglu_limit = float(swiglu_limit) if swiglu_limit is not None else None
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
 
@@ -253,7 +345,7 @@ class DeepseekV4Config(PretrainedConfig):
         self.attention_bias = False
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = 0.02
-        self.hidden_act = 'silu'
+        self.hidden_act = "silu"
         self.norm_topk_prob = norm_topk_prob
 
         self.rope_theta = rope_theta
@@ -277,3 +369,23 @@ class DeepseekV4Config(PretrainedConfig):
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
+
+    @property
+    def mtp_compress_ratios(self) -> list[int]:
+        # TODO: Wire MTP compress ratios into the draft-layer runtime once
+        # DeepSeek-V4 MTP compress support is implemented.
+        return self.compress_ratios[self.num_hidden_layers :]
+
+    def get_layer_compress_ratio(self, layer_idx: int) -> int:
+        return self._to_runtime_compress_ratio(self.compress_ratios[layer_idx])
+
+    def get_rope_theta_for_compress_ratio(self, compress_ratio: int) -> float:
+        return self.compress_rope_theta if compress_ratio > 1 else self.rope_theta
+
+    def get_layer_rope_theta(self, layer_idx: int) -> float:
+        return self.get_rope_theta_for_compress_ratio(self.get_layer_compress_ratio(layer_idx))
+
+    def get_rope_groups_for_compress_ratio(self, compress_ratio: int) -> list[str]:
+        if compress_ratio > 1:
+            return ["default", f"c{compress_ratio}"]
+        return ["default"]

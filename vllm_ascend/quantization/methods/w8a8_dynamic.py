@@ -271,6 +271,7 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
                 activation=activation,
                 w1_scale=w1_scale,
                 w2_scale=w2_scale,
+                swiglu_limit=getattr(layer, "swiglu_limit", None),
             )
         )
         if zero_expert_num > 0 and zero_expert_type is not None:

@@ -1,9 +1,12 @@
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
 import torch
 
+import vllm_ascend.ops.fused_moe.moe_mlp as moe_mlp_mod
+from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.ops.fused_moe.moe_mlp import cumsum_group_list, unified_apply_mlp
 from vllm_ascend.ops.fused_moe.moe_runtime_args import (
     MoEMlpComputeInput,
@@ -125,6 +128,48 @@ class TestUnifiedApplyMlpRequest(unittest.TestCase):
         self.assertTrue(quant_kwargs["dynamic_eplb"])
         self.assertFalse(quant_kwargs["use_bf16"])
         mock_unquant.assert_not_called()
+
+    def test_quant_apply_mlp_preserves_legacy_fused_gmm_swiglu_limit(self):
+        hidden_states = torch.randn(2, 8)
+        scale = torch.randn(2, 1)
+        group_list = torch.tensor([2], dtype=torch.int64)
+        expected = torch.randn(2, 8)
+
+        for comm_type in (MoECommType.MC2, None):
+            with self.subTest(comm_type=comm_type):
+                with (
+                    patch.object(
+                        type(moe_mlp_mod._EXTRA_CTX),
+                        "_ctx",
+                        return_value=SimpleNamespace(moe_comm_type=comm_type),
+                    ),
+                    patch("vllm_ascend.ops.fused_moe.moe_mlp.get_weight_prefetch_method", return_value=None),
+                    patch("vllm_ascend.ops.fused_moe.moe_mlp.dispose_tensor"),
+                    patch(
+                        "vllm_ascend.ops.fused_moe.moe_mlp.DeviceOperator.npu_grouped_matmul_gmm2",
+                        return_value=expected,
+                    ),
+                    patch.object(
+                        torch.ops._C_ascend,
+                        "grouped_matmul_swiglu_quant_weight_nz",
+                        return_value=(hidden_states, scale, None),
+                        create=True,
+                    ) as mock_grouped_matmul,
+                ):
+                    output = moe_mlp_mod.quant_apply_mlp(
+                        hidden_states=hidden_states,
+                        w1=torch.randn(16, 8),
+                        w1_scale=torch.randn(1),
+                        w2=torch.randn(8, 8),
+                        w2_scale=torch.randn(1),
+                        group_list=group_list,
+                        dynamic_scale=scale,
+                        fusion=True,
+                    )
+
+                self.assertTrue(output is expected)
+                mock_grouped_matmul.assert_called_once()
+                self.assertEqual(mock_grouped_matmul.call_args.kwargs["swiglu_limit"], 10.0)
 
 
 if __name__ == "__main__":

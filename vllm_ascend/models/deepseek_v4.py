@@ -28,7 +28,6 @@ import math
 import typing
 from collections.abc import Callable, Iterable
 from itertools import islice
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -38,31 +37,36 @@ from transformers import DeepseekV2Config, DeepseekV3Config
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, ParallelConfig, VllmConfig
-from vllm.distributed import (get_ep_group, get_pp_group,
-                              get_tensor_model_parallel_rank,
-                              get_tensor_model_parallel_world_size,
-                              tensor_model_parallel_all_gather)
+from vllm.distributed import (
+    get_ep_group,
+    get_pp_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+    tensor_model_parallel_all_gather,
+)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
 from vllm.model_executor.layers.layernorm import RMSNorm
-from vllm.model_executor.layers.linear import (ColumnParallelLinear,
-                                               MergedColumnParallelLinear,
-                                               ReplicatedLinear,
-                                               RowParallelLinear)
+from vllm.model_executor.layers.linear import (
+    ColumnParallelLinear,
+    MergedColumnParallelLinear,
+    ReplicatedLinear,
+    RowParallelLinear,
+)
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.vocab_parallel_embedding import (
-    ParallelLMHead, VocabParallelEmbedding)
-from vllm.model_executor.model_loader.weight_utils import (
-    default_weight_loader, maybe_remap_kv_scale_name)
-from vllm.model_executor.models.interfaces import (MixtureOfExperts,
-                                                   SupportsEagle, SupportsLoRA,
-                                                   SupportsPP)
+from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead, VocabParallelEmbedding
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
+from vllm.model_executor.models.interfaces import MixtureOfExperts, SupportsEagle, SupportsLoRA, SupportsPP
 from vllm.model_executor.models.utils import (
-    PPMissingLayer, is_pp_missing_parameter,
-    make_empty_intermediate_tensors_factory, make_layers, maybe_prefix,
-    sequence_parallel_chunk)
+    PPMissingLayer,
+    is_pp_missing_parameter,
+    make_empty_intermediate_tensors_factory,
+    make_layers,
+    maybe_prefix,
+    sequence_parallel_chunk,
+)
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
@@ -77,6 +81,7 @@ logger = init_logger(__name__)
 
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
     from scipy.linalg import hadamard
+
     if hadamard is None:
         raise ImportError("Please install scipy")
     x_shape = x.shape
@@ -86,11 +91,7 @@ def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
     dim_padded = 2**log_dim
     if dim != dim_padded:
         x = F.pad(x, (0, dim_padded - dim))
-    out = F.linear(
-        x,
-        torch.tensor(hadamard(dim_padded, dtype=float),
-                     dtype=x.dtype,
-                     device=x.device))
+    out = F.linear(x, torch.tensor(hadamard(dim_padded, dtype=float), dtype=x.dtype, device=x.device))
     out = out * scale
     return out[..., :dim].reshape(*x_shape)
 
@@ -100,8 +101,7 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     return hadamard_transform_ref(x, scale=hidden_size**-0.5)
 
 
-def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor,
-                             beta_fast, beta_slow) -> torch.Tensor:
+def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor, beta_fast, beta_slow) -> torch.Tensor:
     """
     Precomputes frequency-based complex exponential values for rotary positional embeddings.
 
@@ -113,8 +113,7 @@ def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor,
     """
 
     def find_correction_dim(num_rotations, dim, base, max_seq_len):
-        return dim * math.log(
-            max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
+        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
 
     def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
         low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
@@ -124,15 +123,13 @@ def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor,
     def linear_ramp_factor(min, max, dim):
         if min == max:
             max += 0.001
-        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max -
-                                                                        min)
+        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-    freqs = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
     if original_seq_len > 0:
-        low, high = find_correction_range(beta_fast, beta_slow, dim, base,
-                                          original_seq_len)
+        low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_seq_len)
         smooth = 1 - linear_ramp_factor(low, high, dim // 2)
         freqs = freqs / factor * (1 - smooth) + freqs * smooth
 
@@ -142,9 +139,7 @@ def precompute_freqs_cis_cpu(dim, seqlen, original_seq_len, base, factor,
     return freqs_cis
 
 
-def apply_rotary_emb(x: torch.Tensor,
-                     freqs_cis: torch.Tensor,
-                     inverse: bool = False) -> torch.Tensor:
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
     """
     Applies rotary positional embeddings to the input tensor.
 
@@ -168,16 +163,13 @@ def apply_rotary_emb(x: torch.Tensor,
     return y
 
 
-def get_spec_layer_idx_from_weight_name(config: DeepseekV2Config
-                                        | DeepseekV3Config,
-                                        weight_name: str) -> int | None:
+def get_spec_layer_idx_from_weight_name(config: DeepseekV2Config | DeepseekV3Config, weight_name: str) -> int | None:
     if weight_name.startswith("mtp."):
         return 0
     return None
 
 
 class DeepseekV2MLP(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -195,22 +187,24 @@ class DeepseekV2MLP(nn.Module):
         # replicated and no collective ops are needed.
         # Otherwise we use standard TP with an allreduce at the end.
         self.gate_up_proj = MergedColumnParallelLinear(
-            hidden_size, [intermediate_size] * 2,
+            hidden_size,
+            [intermediate_size] * 2,
             bias=False,
             quant_config=quant_config,
             disable_tp=is_sequence_parallel,
-            prefix=f"{prefix}.gate_up_proj")
-        self.down_proj = RowParallelLinear(intermediate_size,
-                                           hidden_size,
-                                           bias=False,
-                                           quant_config=quant_config,
-                                           reduce_results=reduce_results,
-                                           disable_tp=is_sequence_parallel,
-                                           prefix=f"{prefix}.down_proj")
+            prefix=f"{prefix}.gate_up_proj",
+        )
+        self.down_proj = RowParallelLinear(
+            intermediate_size,
+            hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            reduce_results=reduce_results,
+            disable_tp=is_sequence_parallel,
+            prefix=f"{prefix}.down_proj",
+        )
         if hidden_act != "silu":
-            raise ValueError(
-                f"Unsupported activation: {hidden_act}. Only silu is supported for now."
-            )
+            raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
@@ -221,7 +215,6 @@ class DeepseekV2MLP(nn.Module):
 
 
 class DeepseekV4MoE(nn.Module):
-
     def __init__(
         self,
         config: DeepseekV2Config | DeepseekV3Config | DeepseekV4Config,
@@ -235,8 +228,7 @@ class DeepseekV4MoE(nn.Module):
         self.tp_rank = get_tensor_model_parallel_rank()
         layer_idx = int(prefix.split(sep=".")[-2])
         self.layer_idx = layer_idx
-        self.routed_scaling_factor = getattr(config, "routed_scaling_factor",
-                                             1.5)
+        self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.5)
 
         self.ep_group = get_ep_group().device_group
         self.ep_rank = get_ep_group().rank_in_group
@@ -247,14 +239,11 @@ class DeepseekV4MoE(nn.Module):
         self.is_sequence_parallel = parallel_config.use_sequence_parallel_moe
 
         if config.hidden_act != "silu":
-            raise ValueError(f"Unsupported activation: {config.hidden_act}. "
-                             "Only silu is supported for now.")
+            raise ValueError(f"Unsupported activation: {config.hidden_act}. Only silu is supported for now.")
 
-        self.gate = ReplicatedLinear(config.hidden_size,
-                                     config.n_routed_experts,
-                                     bias=False,
-                                     quant_config=None,
-                                     prefix=f"{prefix}.gate")
+        self.gate = ReplicatedLinear(
+            config.hidden_size, config.n_routed_experts, bias=False, quant_config=None, prefix=f"{prefix}.gate"
+        )
 
         # Load balancing settings.
         eplb_config = parallel_config.eplb_config
@@ -266,14 +255,11 @@ class DeepseekV4MoE(nn.Module):
         self.n_local_physical_experts = self.n_physical_experts // self.ep_size
 
         self.physical_expert_start = self.ep_rank * self.n_local_physical_experts
-        self.physical_expert_end = (self.physical_expert_start +
-                                    self.n_local_physical_experts)
+        self.physical_expert_end = self.physical_expert_start + self.n_local_physical_experts
 
         self.is_rocm_aiter_moe_enabled = rocm_aiter_ops.is_fused_moe_enabled()
-        self.is_fusion_moe_shared_experts_enabled = (
-            rocm_aiter_ops.is_fusion_moe_shared_experts_enabled())
-        self.is_fusion_moe_shared_experts_enabled = getattr(
-            get_ascend_config(), "mix_placement", False)
+        self.is_fusion_moe_shared_experts_enabled = rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()
+        self.is_fusion_moe_shared_experts_enabled = getattr(get_ascend_config(), "mix_placement", False)
         if config.n_shared_experts is None or self.is_fusion_moe_shared_experts_enabled:
             self.shared_experts = None
         else:
@@ -291,16 +277,13 @@ class DeepseekV4MoE(nn.Module):
 
         self.hash = layer_idx < config.n_hash_layers and not is_draft_layer
         if self.hash:
-            self.gate.tid2eid = nn.Parameter(torch.empty(
-                config.vocab_size,
-                config.n_activated_experts,
-                dtype=torch.int32),
-                                             requires_grad=False)
+            self.gate.tid2eid = nn.Parameter(
+                torch.empty(config.vocab_size, config.n_activated_experts, dtype=torch.int32), requires_grad=False
+            )
             self.gate.e_score_correction_bias = None
         else:
             self.gate.tid2eid = None
-            self.gate.e_score_correction_bias = nn.Parameter(
-                torch.empty(config.n_routed_experts, dtype=torch.float32))
+            self.gate.e_score_correction_bias = nn.Parameter(torch.empty(config.n_routed_experts, dtype=torch.float32))
 
         self.experts = SharedFusedMoE(
             shared_experts=self.shared_experts,
@@ -320,20 +303,20 @@ class DeepseekV4MoE(nn.Module):
             # we do scaling outside, set factor to 1.0 to avoid double mul
             # aiter applies routed_scaling_factor internally
             # routed_scaling_factor=1.5,
-            routed_scaling_factor=1.0 if not self.is_rocm_aiter_moe_enabled
-            else self.routed_scaling_factor,
+            routed_scaling_factor=1.0 if not self.is_rocm_aiter_moe_enabled else self.routed_scaling_factor,
             e_score_correction_bias=self.gate.e_score_correction_bias,
             enable_eplb=self.enable_eplb,
             num_redundant_experts=self.n_redundant_experts,
             is_sequence_parallel=self.is_sequence_parallel,
-            n_shared_experts=config.n_shared_experts
-            if self.is_fusion_moe_shared_experts_enabled else 0,
+            n_shared_experts=config.n_shared_experts if self.is_fusion_moe_shared_experts_enabled else 0,
             hash=layer_idx < config.n_hash_layers and not is_draft_layer,
-            tid2eid=self.gate.tid2eid)
+            tid2eid=self.gate.tid2eid,
+        )
+        swiglu_limit = getattr(config, "swiglu_limit", None)
+        if swiglu_limit is not None:
+            self.experts.swiglu_limit = float(swiglu_limit)
 
-    def forward(self,
-                hidden_states: torch.Tensor,
-                input_ids=None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, input_ids=None) -> torch.Tensor:
 
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -347,13 +330,11 @@ class DeepseekV4MoE(nn.Module):
 
         if self.experts.is_internal_router:
             # In this case, the gate/router runs inside the FusedMoE class
-            fused_moe_out = self.experts(hidden_states=hidden_states,
-                                         router_logits=hidden_states)
+            fused_moe_out = self.experts(hidden_states=hidden_states, router_logits=hidden_states)
         else:
             # router_logits: (num_tokens, n_experts)
             router_logits = F.linear(hidden_states.float(), self.gate.weight)
-            fused_moe_out = self.experts(hidden_states=hidden_states,
-                                         router_logits=router_logits)
+            fused_moe_out = self.experts(hidden_states=hidden_states, router_logits=router_logits)
 
         shared_output, final_hidden_states = fused_moe_out
         if self.shared_experts is None:
@@ -366,23 +347,19 @@ class DeepseekV4MoE(nn.Module):
                 if self.shared_experts is not None:
                     assert shared_output is not None
                     final_hidden_states = muls_add_triton(
-                        final_hidden_states, shared_output,
-                        self.routed_scaling_factor)
+                        final_hidden_states, shared_output, self.routed_scaling_factor
+                    )
                 else:
                     final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = muls_add_triton(
-                shared_output, final_hidden_states,
-                1.0 / self.routed_scaling_factor)
+            final_hidden_states = muls_add_triton(shared_output, final_hidden_states, 1.0 / self.routed_scaling_factor)
 
         if self.is_sequence_parallel:
-            final_hidden_states = tensor_model_parallel_all_gather(
-                final_hidden_states, 0)
+            final_hidden_states = tensor_model_parallel_all_gather(final_hidden_states, 0)
             final_hidden_states = final_hidden_states[:num_tokens]
         elif self.tp_size > 1:
-            final_hidden_states = self.experts.maybe_all_reduce_tensor_model_parallel(
-                final_hidden_states)
+            final_hidden_states = self.experts.maybe_all_reduce_tensor_model_parallel(final_hidden_states)
 
         return final_hidden_states.view(num_tokens, hidden_dim)
 
@@ -395,17 +372,15 @@ def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
     return 0.1 * mscale * math.log(scale) + 1.0
 
 
-def _get_llama_4_scaling(original_max_position_embeddings: int,
-                         scaling_beta: float,
-                         positions: torch.Tensor) -> torch.Tensor:
-    scaling = 1 + scaling_beta * torch.log(
-        1 + torch.floor(positions / original_max_position_embeddings))
+def _get_llama_4_scaling(
+    original_max_position_embeddings: int, scaling_beta: float, positions: torch.Tensor
+) -> torch.Tensor:
+    scaling = 1 + scaling_beta * torch.log(1 + torch.floor(positions / original_max_position_embeddings))
     # Broadcast over num_heads and head_dim
     return scaling[..., None, None]
 
 
 class Indexer(nn.Module):
-
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -451,15 +426,14 @@ class Indexer(nn.Module):
             True,
             quant_config=quant_config,
             cache_config=cache_config,
-            prefix=f"{prefix}.compressor")  #Compressor(4, 128)
+            prefix=f"{prefix}.compressor",
+        )  # Compressor(4, 128)
 
-    def forward(self, hidden_states: torch.Tensor, qr: torch.Tensor, positions,
-                rotary_emb) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, qr: torch.Tensor, positions, rotary_emb) -> torch.Tensor:
         return
 
 
 class Compressor(nn.Module):
-
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -484,10 +458,7 @@ class Compressor(nn.Module):
         self.norm_eps = config.norm_eps
         coff = 1 + self.overlap
 
-        self.ape = nn.Parameter(
-            torch.empty(compress_ratio,
-                        coff * self.head_dim,
-                        dtype=torch.float32))
+        self.ape = nn.Parameter(torch.empty(compress_ratio, coff * self.head_dim, dtype=torch.float32))
         self.wkv = ReplicatedLinear(
             self.dim,
             coff * self.head_dim,
@@ -541,11 +512,9 @@ class Compressor(nn.Module):
         else:
             tnd_layout = 0
             _, num_tokens, num_heads, rotary_dim = x.shape
-        x_rot = torch_npu.npu_rotary_mul(x.reshape(
-            num_tokens, num_heads, 1, rotary_dim).to(torch.float32),
-                                         cos,
-                                         sin,
-                                         rotary_mode="interleave")
+        x_rot = torch_npu.npu_rotary_mul(
+            x.reshape(num_tokens, num_heads, 1, rotary_dim).to(torch.float32), cos, sin, rotary_mode="interleave"
+        )
         if tnd_layout:
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
         else:
@@ -554,7 +523,6 @@ class Compressor(nn.Module):
 
 
 class DeepseekV4Attention(nn.Module):
-
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -584,8 +552,7 @@ class DeepseekV4Attention(nn.Module):
         self.norm_eps = config.norm_eps
         self.scale = self.head_dim**-0.5
 
-        self.attn_sink = nn.Parameter(
-            torch.empty(self.n_local_heads, dtype=torch.float32))
+        self.attn_sink = nn.Parameter(torch.empty(self.n_local_heads, dtype=torch.float32))
         self.wq_a = ReplicatedLinear(
             self.dim,
             self.q_lora_rank,
@@ -629,29 +596,26 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wo_b",
             return_bias=False,
         )
-        self.compress_ratio = config.compress_ratios[layer_idx]
-
-        if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 160000
-            rope_groups = ['default', f'c{self.compress_ratio}']
-        else:
-            config.rope_parameters['rope_theta'] = 10000
-            rope_groups = ['default']
+        self.compress_ratio = config.get_layer_compress_ratio(layer_idx)
+        rope_theta = config.get_rope_theta_for_compress_ratio(self.compress_ratio)
+        config.rope_parameters["rope_theta"] = rope_theta
+        rope_groups = config.get_rope_groups_for_compress_ratio(self.compress_ratio)
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
-            layername=f'{prefix}.attn',
+            layername=f"{prefix}.attn",
             head_size=self.rope_head_dim,
             rotary_dim=self.rope_head_dim,
             max_position_embeddings=max_position_embeddings,
             is_neox_style=False,
-            scaling_factor=config.rope_parameters['factor'],
-            base=config.rope_parameters['rope_theta'],
-            beta_fast=config.rope_parameters['beta_fast'],
-            beta_slow=config.rope_parameters['beta_slow'],
-            rope_groups=rope_groups)
+            scaling_factor=config.rope_parameters["factor"],
+            base=rope_theta,
+            beta_fast=config.rope_parameters["beta_fast"],
+            beta_slow=config.rope_parameters["beta_slow"],
+            rope_groups=rope_groups,
+        )
 
-        self.compressor: Optional[Compressor] = None
-        self.indexer: Optional[Indexer] = None
+        self.compressor: Compressor | None = None
+        self.indexer: Indexer | None = None
 
         if self.compress_ratio > 1:
             self.compressor = Compressor(
@@ -706,7 +670,7 @@ class DeepseekV4Attention(nn.Module):
             cache_config=cache_config,
             quant_config=quant_config,
             # prefix=f'{prefix}.attn',
-            prefix=f'{prefix}',
+            prefix=f"{prefix}",
         )
 
     def forward(
@@ -719,7 +683,6 @@ class DeepseekV4Attention(nn.Module):
 
 
 class DeepseekV2DecoderLayer(nn.Module):
-
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -737,8 +700,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         parallel_config = vllm_config.parallel_config
 
         self.hidden_size = config.hidden_size
-        max_position_embeddings = getattr(config, "max_position_embeddings",
-                                          8192)
+        max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
         # DecoderLayers are created with `make_layers` which passes the prefix
         # with the layer's index.
         layer_idx = int(prefix.split(sep=".")[-1])
@@ -765,63 +727,47 @@ class DeepseekV2DecoderLayer(nn.Module):
             is_draft_layer=is_draft_layer,
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=self.norm_eps)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                eps=self.norm_eps)
-        self.routed_scaling_factor = getattr(config, "routed_scaling_factor",
-                                             1.0)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=self.norm_eps)
+        self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
         self.hc_mult = hc_mult = config.hc_mult
         self.hc_sinkhorn_iters = config.hc_sinkhorn_iters
         self.hc_eps = config.hc_eps
         mix_hc = (2 + hc_mult) * hc_mult
         hc_dim = hc_mult * config.hidden_size
-        self.hc_attn_fn = nn.Parameter(
-            torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_ffn_fn = nn.Parameter(
-            torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_attn_base = nn.Parameter(
-            torch.empty(mix_hc, dtype=torch.float32))
-        self.hc_ffn_base = nn.Parameter(
-            torch.empty(mix_hc, dtype=torch.float32))
+        self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
+        self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
+        self.hc_attn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
+        self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
         self.hc_attn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
         self.hc_ffn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
 
-    def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor,
-               hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_pre(x, hc_fn, hc_scale, hc_base,
-                                           self.hc_mult,
-                                           self.hc_sinkhorn_iters,
-                                           self.norm_eps, self.hc_eps)
+    def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
+        y = torch.ops._C_ascend.npu_hc_pre(
+            x, hc_fn, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.norm_eps, self.hc_eps
+        )
         return y
 
-    def hc_post(self, x: torch.Tensor, residual: torch.Tensor,
-                post: torch.Tensor, comb: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_post(x.unsqueeze(dim=0),
-                                            residual.unsqueeze(dim=0),
-                                            post.unsqueeze(dim=0),
-                                            comb.unsqueeze(dim=0))
+    def hc_post(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor, comb: torch.Tensor):
+        y = torch.ops._C_ascend.npu_hc_post(
+            x.unsqueeze(dim=0), residual.unsqueeze(dim=0), post.unsqueeze(dim=0), comb.unsqueeze(dim=0)
+        )
         return y.squeeze(dim=0)
 
-    def forward(self,
-                positions: torch.Tensor,
-                hidden_states: torch.Tensor,
-                residual: torch.Tensor | None,
-                llama_4_scaling: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        residual: torch.Tensor | None,
+        llama_4_scaling: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         residual = hidden_states.clone()
-        hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn,
-                                                self.hc_attn_scale,
-                                                self.hc_attn_base)
+        hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
         hidden_states = self.input_layernorm(hidden_states)
-        attn_kwargs = {
-            "positions": positions,
-            "hidden_states": hidden_states,
-            "llama_4_scaling": llama_4_scaling
-        }
+        attn_kwargs = {"positions": positions, "hidden_states": hidden_states, "llama_4_scaling": llama_4_scaling}
         hidden_states = self.self_attn(**attn_kwargs)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
         residual = hidden_states.clone()
-        hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn,
-                                                self.hc_ffn_scale,
-                                                self.hc_ffn_base)
+        hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
@@ -865,8 +811,7 @@ class DeepseekV4Model(nn.Module):
             self.embed_tokens = PPMissingLayer()
         self.start_layer, self.end_layer, self.layers = make_layers(
             config.num_hidden_layers,
-            lambda prefix: DeepseekV2DecoderLayer(
-                vllm_config, prefix, topk_indices_buffer=topk_indices_buffer),
+            lambda prefix: DeepseekV2DecoderLayer(vllm_config, prefix, topk_indices_buffer=topk_indices_buffer),
             prefix=f"{prefix}.layers",
         )
 
@@ -875,24 +820,22 @@ class DeepseekV4Model(nn.Module):
         else:
             self.norm = PPMissingLayer()
         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
-            ["hidden_states", "residual"], config.hidden_size)
+            ["hidden_states", "residual"], config.hidden_size
+        )
 
         self.norm_eps = config.norm_eps
         self.hc_eps = config.hc_eps
         self.hc_mult = hc_mult = config.hc_mult
         hc_dim = hc_mult * config.hidden_size
 
-        self.hc_head_fn = nn.Parameter(
-            torch.empty(hc_mult, hc_dim, dtype=torch.float32))
-        self.hc_head_base = nn.Parameter(
-            torch.empty(hc_mult, dtype=torch.float32))
+        self.hc_head_fn = nn.Parameter(torch.empty(hc_mult, hc_dim, dtype=torch.float32))
+        self.hc_head_base = nn.Parameter(torch.empty(hc_mult, dtype=torch.float32))
         self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
-    def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor,
-                hc_scale: torch.Tensor, hc_base: torch.Tensor):
+    def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor, hc_scale: torch.Tensor, hc_base: torch.Tensor):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(1).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
@@ -924,26 +867,19 @@ class DeepseekV4Model(nn.Module):
         llama_4_scaling: torch.Tensor | None
         if llama_4_scaling_config is not None:
             llama_4_scaling = _get_llama_4_scaling(
-                original_max_position_embeddings=llama_4_scaling_config[
-                    "original_max_position_embeddings"],
+                original_max_position_embeddings=llama_4_scaling_config["original_max_position_embeddings"],
                 scaling_beta=llama_4_scaling_config["beta"],
                 positions=positions,
             )
         else:
             llama_4_scaling = None
 
-        hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult,
-                                                          1)  #(b,s, c, h)
+        hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult, 1)  # (b,s, c, h)
         for layer in islice(self.layers, self.start_layer, self.end_layer):
-            hidden_states, residual = layer(positions, hidden_states, residual,
-                                            llama_4_scaling)
-        hidden_states = self.hc_head(hidden_states, self.hc_head_fn,
-                                     self.hc_head_scale, self.hc_head_base)
+            hidden_states, residual = layer(positions, hidden_states, residual, llama_4_scaling)
+        hidden_states = self.hc_head(hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base)
         if not get_pp_group().is_last_rank:
-            return IntermediateTensors({
-                "hidden_states": hidden_states,
-                "residual": residual
-            })
+            return IntermediateTensors({"hidden_states": hidden_states, "residual": residual})
 
         hidden_states = self.norm(hidden_states)
         return hidden_states
@@ -965,8 +901,7 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             self.num_routed_experts = 0
             self.num_shared_experts = 0
             self.num_redundant_experts = 0
-            logger.warning(
-                "DeepSeekV2: No DeepseekV4MoE layer found in model.layers.")
+            logger.warning("DeepSeekV2: No DeepseekV4MoE layer found in model.layers.")
         else:
             self.num_logical_experts = example_moe.n_logical_experts
             self.num_physical_experts = example_moe.n_physical_experts
@@ -991,9 +926,7 @@ class DeepseekV2MixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
-                                  DeepseekV2MixtureOfExperts, SupportsLoRA,
-                                  SupportsEagle):
+class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts, SupportsLoRA, SupportsEagle):
     packed_modules_mapping = {
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
@@ -1006,8 +939,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
         self.config = config
         self.quant_config = quant_config
 
-        self.model = self.model_cls(vllm_config=vllm_config,
-                                    prefix=maybe_prefix(prefix, "model"))
+        self.model = self.model_cls(vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model"))
         if get_pp_group().is_last_rank:
             self.lm_head = ParallelLMHead(
                 config.vocab_size,
@@ -1018,10 +950,9 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
         else:
             self.lm_head = PPMissingLayer()
         self.logits_processor = LogitsProcessor(config.vocab_size)
-        self.make_empty_intermediate_tensors = (
-            self.model.make_empty_intermediate_tensors)
+        self.make_empty_intermediate_tensors = self.model.make_empty_intermediate_tensors
         # Set MoE hyperparameters
-        self.num_moe_layers = (self.config.num_hidden_layers)
+        self.num_moe_layers = self.config.num_hidden_layers
         self.set_moe_parameters()
 
     def set_moe_parameters(self):
@@ -1055,8 +986,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
-        hidden_states = self.model(input_ids, positions, intermediate_tensors,
-                                   inputs_embeds)
+        hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds)
         return hidden_states
 
     def compute_logits(
@@ -1074,18 +1004,14 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts +
-            (self.config.n_shared_experts
-             if getattr(get_ascend_config(), "mix_placement", False) else 0),
+            num_experts=self.config.n_routed_experts
+            + (self.config.n_shared_experts if getattr(get_ascend_config(), "mix_placement", False) else 0),
             num_redundant_experts=0,
         )
 
-    def load_weights(self, weights: Iterable[tuple[str,
-                                                   torch.Tensor]]) -> set[str]:
-        rocm_aiter_moe_shared_expert_enabled = (
-            rocm_aiter_ops.is_fusion_moe_shared_experts_enabled())
-        rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(),
-                                                       "mix_placement", False)
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        rocm_aiter_moe_shared_expert_enabled = rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()
+        rocm_aiter_moe_shared_expert_enabled = getattr(get_ascend_config(), "mix_placement", False)
         stacked_params_mapping = [
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
@@ -1098,9 +1024,8 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts +
-            (self.config.n_shared_experts
-             if rocm_aiter_moe_shared_expert_enabled else 0),
+            num_experts=self.config.n_routed_experts
+            + (self.config.n_shared_experts if rocm_aiter_moe_shared_expert_enabled else 0),
             num_redundant_experts=self.num_redundant_experts,
         )
 
@@ -1120,49 +1045,45 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 continue  # skip spec decode layers for main model
 
             # TODO:
-            if not name.startswith('model'):
-                name = f'model.{name}'
+            if not name.startswith("model"):
+                name = f"model.{name}"
 
-            if '.w1.' in name:
-                name = name.replace('.w1.', '.gate_proj.')
-            if '.w2.' in name:
-                name = name.replace('.w2.', '.down_proj.')
-            if '.w3.' in name:
-                name = name.replace('.w3.', '.up_proj.')
+            if ".w1." in name:
+                name = name.replace(".w1.", ".gate_proj.")
+            if ".w2." in name:
+                name = name.replace(".w2.", ".down_proj.")
+            if ".w3." in name:
+                name = name.replace(".w3.", ".up_proj.")
 
-            if 'model.head.' in name and 'model.lm_head.' not in name:
-                name = name.replace('model.head.', 'lm_head.')
-            if 'model.lm_head.' in name:
-                name = name.replace('model.lm_head.', 'lm_head.')
-            if 'embed.' in name and 'embed_token.' not in name:
-                name = name.replace('embed.', 'embed_tokens.')
-            if 'attn' in name and 'self_attn' not in name:
-                name = name.replace('.attn.', '.self_attn.')
-            if '.ffn.' in name:
-                name = name.replace('.ffn.', '.mlp.')
-            if '.ffn_norm.' in name:
-                name = name.replace('.ffn_norm.', '.post_attention_layernorm.')
-            if '.attn_norm.' in name:
-                name = name.replace('.attn_norm.', '.input_layernorm.')
+            if "model.head." in name and "model.lm_head." not in name:
+                name = name.replace("model.head.", "lm_head.")
+            if "model.lm_head." in name:
+                name = name.replace("model.lm_head.", "lm_head.")
+            if "embed." in name and "embed_token." not in name:
+                name = name.replace("embed.", "embed_tokens.")
+            if "attn" in name and "self_attn" not in name:
+                name = name.replace(".attn.", ".self_attn.")
+            if ".ffn." in name:
+                name = name.replace(".ffn.", ".mlp.")
+            if ".ffn_norm." in name:
+                name = name.replace(".ffn_norm.", ".post_attention_layernorm.")
+            if ".attn_norm." in name:
+                name = name.replace(".attn_norm.", ".input_layernorm.")
 
             if "rotary_emb.inv_freq" in name:
                 continue
             if ".gate.bias" in name:
-                name = name.replace('.gate.bias',
-                                    '.gate.e_score_correction_bias')
+                name = name.replace(".gate.bias", ".gate.e_score_correction_bias")
 
             if "sink" in name:
                 # Handle attention sinks (distributed across ranks)
                 param = params_dict[name]
-                narrow_weight = loaded_weight.narrow(0, head_start,
-                                                     heads_per_rank)
+                narrow_weight = loaded_weight.narrow(0, head_start, heads_per_rank)
                 param.data.copy_(narrow_weight)
                 loaded_params.add(name)
                 continue
 
-            is_fusion_moe_shared_experts_layer = (
-                rocm_aiter_moe_shared_expert_enabled
-                and ("mlp.shared_experts" in name))
+            is_fusion_moe_shared_experts_layer = rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 # Skip non-stacked layers and experts (experts handled below).
@@ -1183,8 +1104,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 # QKV fusion is optional, fall back to normal
                 # weight loading if it's not enabled
                 # if go with fusion option, then update name
-                if (param_name == "fused_qkv_a_proj"
-                    ) and name_mapped not in params_dict:
+                if (param_name == "fused_qkv_a_proj") and name_mapped not in params_dict:
                     continue
                 else:
                     name = name_mapped
@@ -1212,16 +1132,15 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 # accordingly.
                 num_chunks = 1
                 if is_fusion_moe_shared_experts_layer:
-                    num_chunks = getattr(self.config, "n_shared_experts",
-                                         1) or 1
+                    num_chunks = getattr(self.config, "n_shared_experts", 1) or 1
                     # Determine split axis based on op type
                     # gate/up: ColumnParallel → split along dim 0
                     # down: RowParallel → split along dim 1
                     split_dim = 1 if "down_proj.weight" in name else 0
                     total = loaded_weight.shape[split_dim]
                     assert total % num_chunks == 0, (
-                        f"Shared expert weight dim {total} "
-                        f"not divisible by num_chunks {num_chunks}")
+                        f"Shared expert weight dim {total} not divisible by num_chunks {num_chunks}"
+                    )
                     chunk_size = total // num_chunks
 
                 for j in range(num_chunks):
@@ -1230,13 +1149,9 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
 
                     if is_fusion_moe_shared_experts_layer:
                         if split_dim == 0:
-                            weight_to_load = loaded_weight[j *
-                                                           chunk_size:(j + 1) *
-                                                           chunk_size, :]
+                            weight_to_load = loaded_weight[j * chunk_size : (j + 1) * chunk_size, :]
                         else:
-                            weight_to_load = loaded_weight[:, j *
-                                                           chunk_size:(j + 1) *
-                                                           chunk_size]
+                            weight_to_load = loaded_weight[:, j * chunk_size : (j + 1) * chunk_size]
                         # Synthesize an expert-style name so expert mapping
                         # can route it
                         chunk_name = name.replace(
@@ -1258,8 +1173,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
 
                         # Do not modify `name` since the loop may continue here
                         # Instead, create a new variable
-                        name_mapped = chunk_name.replace(
-                            weight_name, param_name)
+                        name_mapped = chunk_name.replace(weight_name, param_name)
 
                         if is_pp_missing_parameter(name_mapped, self):
                             continue
@@ -1268,8 +1182,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                         # We should ask the weight loader to return success or
                         # not here since otherwise we may skip experts with
                         # other available replicas.
-                        weight_loader = typing.cast(Callable[..., bool],
-                                                    param.weight_loader)
+                        weight_loader = typing.cast(Callable[..., bool], param.weight_loader)
                         success = weight_loader(
                             param,
                             weight_to_load,
@@ -1304,8 +1217,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                             continue
 
                         param = params_dict[name]
-                        weight_loader = getattr(param, "weight_loader",
-                                                default_weight_loader)
+                        weight_loader = getattr(param, "weight_loader", default_weight_loader)
                         weight_loader(param, loaded_weight)
             if not is_fusion_moe_shared_experts_layer:
                 loaded_params.add(name)
