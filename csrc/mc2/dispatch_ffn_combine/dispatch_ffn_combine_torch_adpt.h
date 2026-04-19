@@ -27,6 +27,7 @@ std::tuple<at::Tensor&, at::Tensor&> dispatch_ffn_combine(
     const at::Tensor& probs,
     c10::string_view group,
     int64_t max_output_size,
+    double swiglu_limit,
     at::Tensor& out,
     at::Tensor& expert_token_nums
 ) {
@@ -43,6 +44,7 @@ std::tuple<at::Tensor&, at::Tensor&> dispatch_ffn_combine(
                  probs,
                  group_ep_ptr,
                  max_output_size,
+                 swiglu_limit,
                  out,
                  expert_token_nums);
     } else {
