@@ -215,9 +215,6 @@ class CompressAttentionManager(FullAttentionManager):
         ):
             for computed in computed_blocks:
                 computed.pop()
-        print(f"{kv_cache_spec=}")
-        print(f"{kv_cache_group_ids=}")
-        print(f"{computed_blocks=}")
         return computed_blocks
 
 
