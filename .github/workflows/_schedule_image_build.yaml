@@ -19,10 +19,6 @@ on:
         description: 'Quay username for pushing images'
         required: false
         type: string
-      workflow_dispatch_tag:
-        description: 'The tag to use for workflow dispatch'
-        required: false
-        type: string
     secrets:
         QUAY_PASSWORD:
             description: 'Quay password for pushing images'
@@ -36,31 +32,19 @@ jobs:
       matrix:
         include:
           - arch: linux/amd64
-            runner: ubuntu-latest
+            runner: [X64, self-hosted]
             tag: amd64
           - arch: linux/arm64
-            runner: ubuntu-22.04-arm
+            runner: [ARM64, self-hosted]
             tag: arm64
     steps:
+
     - uses: actions/checkout@v6
-      if: ${{ github.event_name != 'workflow_dispatch' }}
       with:
         fetch-depth: 0
         persist-credentials: false
-        ref: ${{ github.ref }}
+        ref: releases/v0.18.0
 
-    - uses: actions/checkout@v6
-      if: ${{ github.event_name == 'workflow_dispatch' }}
-      with:
-        fetch-depth: 0
-        persist-credentials: false
-        ref: ${{ inputs.workflow_dispatch_tag }}
-
-    - name: Free up disk space
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-      with:
-        tool-cache: true
-        docker-images: false
 
     - name: Publish - Login to Quay Container Registry
       if: ${{ inputs.should_push }}
@@ -87,50 +71,19 @@ jobs:
         file: ${{ inputs.dockerfile || 'Dockerfile' }}
         # only trigger when tag, branch/main push
         push: ${{ inputs.should_push }}
-        outputs: type=image,name=quay.io/ascend/vllm-ascend,push-by-digest=true,name-canonical=true,push=${{ inputs.should_push }}
+        # Push each arch under a temporary tag so the merge job can reference
+        # them without needing to pass digests via artifacts.
+        tags: quay.io/wjunlu/vllm-ascend-daily:stage-${{ github.run_id }}-${{ inputs.suffix }}-${{ matrix.tag }}
         build-args: |
           PIP_INDEX_URL=https://pypi.org/simple
         provenance: false
 
-    - name: Export digest
-      run: |
-        mkdir -p ${{ runner.temp }}/digests
-        digest="${{ steps.build.outputs.digest }}"
-        touch "${{ runner.temp }}/digests/${digest#sha256:}"
-
-    - name: Upload digest
-      uses: actions/upload-artifact@v7
-      with:
-        name: digests-${{ inputs.suffix }}-${{ matrix.tag }}
-        path: ${{ runner.temp }}/digests/*
-        if-no-files-found: error
-        retention-days: 1
-
 
   merge-image:
-    runs-on: ubuntu-latest
+    runs-on: [ARM64, self-hosted]
     needs: build-push-digest
     if: ${{ inputs.should_push }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.ref }}
-
-      - name: Download arm64 digests
-        uses: actions/download-artifact@v8
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-${{ inputs.suffix }}-arm64
-          merge-multiple: true
-
-      - name: Download amd64 digests
-        uses: actions/download-artifact@v8
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-${{ inputs.suffix }}-amd64
-          merge-multiple: true
-
       - name: Prepare suffix
         id: suffix
         run: |
@@ -146,7 +99,7 @@ jobs:
         with:
           # TODO(yikun): add more hub image and a note on release policy for container image
           images: |
-            quay.io/ascend/vllm-ascend
+            quay.io/wjunlu/vllm-ascend-daily
           # Note for test case
           # https://github.com/marketplace/actions/docker-metadata-action#typeref
           # 1. branch job publish per main/*-dev branch commits
@@ -175,12 +128,14 @@ jobs:
 
       - name: Merge and push multi-arch image
         env:
-          IMAGE: quay.io/ascend/vllm-ascend
+          IMAGE: quay.io/wjunlu/vllm-ascend-daily
           TAGS: ${{ steps.meta.outputs.tags }}
+          STAGE_AMD64: quay.io/wjunlu/vllm-ascend-daily:stage-${{ github.run_id }}-${{ inputs.suffix }}-amd64
+          STAGE_ARM64: quay.io/wjunlu/vllm-ascend-daily:stage-${{ github.run_id }}-${{ inputs.suffix }}-arm64
         run: |
-          DIGESTS=$(printf "$IMAGE@sha256:%s " $(ls ${{ runner.temp }}/digests))
-
-          echo "Digests: $DIGESTS"
+          echo "Source stage tags:"
+          echo "  $STAGE_AMD64"
+          echo "  $STAGE_ARM64"
           echo "Current tags:"
           echo "$TAGS"
 
@@ -188,5 +143,29 @@ jobs:
             echo "Creating tag $tag"
             docker buildx imagetools create \
               -t "$tag" \
-              $DIGESTS
+              "$STAGE_AMD64" \
+              "$STAGE_ARM64"
           done
+
+  cleanup-stage-tags:
+    runs-on: [ARM64, self-hosted]
+    needs: [build-push-digest, merge-image]
+    if: ${{ always() && inputs.should_push }}
+    steps:
+      - name: Delete temporary stage tags from Quay
+        env:
+          QUAY_USER: ${{ inputs.quay_username }}
+          QUAY_PASS: ${{ secrets.QUAY_PASSWORD }}
+          STAGE_TAGS: |
+            stage-${{ github.run_id }}-${{ inputs.suffix }}-amd64
+            stage-${{ github.run_id }}-${{ inputs.suffix }}-arm64
+        run: |
+          set +e
+          for tag in $STAGE_TAGS; do
+            echo "Deleting quay.io/wjunlu/vllm-ascend-daily:$tag"
+            docker run --rm quay.io/skopeo/stable:latest \
+              delete --creds "$QUAY_USER:$QUAY_PASS" \
+              "docker://quay.io/wjunlu/vllm-ascend-daily:$tag" \
+              || echo "Failed to delete $tag (may not exist), continuing"
+          done
+          exit 0

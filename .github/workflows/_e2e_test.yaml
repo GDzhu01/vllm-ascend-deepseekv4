@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       contains_310:
-        required: true
+        required: false
         type: boolean
       continue_on_error:
         required: false
@@ -30,7 +30,7 @@ jobs:
   e2e-light:
     name: singlecard-light
     if: ${{ inputs.type == 'light' }}
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +42,14 @@ jobs:
         VLLM_USE_MODELSCOPE: True
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -56,7 +64,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -136,7 +143,7 @@ jobs:
   e2e-full:
     name: singlecard-full
     if: ${{ inputs.type == 'full' }}
-    runs-on: linux-aarch64-a2b3-1
+    runs-on: linux-aarch64-a2-1
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +156,14 @@ jobs:
         HF_HUB_OFFLINE: 1
         MODELSCOPE_HUB_FILE_LOCK: False
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
 
@@ -164,7 +179,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -255,6 +269,14 @@ jobs:
         HCCL_BUFFSIZE: 1024
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -269,7 +291,6 @@ jobs:
           pip config set global.trusted-host cache-service.nginx-pypi-cache.svc.cluster.local
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
       - name: Install system dependencies
         run: |
@@ -360,6 +381,14 @@ jobs:
         HCCL_BUFFSIZE: 1024
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -484,6 +513,14 @@ jobs:
         VLLM_USE_MODELSCOPE: True
         HF_HUB_OFFLINE: 1
     steps:
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
       - name: Check npu and CANN info
@@ -598,6 +635,14 @@ jobs:
           apt install git -y
           git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
 
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
 
@@ -674,6 +719,14 @@ jobs:
           apt-get update -y
           apt install git -y
           git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
+
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
 
       - name: Checkout vllm-project/vllm-ascend repo
         uses: actions/checkout@v6
