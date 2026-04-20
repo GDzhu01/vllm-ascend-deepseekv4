@@ -296,6 +296,7 @@ class FusedMC2CommImpl(MoECommMethod):
                 probs=fused_experts_input.topk_weights.to(torch.float32),
                 group=self.token_dispatcher.moe_all_to_all_group_name,
                 max_output_size=65536,
+                swiglu_limit=10.0,
                 out=out,
                 expert_token_nums=self.expert_token_nums,
             )
