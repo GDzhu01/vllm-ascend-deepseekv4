@@ -1463,7 +1463,7 @@ class MooncakeConnectorWorker:
                         assert tensor_total_size % self.num_blocks == 0, "Tensor size cannot divide by num_blocks. "
                         tensor_block_len = tensor_total_size // self.num_blocks
                         share_tensor_len.append(tensor_block_len)
-                        share_tensor_stride.append(single_tensor.stride(0))
+                        share_tensor_stride.append(single_tensor.stride(0) * single_tensor.element_size())
                 cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
                 self.kv_caches_base_addr.extend(share_tensor_addr)
                 self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
