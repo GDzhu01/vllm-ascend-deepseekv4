@@ -26,7 +26,7 @@ on:
       vllm-ascend:
         required: false
         type: string
-        default: main
+        default: releases/v0.18.0
       runner:
         required: true
         type: string
@@ -84,11 +84,21 @@ jobs:
           pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
           apt-get update -y
           apt install git -y
-          git config --global --add safe.directory /__w/vllm-ascend/vllm-ascend
-          git config --global url."https://gh-proxy.test.osinfra.cn/https://github.com/".insteadOf https://github.com/
 
-      - name: Checkout vllm-project/vllm-ascend repo
+      - name: Set PTA from file
+        run: |
+          # shellcheck disable=SC2002
+          TOKEN_VALUE=$(cat /root/.cache/lwj/pta.txt 2>/dev/null | tr -d '\n')
+          TOKEN=$(echo -n "x-access-token:${TOKEN_VALUE}" | base64)
+          git config --global http.https://gh-proxy.test.osinfra.cn/.extraheader "Authorization: Basic $TOKEN"
+          git config --global --add safe.directory /__w/vllm-ascend-deepseekv4/vllm-ascend-deepseekv4
+
+      - name: Checkout vllm-ascend
         uses: actions/checkout@v6
+        with:
+          # for pull request: we checkout the pr ref;
+          # for other triggers (e.g. schedule, workflow_dispatch), we checkout the ref specified by inputs.vllm-ascend (default to releases/v0.18.0)
+          ref: ${{ github.event_name == 'pull_request' && github.ref || inputs.vllm-ascend }}
 
       - name: Install system dependencies
         run: |
@@ -120,34 +130,10 @@ jobs:
           uv pip install -v -e .
 
       - name: Install tensorflow (for Molmo-7B-D-0924)
-        if: ${{ inputs.runner == 'linux-aarch64-a2b3-1' && contains(inputs.model_list, 'Molmo-7B-D-0924') }}
+        if: ${{ inputs.runner == 'linux-aarch64-a2-1' && contains(inputs.model_list, 'Molmo-7B-D-0924') }}
         shell: bash -l {0}
         run: |
           pip install tensorflow==2.19.1 --no-cache-dir
-
-      - name: Resolve vllm-ascend version
-        run: |
-          VERSION_INPUT="${{ inputs.vllm-ascend }}"
-          
-          if [[ "$VERSION_INPUT" == "latest" ]]; then
-            TAGS=$(git ls-remote --tags --sort=-v:refname https://github.com/vllm-project/vllm-ascend "v*" | cut -f2 | sed 's|refs/tags/||')
-            LATEST_TAG=$(echo "$TAGS" | head -n1)
-            if [[ -z "$LATEST_TAG" ]]; then
-              RESOLVED_VERSION="main"
-            else
-              RESOLVED_VERSION="$LATEST_TAG"
-            fi
-          else
-            RESOLVED_VERSION="$VERSION_INPUT"
-          fi
-          echo "GHA_VLLM_ASCEND_VERSION=$RESOLVED_VERSION" >> $GITHUB_ENV
-
-      - name: Checkout vllm-project/vllm-ascend repo
-        uses: actions/checkout@v6
-        with:
-          repository: vllm-project/vllm-ascend
-          path: ./vllm-ascend
-          ref: ${{ env.GHA_VLLM_ASCEND_VERSION }}
 
       - name: Get vLLM commit hash and URL
         working-directory: ./vllm-empty
@@ -156,7 +142,6 @@ jobs:
           echo "VLLM_COMMIT=$VLLM_COMMIT" >> $GITHUB_ENV
 
       - name: Get vLLM-Ascend commit hash and URL
-        working-directory: ./vllm-ascend
         run: |
           VLLM_ASCEND_COMMIT=$(git rev-parse --short=7 HEAD)
           echo "VLLM_ASCEND_COMMIT=$VLLM_ASCEND_COMMIT" >> $GITHUB_ENV
@@ -191,7 +176,7 @@ jobs:
           VLLM_CI_RUNNER: ${{ inputs.runner }}
           VLLM_VERSION: ${{ env.GHA_VLLM_VERSION }}
           VLLM_COMMIT: ${{ env.VLLM_COMMIT }}
-          VLLM_ASCEND_VERSION: ${{ env.GHA_VLLM_ASCEND_VERSION || github.ref }}
+          VLLM_ASCEND_VERSION: ${{ github.ref }}
           VLLM_ASCEND_COMMIT: ${{ env.VLLM_ASCEND_COMMIT }}
           CANN_VERSION: ${{ env.GHA_CANN_VERSION }}
           TORCH_VERSION: ${{ env.GHA_TORCH_VERSION }}
@@ -234,7 +219,7 @@ jobs:
         if: ${{ inputs.upload == true }}
         uses: actions/upload-artifact@v7
         with:
-          name: report-${{ env.GHA_VLLM_ASCEND_VERSION }}-${{ steps.ts.outputs.artifact_ts }}
+          name: report-${{ github.ref }}-${{ steps.ts.outputs.artifact_ts }}
           path: ./benchmarks/accuracy/
           if-no-files-found: warn
           retention-days: 90

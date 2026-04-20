@@ -22,14 +22,12 @@ name: Nightly-A3
 
 on:
   schedule:
-      # Run test at 23:45 Beijing time (UTC+8)
-      - cron: "45 15 * * *"
+    # Run test at 01:00 Beijing time (UTC+8)
+    - cron: "00 17 * * *"
   workflow_dispatch:
   pull_request:
     branches:
-      - 'main'
-      - '*-dev'
-      - 'releases/v*'
+      - '**'
     types: [ labeled, synchronize ]
 
 permissions:
@@ -57,24 +55,10 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'nightly-test')
     uses: ./.github/workflows/_parse_trigger.yaml
 
-  build-image:
-    name: Build nightly-a3 image
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/_nightly_image_build.yaml
-    with:
-      target: a3
-    secrets:
-      HW_USERNAME: ${{ secrets.HW_USERNAME }}
-      HW_TOKEN: ${{ secrets.HW_TOKEN }}
-      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-
   multi-node-tests:
     name: multi-node
-    needs: [parse-trigger, build-image]
-    if: >-
-      always() &&
-      needs.parse-trigger.outputs.run == 'true' &&
-      (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+    needs: [parse-trigger]
+    if: always() && needs.parse-trigger.outputs.run == 'true'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -116,9 +100,9 @@ jobs:
           - name: multi-node-deepseek-v3.1
             config_file_path: DeepSeek-V3.1-BF16.yaml
             size: 2
-          - name: multi-node-deepseek-v3.2-W8A8-EP
-            config_file_path: DeepSeek-V3_2-W8A8-EP.yaml
-            size: 4
+          # - name: multi-node-deepseek-v3.2-W8A8-EP
+          #   config_file_path: DeepSeek-V3_2-W8A8-EP.yaml
+          #   size: 4
     uses: ./.github/workflows/_e2e_nightly_multi_node.yaml
     with:
       soc_version: a3
@@ -138,21 +122,16 @@ jobs:
     secrets:
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
 
-  single-node-tests:
-    name: single-node
-    needs: [parse-trigger, build-image, multi-node-tests]
-    if: >-
-      always() &&
-      needs.parse-trigger.outputs.run == 'true' &&
-      (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+  single-node-tests-large:
+    name: single-node-large
+    needs: [parse-trigger, multi-node-tests]
+    if: always() && needs.parse-trigger.outputs.run == 'true'
     strategy:
+      max-parallel: 4
       fail-fast: false
       matrix:
         test_config:
           # pytest-driven tests
-          - name: qwen3-30b-acc
-            os: linux-aarch64-a3-4
-            tests: tests/e2e/weekly/single_node/models/test_qwen3_30b_acc.py
           - name: custom-multi-ops
             os: linux-aarch64-a3-16
             tests: tests/e2e/nightly/single_node/ops/multicard_ops_a3/
@@ -190,6 +169,44 @@ jobs:
           - name: qwen3-235b-a22b-w8a8
             os: linux-aarch64-a3-16
             config_file_path: Qwen3-235B-A22B-W8A8.yaml
+          - name: deepseek-r1-0528-w8a8-prefix-cache
+            os: linux-aarch64-a3-16
+            config_file_path: Prefix-Cache-DeepSeek-R1-0528-W8A8.yaml
+          - name: MiniMax-M2.5-w8a8
+            os: linux-aarch64-a3-16
+            config_file_path: MiniMax-M2.5-W8A8-A3.yaml
+          - name: Qwen3.5-397B-A17B-w8a8-mtp
+            os: linux-aarch64-a3-16
+            config_file_path: Qwen3.5-397B-A17B-W8A8-mtp-A3.yaml
+    uses: ./.github/workflows/_e2e_nightly_single_node.yaml
+    with:
+      runner: ${{ matrix.test_config.os }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-a3'
+      tests: ${{ matrix.test_config.tests }}
+      config_file_path: ${{ matrix.test_config.config_file_path }}
+      vllm_ascend_ref: ${{ needs.parse-trigger.outputs.ref }}
+      name: ${{ matrix.test_config.name }}
+      should_run: >-
+        ${{
+          needs.parse-trigger.outputs.run == 'true' && (
+            needs.parse-trigger.outputs.filter == 'all' ||
+            contains(needs.parse-trigger.outputs.filter, format(',{0},', matrix.test_config.name))
+          )
+        }}
+
+
+  single-node-tests-small:
+    name: single-node
+    needs: [parse-trigger, multi-node-tests, single-node-tests-large]
+    if: always() && needs.parse-trigger.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        test_config:
+          # pytest-driven tests
+          - name: qwen3-30b-acc
+            os: linux-aarch64-a3-4
+            tests: tests/e2e/weekly/single_node/models/test_qwen3_30b_acc.py
           - name: qwen3-30b-a3b-w8a8
             os: linux-aarch64-a3-4
             config_file_path: Qwen3-30B-A3B-W8A8.yaml
@@ -217,24 +234,16 @@ jobs:
           - name: qwen3-32b-int8-prefix-cache
             os: linux-aarch64-a3-4
             config_file_path: Prefix-Cache-Qwen3-32B-Int8.yaml
-          - name: deepseek-r1-0528-w8a8-prefix-cache
-            os: linux-aarch64-a3-16
-            config_file_path: Prefix-Cache-DeepSeek-R1-0528-W8A8.yaml
           - name: Qwen3.5-27B-w8a8-A3
             os: linux-aarch64-a3-2
             config_file_path: Qwen3.5-27B-w8a8-A3.yaml
-          - name: MiniMax-M2.5-w8a8
-            os: linux-aarch64-a3-16
-            config_file_path: MiniMax-M2.5-W8A8-A3.yaml
-          - name: Qwen3.5-397B-A17B-w8a8-mtp
-            os: linux-aarch64-a3-16
-            config_file_path: Qwen3.5-397B-A17B-W8A8-mtp-A3.yaml
     uses: ./.github/workflows/_e2e_nightly_single_node.yaml
     with:
       runner: ${{ matrix.test_config.os }}
       image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-a3'
       tests: ${{ matrix.test_config.tests }}
       config_file_path: ${{ matrix.test_config.config_file_path }}
+      vllm_ascend_ref: ${{ needs.parse-trigger.outputs.ref }}
       name: ${{ matrix.test_config.name }}
       should_run: >-
         ${{

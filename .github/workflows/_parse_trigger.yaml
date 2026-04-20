@@ -23,7 +23,7 @@ on:
       runner:
         required: false
         type: string
-        default: linux-aarch64-a2b3-0
+        default: linux-aarch64-a2-0
     outputs:
       run:
         description: "Whether nightly tests should run"
@@ -63,9 +63,9 @@ jobs:
 
             function getRef() {
               if (eventName === 'pull_request') {
-                return context.payload.pull_request.head.sha;
+                return String(context.payload.pull_request.number);
               }
-              return (context.ref || '').replace(/^refs\/(heads|tags)\//, '') || 'main';
+              return 'releases/v0.18.0';
             }
 
             core.setOutput('ref', getRef());

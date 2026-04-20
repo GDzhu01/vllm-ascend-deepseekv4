@@ -24,6 +24,10 @@ on:
         required: true
         type: string
         description: "Build target: 'a2' or 'a3'"
+      quay_username:
+        required: false
+        type: string
+        description: "Quay username for pushing images"
     secrets:
       HW_USERNAME:
         required: false
@@ -31,11 +35,13 @@ on:
         required: false
       GITEE_TOKEN:
         required: false
+      QUAY_PASSWORD:
+        required: false
 
 jobs:
   build:
     name: Build nightly-${{ inputs.target }} image
-    runs-on: ubuntu-22.04-arm
+    runs-on: [ARM64, self-hosted]
     steps:
       - uses: actions/checkout@v6
 
@@ -48,12 +54,20 @@ jobs:
         run: |
           echo "$HW_TOKEN" | docker login -u "$HW_USERNAME" --password-stdin swr.cn-southwest-2.myhuaweicloud.com
 
+      - name: Login to Quay
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v4
+        with:
+          registry: quay.io
+          username: ${{ inputs.quay_username }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
       - name: Build nightly-${{ inputs.target }} image
         env:
           GITEE_USERNAME: ${{ vars.GITEE_USERNAME }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          IMAGE="swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-${{ inputs.target }}"
+          IMAGE="swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-${{ inputs.target }}-pre"
           docker build \
             --network host \
             --platform linux/arm64 \
@@ -66,6 +80,6 @@ jobs:
             -t "$IMAGE" .
 
       - name: Push image to SWR
-        if: ${{ github.repository_owner == 'vllm-project' && steps.login-swr.conclusion == 'success' }}
+        if: ${{ steps.login-swr.conclusion == 'success' }}
         run: |
-          docker push swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-${{ inputs.target }}
+          docker push swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend:nightly-${{ inputs.target }}-pre
