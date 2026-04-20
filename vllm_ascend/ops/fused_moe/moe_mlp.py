@@ -96,7 +96,7 @@ def quant_apply_mlp_A5(hidden_states: torch.Tensor,
     if dynamic_scale is None:
         unquantized_hidden_states = hidden_states
         hidden_states, pertoken_scale = torch_npu.npu_dynamic_mx_quant(
-            hidden_states, dst_type=torch_npu.float4_e2m1fn_x2, round_mode="round")
+            hidden_states, dst_type=torch.float8_e4m3fn)
         # Dispose the original unquantized hidden states
         # to save npu memory because they're no longer used.
         dispose_tensor(unquantized_hidden_states)
@@ -114,37 +114,58 @@ def quant_apply_mlp_A5(hidden_states: torch.Tensor,
     
     hidden_states = torch_npu.npu_grouped_matmul(
         x=[hidden_states],
-        weight=[w1.view(torch.uint8)],
-        scale=[w1_scale],
-	    per_token_scale=[pertoken_scale], 
-        group_list=group_list,
+        weight=[w1],
+        scale=None,
+        antiquant_scale=[w1_scale],
+        scale_dtype=None,
+        per_token_scale=[pertoken_scale],
+        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
         split_item=2,
         group_type=0,
-	    output_dtype=output_dtype, 
-        x_dtype=torch_npu.float4_e2m1fn_x2,
+        group_list=cumsum_group_list(group_list, group_list_type, 0),
+        x_dtype=torch.float8_e4m3fn,
         weight_dtype=torch_npu.float4_e2m1fn_x2,
-        scale_dtype=torch_npu.float8_e8m0fnu,
-        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
-        group_list_type=group_list_type,
+        output_dtype=torch.bfloat16
     )[0]
     
-    hidden_states = torch_npu.npu_swiglu(hidden_states)
-    hidden_states, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(
-            hidden_states, dst_type=torch_npu.float4_e2m1fn_x2)
+    hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.npu_swiglu_group_quant(
+        hidden_states,
+        topk_weight=None,
+        group_index=None,
+        dst_type=torch.float8_e4m3fn,
+        quant_mode=2,
+        clamp_value=10.0,
+    )
     
-    hidden_states = torch_npu.npu_grouped_matmul(x=[hidden_states],
-                                                 weight=[w2.view(torch.uint8)],
-                                                 scale=[w2_scale],
-                                                 scale_dtype=scale_dtype,
-                                                 per_token_scale=[swiglu_out_scale],
-                                                 per_token_scale_dtype=per_token_scale_dtype,
-                                                 split_item=2,
-                                                 group_list_type=group_list_type,
-                                                 group_type=0,
-                                                 group_list=group_list,
-                                                 x_dtype=torch_npu.float4_e2m1fn_x2,
-                                                 weight_dtype=torch_npu.float4_e2m1fn_x2,
-                                                 output_dtype=output_dtype)[0]
+    hidden_states = torch_npu.npu_grouped_matmul(
+        x=[hidden_states],
+        weight=[w2],
+        scale=None,
+        antiquant_scale=[w2_scale],
+        scale_dtype=None,
+        per_token_scale=[swiglu_out_scale],
+        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
+        split_item=2,
+        group_type=0,
+        group_list=cumsum_group_list(group_list, group_list_type, 0),
+        x_dtype=torch.float8_e4m3fn,
+        weight_dtype=torch_npu.float4_e2m1fn_x2,
+        output_dtype=torch.bfloat16
+    )[0]
+    
+    # hidden_states = torch_npu.npu_grouped_matmul(x=[hidden_states],
+    #                                              weight=[w2.view(torch.uint8)],
+    #                                              scale=[w2_scale],
+    #                                              scale_dtype=scale_dtype,
+    #                                              per_token_scale=[swiglu_out_scale],
+    #                                              per_token_scale_dtype=per_token_scale_dtype,
+    #                                              split_item=2,
+    #                                              group_list_type=group_list_type,
+    #                                              group_type=0,
+    #                                              group_list=group_list,
+    #                                              x_dtype=torch_npu.float4_e2m1fn_x2,
+    #                                              weight_dtype=torch_npu.float4_e2m1fn_x2,
+    #                                              output_dtype=output_dtype)[0]
     return hidden_states
 
 def quant_apply_mlp(hidden_states: torch.Tensor,

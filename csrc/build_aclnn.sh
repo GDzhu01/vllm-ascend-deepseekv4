@@ -169,6 +169,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend950 ]]; then
         "hc_pre_sinkhorn"
         "hc_pre_inv_rms"
         "hc_post"
+        "swiglu_group_quant"
     )
 
 

@@ -236,16 +236,8 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
             mc2_mask=kwargs.get("mc2_mask", None))
 
     def process_weights_after_loading(self, layer):
-        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.view(torch.int32) >> 23 & 0xFF
-        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.to(torch.uint8)
-        # layer.w13_weight_scale.data = layer.w13_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
-        g_num, n_size, k_size = layer.w13_weight_scale.shape
-        layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g_num, n_size, k_size//2, 2)
-        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.view(torch.int32) >> 23 & 0xFF
-        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.to(torch.uint8)
-        # layer.w2_weight_scale.data = layer.w2_weight_scale.data.repeat_interleave(4, dim=2).repeat_interleave(128, dim=1)
-        g_num, n_size, k_size = layer.w2_weight_scale.shape
-        layer.w2_weight_scale.data = layer.w2_weight_scale.data.reshape(g_num, n_size, k_size//2, 2)
+        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data.view(torch.uint8), 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2)
+        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data.view(torch.uint8), 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2)
         if self.transpose_weight:
             # FIXME(linfeng): currently we have to force contiguous here for weight and weight_scale of GMM.
             # Have to investigate performance impact and root cause.
@@ -253,6 +245,8 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod:
                 1, 2)
             layer.w2_weight.data = layer.w2_weight.data.transpose(
                 1, 2)
-            layer.w13_weight_scale.data = layer.w13_weight_scale.data.transpose(1, 2)
-            layer.w2_weight_scale.data = layer.w2_weight_scale.data.transpose(1, 2)
+            g, n, k = layer.w13_weight_scale.shape
+            layer.w13_weight_scale.data = layer.w13_weight_scale.data.reshape(g, n, k // 2, 2).view(torch.uint8).transpose(-3, -2)
+            g, n, k = layer.w2_weight_scale.shape
+            layer.w2_weight_scale.data = layer.w2_weight_scale.data.reshape(g, n, k // 2, 2).view(torch.uint8).transpose(-3, -2)
 
