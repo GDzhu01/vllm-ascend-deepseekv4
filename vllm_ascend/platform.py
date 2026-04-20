@@ -39,6 +39,7 @@ from vllm_ascend.utils import (
     COMPILATION_PASS_KEY,
     COMPRESSED_TENSORS_METHOD,
     AscendDeviceType,
+    bootstrap_custom_op_env,
     check_kv_extra_config,
     flashcomm2_enable,
     get_ascend_device_type,
@@ -532,6 +533,9 @@ class NPUPlatform(Platform):
         ):
             speculative_config.enforce_eager = False
 
+        if model_config and hasattr(model_config.hf_config, "compress_ratios"):
+            cache_config.block_size = 32
+
         if ascend_config.enable_mc2_hierarchy_comm and envs_ascend.VLLM_ASCEND_ENABLE_FUSED_MC2:
             raise ValueError(
                 "fused mc2 op cannot be used with hierarchy communication."
@@ -551,14 +555,7 @@ class NPUPlatform(Platform):
         global _CUSTOM_OP_REGISTERED
         if _CUSTOM_OP_REGISTERED:
             return
-        CUR_DIR = os.path.dirname(os.path.realpath(__file__))
-        CUSTOM_OPP_PATH = os.path.join(CUR_DIR, "_cann_ops_custom", "vendors", "vllm-ascend")
-        if os.path.exists(CUSTOM_OPP_PATH):
-            current_cust_opp_path = os.environ.get("ASCEND_CUSTOM_OPP_PATH", "")
-            if current_cust_opp_path:
-                os.environ["ASCEND_CUSTOM_OPP_PATH"] = f"{CUSTOM_OPP_PATH}:{current_cust_opp_path}"
-            else:
-                os.environ["ASCEND_CUSTOM_OPP_PATH"] = CUSTOM_OPP_PATH
+        bootstrap_custom_op_env()
         _CUSTOM_OP_REGISTERED = True
 
     @classmethod
@@ -566,9 +563,14 @@ class NPUPlatform(Platform):
         key = (attn_selector_config.use_mla, attn_selector_config.use_sparse)
 
         backend_map = {
-            (True, False): "vllm_ascend.attention.mla_v1.AscendMLABackend",
-            (False, False): "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
-            (True, True): "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True, False, False):
+            "vllm_ascend.attention.mla_v1.AscendMLABackend",
+            (False, False, False):
+            "vllm_ascend.attention.attention_v1.AscendAttentionBackend",
+            (True, True, False):
+            "vllm_ascend.attention.sfa_v1.AscendSFABackend",
+            (True, True, True):
+            "vllm_ascend.attention.dsa_v1.AscendDSABackend",
         }
         backend_map_310 = {
             (
@@ -583,7 +585,9 @@ class NPUPlatform(Platform):
         if is_310p():
             return backend_map_310.get(key, backend_map_310[(False, False)])
 
-        return backend_map[key]
+        return backend_map[(attn_selector_config.use_mla,
+                            attn_selector_config.use_sparse,
+                            attn_selector_config.use_compress)]
 
     @classmethod
     def get_punica_wrapper(cls) -> str:
