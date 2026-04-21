@@ -243,7 +243,7 @@ def _select_experts_with_fusion_ops(
                 input_ids = forward_context.moe_comm_method.pad_and_split_input_ids(
                     input_ids)
 
-            if forward_context.flash_comm_v1_enabled:
+            if forward_context.flash_comm_v1_enabled and forward_context.moe_comm_type != MoECommType.ALLGATHER:
                 # Process for Flash Comm V1
                 tp_size = get_tp_group().world_size
                 tp_rank = get_tp_group().rank_in_group
