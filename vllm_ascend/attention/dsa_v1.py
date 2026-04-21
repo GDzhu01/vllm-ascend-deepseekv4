@@ -469,6 +469,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             self.common_ratio_to_sas_metadata["sin"] = sin
             self.seq_lens = common_attn_metadata.seq_lens[:num_reqs]
             self.common_ratio_to_sas_metadata["seq_lens"] = self.seq_lens
+
+            query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
+            query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
+            self.query_lens = query_seq_lens_cpu[:num_reqs]
+            self.common_ratio_to_sas_metadata["query_lens"] = self.query_lens
         else:
             self.num_decodes, self.num_prefills, self.num_decode_tokens, self.num_prefill_tokens = \
                 self.common_ratio_to_sas_metadata["num_decodes"], \
@@ -480,10 +485,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             input_positions = self.common_ratio_to_sas_metadata["input_positions"]
             cos, sin = self.common_ratio_to_sas_metadata["cos"], self.common_ratio_to_sas_metadata["sin"]
             self.seq_lens = self.common_ratio_to_sas_metadata["seq_lens"]
-
-        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
-        query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
-        self.query_lens = query_seq_lens_cpu[:num_reqs]
+            self.query_lens = self.common_ratio_to_sas_metadata["query_lens"]
 
         self.graph_pad_size = common_attn_metadata.graph_pad_size
         block_table_size = self.get_block_table_size(
@@ -513,8 +515,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             num_decodes=self.num_decodes,
             num_decode_tokens=self.num_decode_tokens,
             num_prefills=self.num_prefills,
-            attn_mask=self.attn_mask_builder.get_final_mla_mask(
-                self.model_config),
+            attn_mask=None,
             attn_state=common_attn_metadata.attn_state,
             prefill=prefill_metadata,
             decode=decode_metadata,
@@ -532,25 +533,46 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         common_attn_metadata: AscendCommonAttentionMetadata,
     ) -> AscendDSAPrefillMetadata:
         query_start_loc = common_attn_metadata.query_start_loc
-
-        # NOTE: Currently, MTP-fullgraph is incompatibility pcp
-        input_positions = common_attn_metadata.positions[:self.
-                                                         num_actual_tokens].long(
-                                                         )
-
         # reqs_start: the start request position of prefill request
         reqs_start = self.num_decodes
         # reqs_start: the start token position of prefill request
         tokens_start = self.num_decode_tokens
+        # NOTE: Currently, MTP-fullgraph is incompatibility pcp
+        if self.prefill_ratio_to_sas_metadata.get("prefill_input_positions", None) is None:
+            input_positions = common_attn_metadata.positions[:self.
+                                                         num_actual_tokens].long(
+                                                         )
+            max_query_len = self.query_lens[reqs_start:].max().item()
+            max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:].max(
+            ).item()
+            self.prefill_ratio_to_sas_metadata["input_positions"] = input_positions
+            self.prefill_ratio_to_sas_metadata["max_query_len"] = max_query_len
+            self.prefill_ratio_to_sas_metadata["max_seq_lens"] = max_seq_lens
 
-        max_query_len = self.query_lens[reqs_start:].max().item()
-        max_seq_lens = common_attn_metadata.seq_lens_cpu[reqs_start:].max(
-        ).item()
-        prefill_query_start_loc = query_start_loc[
-            reqs_start:] - query_start_loc[reqs_start]
+            prefill_query_start_loc = query_start_loc[
+                reqs_start:] - query_start_loc[reqs_start]
+            prefill_input_positions = input_positions[tokens_start:]
+            self.prefill_ratio_to_sas_metadata["prefill_input_positions"] = prefill_input_positions
+            self.prefill_ratio_to_sas_metadata["prefill_query_start_loc"] = prefill_query_start_loc
 
-        prefill_input_positions = input_positions[tokens_start:]
-        cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
+            cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
+            self.prefill_ratio_to_sas_metadata["cos"] = cos
+            self.prefill_ratio_to_sas_metadata["sin"] = sin
+
+            prefill_seq_lens = self.seq_lens[reqs_start:]
+            num_prefill = prefill_seq_lens.shape[0]
+            self.prefill_ratio_to_sas_metadata["prefill_seq_lens"] = prefill_seq_lens
+            self.prefill_ratio_to_sas_metadata["num_prefill"] = num_prefill
+        else:
+            input_positions = self.prefill_ratio_to_sas_metadata["input_positions"]
+            max_query_len = self.prefill_ratio_to_sas_metadata["max_query_len"]
+            max_seq_lens = self.prefill_ratio_to_sas_metadata["max_seq_lens"]
+            prefill_input_positions = self.prefill_ratio_to_sas_metadata["prefill_input_positions"]
+            prefill_query_start_loc = self.prefill_ratio_to_sas_metadata["prefill_query_start_loc"]
+            cos = self.prefill_ratio_to_sas_metadata["cos"]
+            sin = self.prefill_ratio_to_sas_metadata["sin"]
+            prefill_seq_lens = self.prefill_ratio_to_sas_metadata["prefill_seq_lens"]
+            num_prefill = self.prefill_ratio_to_sas_metadata["num_prefill"]
 
         def _get_padded_compressed_position(prefill_input_positions,
                                             compress_ratio):
@@ -574,15 +596,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                  torch.cumsum(_cmp_seq_lens, -1)),
                 dim=-1)
 
-        compress_cos, compress_sin = get_cos_and_sin_dsa(
-            _get_padded_compressed_position(prefill_input_positions,
-                                            self.compressor_ratio))
-
-        prefill_seq_lens = self.seq_lens[reqs_start:]
-        num_prefill = prefill_seq_lens.shape[0]
-
-        decode_input_positions = input_positions[:tokens_start]
-
         def _get_compressed_decode_token_start_and_end(decode_input_positions,
                                                        compress_ratio):
             # TODO(cmq): decode_input_positions is a device tensor,
@@ -595,8 +608,25 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 self.num_prefill_tokens // compress_ratio + self.num_prefills)
             return compressed_decode_num, end
 
-        compressed_tokens_start, compressed_tokens_end = _get_compressed_decode_token_start_and_end(
-            decode_input_positions, self.compressor_ratio)
+        if self.prefill_ratio_to_sas_metadata.get(f"c{self.compressor_ratio}_cos", None) is None:
+            compress_cos, compress_sin = get_cos_and_sin_dsa(
+                _get_padded_compressed_position(prefill_input_positions,
+                                                self.compressor_ratio))
+            self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_cos"] = compress_cos
+            self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_sin"] = compress_sin
+        else:
+            compress_cos = self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_cos"]
+            compress_sin = self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_sin"]
+
+        if self.prefill_ratio_to_sas_metadata.get(f"compressed_c{self.compressor_ratio}_tokens_start", None) is None:
+            decode_input_positions = input_positions[:tokens_start]
+            compressed_tokens_start, compressed_tokens_end = _get_compressed_decode_token_start_and_end(
+                decode_input_positions, self.compressor_ratio)
+            self.prefill_ratio_to_sas_metadata[f"compressed_c{self.compressor_ratio}_tokens_start"] = compressed_tokens_start
+            self.prefill_ratio_to_sas_metadata[f"compressed_c{self.compressor_ratio}_tokens_ebd"] = compressed_tokens_end
+        else:
+            compressed_tokens_start = self.prefill_ratio_to_sas_metadata[f"compressed_c{self.compressor_ratio}_tokens_start"]
+            compressed_tokens_end = self.prefill_ratio_to_sas_metadata[f"compressed_c{self.compressor_ratio}_tokens_ebd"]   
 
         prefill_slot_mapping = self.slot_mapping[
             compressed_tokens_start:compressed_tokens_end +
@@ -613,8 +643,14 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         index_topk = self.model_config.hf_config.index_topk
 
         if self.enable_kv_tnd:
-            cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
-            cu_c128_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 128)
+            if self.prefill_ratio_to_sas_metadata.get("cu_c4_cmp_seqlen_list", None) is None:
+                cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
+                cu_c128_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 128)
+                self.prefill_ratio_to_sas_metadata["cu_c4_cmp_seqlen_list"] = cu_c4_cmp_seqlen_list
+                self.prefill_ratio_to_sas_metadata["cu_c128_cmp_seqlen_list"] = cu_c128_cmp_seqlen_list
+            else:
+                cu_c4_cmp_seqlen_list = self.prefill_ratio_to_sas_metadata["cu_c4_cmp_seqlen_list"]
+                cu_c128_cmp_seqlen_list = self.prefill_ratio_to_sas_metadata["cu_c128_cmp_seqlen_list"]
         else:
             cu_c4_cmp_seqlen_list = None
             cu_c128_cmp_seqlen_list = None
@@ -718,8 +754,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         qli_metadata = self.prefill_ratio_to_sas_metadata.get("qli")
 
         return AscendDSAPrefillMetadata(
-            attn_mask=self.attn_mask_builder.get_final_mla_mask(
-                self.model_config),
+            attn_mask=None,
             query_lens=self.query_lens[reqs_start:].to(torch.int32),
             seq_lens=self.seq_lens[reqs_start:],
             context_lens=self.seq_lens[reqs_start:],
@@ -757,33 +792,53 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
             self.decode_ratio_to_sas_metadata["cos"] = cos
             self.decode_ratio_to_sas_metadata["sin"] = sin
+
+            query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu[:self.
+                                                                       num_decodes
+                                                                       + 1]
+            input_positions_cpu = common_attn_metadata.positions_cpu[:self.
+                                                                    num_actual_tokens].long(
+                                                                    )
+            input_positions_cpu = input_positions_cpu[:self.num_decode_tokens]
+
+            max_seq_lens = common_attn_metadata.seq_lens_cpu[:self.
+                                                            num_decodes].max(
+                                                            ).item()
+            decode_input_positions = input_positions_cpu
+            seq_lens_list = common_attn_metadata.seq_lens_cpu[:self.
+                                                          num_decodes].tolist(
+                                                          )
+            self.decode_ratio_to_sas_metadata["query_start_loc_cpu"] = query_start_loc_cpu
+            self.decode_ratio_to_sas_metadata["decode_input_positions"] = decode_input_positions
+            self.decode_ratio_to_sas_metadata["max_seq_lens"] = max_seq_lens
+            self.decode_ratio_to_sas_metadata["seq_lens_list"] = seq_lens_list
+
+            max_seqlen_kv = torch.max(
+            common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
+            max_seqlen_q = torch.max(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]).item()
+            self.decode_ratio_to_sas_metadata["max_seqlen_kv"] = max_seqlen_kv
+            self.decode_ratio_to_sas_metadata["max_seqlen_q"] = max_seqlen_q
+
+            seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
+            start_pos_decode = self.seq_lens[:self.num_decodes] - seq_lens_q
+            self.decode_ratio_to_sas_metadata["start_pos_decode"] = start_pos_decode
         else:
             query_start_loc = self.decode_ratio_to_sas_metadata["query_start_loc"]
             input_positions = self.decode_ratio_to_sas_metadata["input_positions"]
             cos = self.decode_ratio_to_sas_metadata["cos"]
             sin = self.decode_ratio_to_sas_metadata["sin"]
+            query_start_loc_cpu = self.decode_ratio_to_sas_metadata["query_start_loc_cpu"]
+            decode_input_positions = self.decode_ratio_to_sas_metadata["decode_input_positions"]
+            max_seq_lens = self.decode_ratio_to_sas_metadata["max_seq_lens"]
+            seq_lens_list = self.decode_ratio_to_sas_metadata["seq_lens_list"]
+            max_seqlen_kv = self.decode_ratio_to_sas_metadata["max_seqlen_kv"]
+            max_seqlen_q = self.decode_ratio_to_sas_metadata["max_seqlen_q"]
+            start_pos_decode = self.decode_ratio_to_sas_metadata["start_pos_decode"]
 
-        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu[:self.
-                                                                       num_decodes
-                                                                       + 1]
-        input_positions_cpu = common_attn_metadata.positions_cpu[:self.
-                                                                 num_actual_tokens].long(
-                                                                 )
-        input_positions_cpu = input_positions_cpu[:self.num_decode_tokens]
-
-        max_seq_lens = common_attn_metadata.seq_lens_cpu[:self.
-                                                         num_decodes].max(
-                                                         ).item()
         block_table_size = self.get_block_table_size(
             common_attn_metadata, BUILD_METADATA_STEP_DECODE)
 
-        seq_lens_list = common_attn_metadata.seq_lens_cpu[:self.
-                                                          num_decodes].tolist(
-                                                          )
-
         cp_seq_len, batch_seq_mask = None, None
-
-        decode_input_positions = input_positions_cpu
 
         def _get_padded_compressed_position(decode_input_positions,
                                             compress_ratio, device):
@@ -823,21 +878,18 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             compressed_decode_num = mask.sum().item()
             return compressed_decode_num
 
-        compressed_tokens_start = _get_compressed_decode_token_start(
-            decode_input_positions, self.compressor_ratio)
+        if self.decode_ratio_to_sas_metadata.get("compressed_tokens_start_" + str(self.compressor_ratio), None) is None:
+            compressed_tokens_start = _get_compressed_decode_token_start(
+                decode_input_positions, self.compressor_ratio)
+            self.decode_ratio_to_sas_metadata["compressed_tokens_start_" + str(self.compressor_ratio)] = compressed_tokens_start
+        else:
+            compressed_tokens_start = self.decode_ratio_to_sas_metadata["compressed_tokens_start_" + str(self.compressor_ratio)]
 
         slot_mapping = self.slot_mapping[:compressed_tokens_start]
 
-        max_seqlen_kv = torch.max(
-            common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
-        max_seqlen_q = torch.max(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]).item()
-
         assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
-        seq_lens_q = query_start_loc[1:] - query_start_loc[:-1]
-        self.start_pos_decode[:self.
-                              num_decodes] = self.seq_lens[:self.
-                                                           num_decodes] - seq_lens_q
+        self.start_pos_decode[:self.num_decodes] = start_pos_decode
 
         if num_reqs_actual is not None and num_reqs_actual < self.num_decodes:
             self.start_pos_decode[num_reqs_actual:].fill_(0)
@@ -956,7 +1008,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             max_seq_lens=max_seq_lens,
             max_seqlen_kv=max_seqlen_kv,
             max_seqlen_q=max_seqlen_q,
-            attn_mask=self.attn_mask_builder.get_splitfuse_attn_mask(),
+            attn_mask=None,
             query_start_loc=query_start_loc, # cached
             query_start_loc_cpu=query_start_loc_cpu,
             sin=sin[:self.num_decode_tokens, ...],
