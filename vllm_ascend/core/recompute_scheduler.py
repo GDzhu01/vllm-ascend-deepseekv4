@@ -141,9 +141,10 @@ class RecomputeScheduler(Scheduler):
             # Fill in placeholder tokens to enable full graph compatibility. Without
             # placeholders, graph matching may fail, forcing eager mode execution.
             if self.is_mtp_kv_consumer:
-                padding_token_id = (
-                    request.sampling_params.eos_token_id if request.sampling_params.eos_token_id is not None else PLACEHOLDER_TOKEN_ID
-                )
+                #padding_token_id = (
+                #    request.sampling_params.eos_token_id if request.sampling_params.eos_token_id is not None else PLACEHOLDER_TOKEN_ID
+                #)
+                padding_token_id = 0
                 request.spec_token_ids = [padding_token_id] * self.num_spec_tokens
             self._enqueue_waiting_request(request)
             self.requests[request.request_id] = request
