@@ -380,6 +380,10 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(hidden_states, True, True)
             router_logits = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(router_logits, True, True)
 
+        # TODO(fuzhihong): To adapt to self.num_token in the all_gather_input_id_with_dp_group method,
+        #  when flashcomm1 is used and dp = N(N >=2).
+        self.num_tokens = hidden_states.shape[0]
+
         if pertoken_scale is not None:
             pertoken_scale = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(pertoken_scale, True, True)
 
@@ -453,8 +457,6 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
 
     def all_gather_input_id_with_dp_group(
             self, input_ids: torch.Tensor) -> torch.Tensor:
-        if _EXTRA_CTX.flash_comm_v1_enabled:
-            return input_ids
 
         if self.moe_config.dp_size > 1:
             forward_context = get_forward_context()
