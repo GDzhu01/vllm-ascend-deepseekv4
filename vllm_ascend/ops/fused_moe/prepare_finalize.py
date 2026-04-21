@@ -457,7 +457,6 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
 
     def all_gather_input_id_with_dp_group(
             self, input_ids: torch.Tensor) -> torch.Tensor:
-
         if self.moe_config.dp_size > 1:
             forward_context = get_forward_context()
             max_tokens_across_dp = forward_context.max_tokens_across_dp
