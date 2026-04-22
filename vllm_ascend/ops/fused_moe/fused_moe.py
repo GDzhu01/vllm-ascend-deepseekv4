@@ -455,8 +455,11 @@ class AscendFusedMoE(FusedMoE):
         # When static kernels are enabled, the forward pass runs twice (compilation + capture),
         # causing moe_layer_index to overflow. Wrap the index to prevent out-of-bounds errors.
         if self.enable_npugraph_ex_static_kernel:
-            moe_layer_index = forward_context.moe_layer_index % (len(forward_context.all_moe_layers))
-            forward_context.moe_layer_index = moe_layer_index
+            if forward_context.all_moe_layers is not None:
+                moe_layer_index = forward_context.moe_layer_index % (len(forward_context.all_moe_layers))
+                forward_context.moe_layer_index = moe_layer_index
+            else:
+                pass
 
         # Load balancing for token distribution among experts in dummy_run
         # TODO: The community only considers load balancing when DP > 1.
