@@ -138,10 +138,12 @@ class AscendSVFSWACache(SVFSWACache):
             self.dtype = torch.float8_e4m3fn
             vllm_config.cache_config.cache_dtype = "float8_e4m3fn"
         # TODO(cmq): alignment = 0 if A3 else 128
+        cached_head_size = (self.head_dim + 128) \
+            if get_ascend_device_type() in {AscendDeviceType.A5} else self.head_dim
         return SlidingWindowMLASpec(
             block_size=self.block_size,
             num_kv_heads=1,
-            head_size=self.head_dim,
+            head_size=cached_head_size,
             dtype=self.dtype,
             sliding_window=self.window_size,
             cache_dtype_str=self.cache_config.cache_dtype,
