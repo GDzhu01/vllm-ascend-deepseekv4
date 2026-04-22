@@ -31,8 +31,12 @@ from vllm_ascend.utils import (
     dispose_tensor,
     enable_custom_op,
     get_weight_prefetch_method,
+    get_ascend_device_type,
+    AscendDeviceType,
 )
 from vllm_ascend.quantization.quant_type import QuantType
+
+ASCEND_DEVICE_TYPE = get_ascend_device_type()
 
 
 def _custom_gmm_swiglu_enabled(fusion, dynamic_eplb):
@@ -156,7 +160,7 @@ def quant_apply_mlp(
             )
         elif use_gmm_swiglu_quant_fusion:
             # gmm1: gate_up_proj & act_fn: swiglu
-            if fusion:  # TODO change this to if not A5
+            if ASCEND_DEVICE_TYPE != AscendDeviceType.A5:
                 hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                     x=hidden_states,
                     weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
@@ -168,7 +172,6 @@ def quant_apply_mlp(
                 )
             else:
                 antiquant_scale = _require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale")
-                antiquant_scale = antiquant_scale.reshape(antiquant_scale.shape[0], antiquant_scale.shape[1] // 2, 2, antiquant_scale.shape[2]).transpose(-1, -2)
                 hidden_states = torch_npu.npu_grouped_matmul(
                     x=[hidden_states],
                     weight=[_require_single_tensor_for_swiglu_quant(w1, name="w1")],
@@ -286,8 +289,7 @@ def quant_apply_mlp(
                 swiglu_limit=swiglu_limit,
             )
         elif use_gmm_swiglu_quant_fusion:
-            if fusion:  # TODO change this to if not A5
-                print(f'swiglu_limit is set to 10, remove it plz')
+            if ASCEND_DEVICE_TYPE != AscendDeviceType.A5:
                 hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(
                     x=hidden_states,
                     weight=_require_single_tensor_for_swiglu_quant(w1, name="w1"),
@@ -299,7 +301,6 @@ def quant_apply_mlp(
                 )
             else:
                 antiquant_scale = _require_single_tensor_for_swiglu_quant(w1_scale, name="w1_scale")
-                antiquant_scale = antiquant_scale.reshape(antiquant_scale.shape[0], antiquant_scale.shape[1] // 2, 2, antiquant_scale.shape[2]).transpose(-1, -2)
                 hidden_states = torch_npu.npu_grouped_matmul(
                     x=[hidden_states],
                     weight=[_require_single_tensor_for_swiglu_quant(w1, name="w1")],
