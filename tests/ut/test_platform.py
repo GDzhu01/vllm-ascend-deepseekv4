@@ -1,4 +1,5 @@
 import importlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +23,8 @@ class TestNPUPlatform(TestBase):
         mock_vllm_config = MagicMock()
         mock_vllm_config.compilation_config = MagicMock()
         mock_vllm_config.model_config = MagicMock()
+        mock_vllm_config.model_config.hf_config = SimpleNamespace()
+        mock_vllm_config.model_config.hf_text_config = SimpleNamespace()
         mock_vllm_config.parallel_config = MagicMock()
         mock_vllm_config.cache_config = MagicMock()
         mock_vllm_config.scheduler_config = MagicMock()
@@ -262,6 +265,7 @@ class TestNPUPlatform(TestBase):
         from vllm_ascend import platform
 
         importlib.reload(platform)
+        self.platform = platform.NPUPlatform()
 
         self.platform.check_and_update_config(vllm_config)
 
@@ -417,6 +421,34 @@ class TestNPUPlatform(TestBase):
         self.platform.check_and_update_config(vllm_config)
 
         self.assertEqual(vllm_config.cache_config.block_size, 128)
+
+    @patch("vllm_ascend.quantization.utils.maybe_auto_detect_quantization")
+    @patch("vllm_ascend.utils.get_ascend_device_type", return_value=AscendDeviceType.A3)
+    @patch("vllm_ascend.ascend_config.init_ascend_config")
+    @patch("vllm_ascend.core.recompute_scheduler.RecomputeSchedulerConfig.initialize_from_config")
+    def test_check_and_update_config_clamps_cp_interleave_to_block_size_when_larger(
+        self, mock_init_recompute, mock_init_ascend, mock_soc_version, mock_auto_detect
+    ):
+        mock_init_ascend.return_value = TestNPUPlatform.mock_vllm_ascend_config()
+        vllm_config = TestNPUPlatform.mock_vllm_config()
+        vllm_config.cache_config.block_size = 32
+        vllm_config.model_config.enable_sleep_mode = True
+        vllm_config.parallel_config.decode_context_parallel_size = 2
+        vllm_config.parallel_config.prefill_context_parallel_size = 2
+        vllm_config.parallel_config.tensor_parallel_size = 2
+        vllm_config.parallel_config.cp_kv_cache_interleave_size = 128
+        vllm_config.parallel_config.enable_expert_parallel = False
+        vllm_config.scheduler_config = MagicMock()
+        mock_init_recompute.return_value = MagicMock()
+
+        from vllm_ascend import platform
+
+        importlib.reload(platform)
+        self.platform = platform.NPUPlatform()
+
+        self.platform.check_and_update_config(vllm_config)
+
+        self.assertEqual(vllm_config.parallel_config.cp_kv_cache_interleave_size, 32)
 
     @patch("vllm_ascend.quantization.utils.maybe_auto_detect_quantization")
     @patch("vllm_ascend.utils.get_ascend_device_type", return_value=AscendDeviceType.A3)

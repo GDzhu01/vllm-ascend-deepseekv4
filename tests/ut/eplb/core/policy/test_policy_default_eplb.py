@@ -40,6 +40,12 @@ class TestDefaultEplb:
             origin_weights, 2, 1)
         assert isinstance(result, list) and len(result) == 2
 
+    def test_compute_balanced_pack_redundancy_avoids_duplicate_experts_per_card(self):
+        origin_weights = [(0, 100), (1, 10), (2, 5), (3, 1)]
+        _, boxes = DefaultEplb.compute_balanced_pack_redundancy(origin_weights, 2, 2)
+        for box in boxes:
+            assert len(box) == len(set(box))
+
     def test_compute_balanced_pack_redundancy_card0(self):
         origin_weights = [(0, 10)]
         with pytest.raises(RuntimeError):
@@ -71,6 +77,15 @@ class TestDefaultEplb:
         assert isinstance(priority, np.ndarray)
         assert isinstance(new_dep, list)
         assert np.array(new_dep).shape == expert_table.shape
+
+    def test_rebalance_experts_avoids_duplicate_experts_per_card(self):
+        expert_table = np.array([[[0, 1, 2], [0, 1, 3]]])
+        workload = np.array([[[100, 10, 5], [100, 10, 1]]])
+        policy = DefaultEplb(config=None)
+        _, _, new_dep = policy.rebalance_experts(expert_table, workload)
+
+        for card in new_dep[0]:
+            assert len(card) == len(set(card))
 
     def test_rebalance_experts_exceptions(self):
         policy = DefaultEplb(config=None)

@@ -180,9 +180,8 @@ class TestEagleProposerLoadModel(TestBase):
         )
         self.mock_supports_multimodal_inputs.start()
 
-        # Set the current vllm config
-        set_current_vllm_config(self.vllm_config)
-        self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
+        with set_current_vllm_config(self.vllm_config):
+            self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
         self.proposer.parallel_drafting = False
 
     def tearDown(self):
@@ -327,9 +326,8 @@ class TestEagleProposerDummyRun(TestBase):
         self.mock_dp_group = patch("vllm_ascend.ascend_forward_context.get_dp_group", return_value=mock_dp_group)
         self.mock_dp_group.start()
 
-        # Set the current vllm config
-        set_current_vllm_config(self.vllm_config)
-        self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
+        with set_current_vllm_config(self.vllm_config):
+            self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
         self.proposer.model = MagicMock()
         self.proposer._runnable = MagicMock()
         self.proposer.update_stream = MagicMock()
@@ -463,9 +461,8 @@ class TestEagleProposerHelperMethods(TestBase):
         )
         self.mock_supports_multimodal_inputs.start()
 
-        # Set the current vllm config
-        set_current_vllm_config(self.vllm_config)
-        self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
+        with set_current_vllm_config(self.vllm_config):
+            self.proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=self.device, runner=self.runner)
 
     def tearDown(self):
         self.mock_cpugpubuffer.stop()
@@ -488,6 +485,40 @@ class TestEagleProposerHelperMethods(TestBase):
         ):
             return_attn, indices = self.proposer.prepare_inputs(mock_attn, num_rejected)
             self.assertEqual(indices.tolist(), [1, 2, 4])
+
+    def test_prepare_inputs_keeps_positions_cpu_indexing_on_host(self):
+        if not hasattr(torch, "npu") or not torch.npu.is_available():
+            self.skipTest("NPU is required to validate mixed CPU/NPU metadata indexing.")
+
+        device = torch.device("npu")
+        self.runner.actual_seq_lengths_q = [1, 1, 1]
+        self.runner.attn_state = MagicMock()
+        self.runner.decode_token_per_req = 1
+
+        with set_current_vllm_config(self.vllm_config):
+            proposer = AscendEagleProposer(vllm_config=self.vllm_config, device=device, runner=self.runner)
+
+        proposer.token_arange_np = np.arange(16)
+        common_attn_metadata = SimpleNamespace(
+            query_start_loc=torch.tensor([0, 2, 4, 6], dtype=torch.int32, device=device),
+            query_start_loc_cpu=torch.tensor([0, 2, 4, 6], dtype=torch.int32),
+            seq_lens=torch.tensor([5, 6, 7], dtype=torch.int32, device=device),
+            seq_lens_cpu=torch.tensor([5, 6, 7], dtype=torch.int32),
+            num_computed_tokens_cpu=torch.tensor([0, 0, 0], dtype=torch.int32),
+            num_reqs=3,
+            num_input_tokens=6,
+            block_table_tensor=torch.zeros((3, 4), dtype=torch.int32, device=device),
+            slot_mapping=torch.arange(6, dtype=torch.int32, device=device),
+            positions=torch.arange(6, dtype=torch.int32, device=device),
+            positions_cpu=torch.arange(6, dtype=torch.int32),
+        )
+
+        returned_attn, indices = proposer.prepare_inputs(common_attn_metadata, [[10], [11], [12]], [1, 1, 1])
+
+        expected_positions_cpu = torch.tensor([0, 2, 4], dtype=torch.int32)
+        self.assertEqual(indices.device.type, "npu")
+        self.assertTrue(torch.equal(returned_attn.positions.cpu(), expected_positions_cpu))
+        self.assertTrue(torch.equal(returned_attn.positions_cpu, expected_positions_cpu))
 
     def test_set_inputs_first_pass_uses_kernel_block_size(self):
         metadata_builder = MagicMock()

@@ -21,6 +21,7 @@ import os
 import torch
 import torch_npu
 from vllm.logger import logger
+import vllm.model_executor.layers.batch_invariant as upstream_batch_invariant
 from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
 from vllm.triton_utils import HAS_TRITON
 
@@ -36,6 +37,7 @@ if HAS_TRITON:
         matmul_batch_invariant,
         mm_batch_invariant,
     )
+    from vllm_ascend.ops.triton.batch_invariant.rmsnorm import rms_norm_batch_invariant
     from vllm_ascend.ops.triton.batch_invariant.softmax import softmax_batch_invariant
 
 
@@ -62,6 +64,15 @@ def add_rms_norm(
     return x_, None, residual_
 
 
+def rms_norm(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+):
+    """torch_npu.npu_rms_norm can't ensure batch invariant."""
+    return rms_norm_batch_invariant(x, weight, eps=eps), None
+
+
 def reduce_sum(x: torch.Tensor, dim: int | None = None, keepdim: bool = False) -> torch.Tensor:
     """npu_reduce_sum_batch_invariant requires dim to be specified, but torch.sum
     doesn't require it, so we set dim to -1 by default if dim is None and x.dim()==1.
@@ -86,6 +97,37 @@ def override_envs_for_invariance():
 
 
 _batch_invariant_LIB = None
+
+
+def sync_batch_invariant_mode():
+    upstream_batch_invariant.VLLM_BATCH_INVARIANT = upstream_batch_invariant._read_vllm_batch_invariant()
+
+
+def compute_logprobs_batch_invariant(logits: torch.Tensor) -> torch.Tensor:
+    if vllm_is_batch_invariant() and logits.device.type == "npu":
+        return logits.to(device="cpu", dtype=torch.float32).log_softmax(dim=-1).to(logits.device)
+    return logits.log_softmax(dim=-1, dtype=torch.float32)
+
+
+def patch_v1_sampler_for_batch_invariance():
+    from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
+    from vllm.v1.sample.sampler import Sampler
+
+    if not getattr(Sampler, "_vllm_ascend_batch_invariant_patched", False):
+        Sampler.compute_logprobs = staticmethod(compute_logprobs_batch_invariant)
+        Sampler._vllm_ascend_batch_invariant_patched = True
+
+    if not getattr(TopKTopPSampler, "_vllm_ascend_batch_invariant_patched", False):
+        original_forward_native = TopKTopPSampler.forward_native
+
+        def forward_native(self, logits, generators, k, p):
+            sampled, logits_to_return = original_forward_native(self, logits, generators, k, p)
+            if self.logprobs_mode == "processed_logprobs":
+                logits_to_return = compute_logprobs_batch_invariant(logits)
+            return sampled, logits_to_return
+
+        TopKTopPSampler.forward_native = forward_native
+        TopKTopPSampler._vllm_ascend_batch_invariant_patched = True
 
 
 def enable_batch_invariant_mode():
@@ -123,6 +165,12 @@ def enable_batch_invariant_mode():
         # is not available. it will get better performance with ascendc.
         _batch_invariant_LIB.impl("aten::linear", linear_batch_invariant, "NPU")
 
+    if HAS_TRITON:
+        # torch_npu.npu_rms_norm is a torch_npu API, so we need to patch it directly.
+        torch_npu.npu_rms_norm = rms_norm
+
+    patch_v1_sampler_for_batch_invariance()
+
 
 def init_batch_invariance():
     """
@@ -136,6 +184,7 @@ def init_batch_invariance():
     Call this function early in your application, or set VLLM_BATCH_INVARIANT=1
     environment variable to enable automatically.
     """
+    sync_batch_invariant_mode()
     if vllm_is_batch_invariant():
         if HAS_TRITON or HAS_ASCENDC_BATCH_INVARIANT:
             logger.info(

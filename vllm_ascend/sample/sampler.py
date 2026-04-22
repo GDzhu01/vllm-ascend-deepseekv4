@@ -6,6 +6,7 @@ from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_ascend.ascend_config import get_ascend_config
+from vllm_ascend.batch_invariant import compute_logprobs_batch_invariant
 from vllm_ascend.sample.penalties import apply_all_penalties
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type, global_stream, npu_stream_switch
 
@@ -61,6 +62,10 @@ class AscendSampler(Sampler):
             output_token_ids,
         )
 
+    @staticmethod
+    def compute_logprobs(logits: torch.Tensor) -> torch.Tensor:
+        return compute_logprobs_batch_invariant(logits)
+
     def __init__(self, logprobs_mode=DEFAULT_LOGPROBS_MODE):
         # TODO: support logprobs_mode in vllm-ascend
         super().__init__(logprobs_mode=logprobs_mode)
@@ -102,13 +107,16 @@ class AscendTopKTopPSampler(TopKTopPSampler):
         # when batch_invariant mode is enabled, we should use vllm's implementation.
         # or it will make batch_invariant mode not working.
         if vllm_is_batch_invariant():
-            return super().forward_native(logits, generators, k, p)
+            sampled, logits_to_return = super().forward_native(logits, generators, k, p)
+            if self.logprobs_mode == "processed_logprobs":
+                logits_to_return = compute_logprobs_batch_invariant(logits)
+            return sampled, logits_to_return
         logits = self.apply_top_k_top_p(logits, k, p)
         logits_to_return = None
         if self.logprobs_mode == "processed_logits":
             logits_to_return = logits
         elif self.logprobs_mode == "processed_logprobs":
-            logits_to_return = logits.log_softmax(dim=-1, dtype=torch.float32)
+            logits_to_return = compute_logprobs_batch_invariant(logits)
 
         probs = logits.softmax(dim=-1, dtype=torch.float32)
         if get_ascend_config().enable_async_exponential:

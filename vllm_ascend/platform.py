@@ -493,6 +493,16 @@ class NPUPlatform(Platform):
             vllm_config.scheduler_config.SLO_limits_for_dynamic_batch = ascend_config.SLO_limits_for_dynamic_batch
 
         cp_size = parallel_config.decode_context_parallel_size * parallel_config.prefill_context_parallel_size
+        if cp_size > 1 and parallel_config.cp_kv_cache_interleave_size > cache_config.block_size:
+            logger.warning_once(
+                "cp_kv_cache_interleave_size(%s) is larger than block_size(%s) under context parallelism. "
+                "Override cp_kv_cache_interleave_size to %s.",
+                parallel_config.cp_kv_cache_interleave_size,
+                cache_config.block_size,
+                cache_config.block_size,
+            )
+            vllm_config.parallel_config.cp_kv_cache_interleave_size = cache_config.block_size
+
         if (
             vllm_config.kv_transfer_config is not None
             and cache_config.block_size != parallel_config.cp_kv_cache_interleave_size

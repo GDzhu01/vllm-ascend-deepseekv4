@@ -29,6 +29,36 @@ class DefaultEplb(EplbPolicy):
         super().__init__(config)
 
     @staticmethod
+    def _allocate_redundant_experts(origin_weights, card_num, num_redundancy_expert):
+        route_expert_num = len(origin_weights)
+        route_expert_redundancy: list[list[int]] = [[] for _ in range(route_expert_num)]
+        max_redundancies_per_expert = max(card_num - 1, 0)
+
+        for i in range(num_redundancy_expert):
+            sorted_indices = np.argsort([t[1] for t in origin_weights], kind="stable")[::-1]
+            weights = [origin_weights[idx] for idx in sorted_indices]
+
+            selected_idx = None
+            for idx, (expert_id, _) in enumerate(weights):
+                if len(route_expert_redundancy[expert_id]) < max_redundancies_per_expert:
+                    selected_idx = idx
+                    break
+
+            if selected_idx is None:
+                raise RuntimeError(
+                    "No valid redundant expert placement remains without duplicating a logical expert on one NPU."
+                )
+
+            expert_id, expert_weight = weights[selected_idx]
+            current_replica_count = len(route_expert_redundancy[expert_id]) + 1
+            tmp_raw_weight = expert_weight * current_replica_count
+            route_expert_redundancy[expert_id].append(route_expert_num + i)
+            weights[selected_idx] = (expert_id, tmp_raw_weight / (current_replica_count + 1))
+            origin_weights = weights
+
+        return origin_weights, route_expert_redundancy
+
+    @staticmethod
     def add_redundant(current_expert_table, expert_workload, num_original_expert):
         layer_num, npu_num, experts_per_npu = expert_workload.shape
         workload_new = np.zeros((layer_num, num_original_expert))
@@ -46,18 +76,12 @@ class DefaultEplb(EplbPolicy):
     @staticmethod
     # Split hot (high-load) experts into redundant experts
     def original_compute_balanced_pack_redundancy(origin_weights, card_num, num_redundancy_expert):
-        # Step 1: Sort the items by weight in descending order (we are sorting by weight now)
-        # Sort based on the second element (the second value of each tuple)
+        # Step 1: Split hot experts, while capping each logical expert to at
+        # most one placement per card.
         route_expert_num = len(origin_weights)
-        route_expert_redundancy: list[list[int]] = [[] for _ in range(route_expert_num)]
-        for i in range(num_redundancy_expert):
-            sorted_indices = np.argsort([t[1] for t in origin_weights], kind="stable")[::-1]
-            weights = [origin_weights[idx] for idx in sorted_indices]
-            tmp_raw_weight = weights[0][1] * (len(route_expert_redundancy[weights[0][0]]) + 1)
-            route_expert_redundancy[weights[0][0]].append(route_expert_num + i)
-            avg_weight = tmp_raw_weight / (len(route_expert_redundancy[weights[0][0]]) + 1)
-            weights[0] = (weights[0][0], avg_weight)
-            origin_weights = weights
+        origin_weights, route_expert_redundancy = DefaultEplb._allocate_redundant_experts(
+            origin_weights, card_num, num_redundancy_expert
+        )
 
         # Step 2: Calculate the number of items per box
         expert_num = route_expert_num + num_redundancy_expert
@@ -127,16 +151,9 @@ class DefaultEplb(EplbPolicy):
     @staticmethod
     def compute_balanced_pack_redundancy(origin_weights, card_num, num_redundancy_expert):
         route_expert_num = len(origin_weights)
-        route_expert_redundancy: list[list[int]] = [[] for _ in range(route_expert_num)]
-        for i in range(num_redundancy_expert):
-            sorted_indices = np.argsort([t[1] for t in origin_weights], kind="stable")[::-1]
-            weights = [origin_weights[idx] for idx in sorted_indices]
-            tmp_raw_weight = weights[0][1] * (len(route_expert_redundancy[weights[0][0]]) + 1)
-            route_expert_redundancy[weights[0][0]].append(route_expert_num + i)
-            avg_weight = tmp_raw_weight / (len(route_expert_redundancy[weights[0][0]]) + 1)
-            weights[0] = (weights[0][0], avg_weight)
-            origin_weights = weights
-
+        origin_weights, route_expert_redundancy = DefaultEplb._allocate_redundant_experts(
+            origin_weights, card_num, num_redundancy_expert
+        )
         expert_num = route_expert_num + num_redundancy_expert
         if card_num == 0:
             raise RuntimeError("card_num can not be 0.")

@@ -1448,7 +1448,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         #  q1 + 0, q1 + 1, q1 + 2, q1 + 3,       // req 2
         #  q1 + q2 + 0, q1 + q2 + 1, q1 + q2 + 2] // req 3
         token_indices_np = token_offsets + old_query_start_locs_expanded
-        token_indices = torch.from_numpy(token_indices_np).to(device, non_blocking=True)
+        token_indices_cpu = torch.from_numpy(token_indices_np)
+        token_indices = token_indices_cpu.to(device, non_blocking=True)
 
         common_attn_metadata.slot_mapping[: token_indices.shape[0]].copy_(
             common_attn_metadata.slot_mapping[token_indices]
@@ -1472,7 +1473,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
-            positions_cpu=common_attn_metadata.positions_cpu[token_indices],
+            positions_cpu=common_attn_metadata.positions_cpu[token_indices_cpu],
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,

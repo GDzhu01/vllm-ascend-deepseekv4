@@ -27,6 +27,35 @@ import vllm_ascend.batch_invariant as batch_invariant
 class TestBatchInvariant:
     """Complete test suite for batch_invariant.py"""
 
+    def test_sync_batch_invariant_mode_reads_current_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+        batch_invariant.upstream_batch_invariant.VLLM_BATCH_INVARIANT = False
+
+        batch_invariant.sync_batch_invariant_mode()
+
+        assert batch_invariant.upstream_batch_invariant.VLLM_BATCH_INVARIANT is True
+
+    def test_patch_v1_sampler_for_batch_invariance_marks_upstream_classes(self):
+        from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
+        from vllm.v1.sample.sampler import Sampler
+
+        batch_invariant.patch_v1_sampler_for_batch_invariance()
+
+        assert getattr(Sampler, "_vllm_ascend_batch_invariant_patched", False) is True
+        assert getattr(TopKTopPSampler, "_vllm_ascend_batch_invariant_patched", False) is True
+
+    def test_rms_norm_uses_batch_invariant_helper(self):
+        x = MagicMock(spec=torch.Tensor)
+        weight = MagicMock(spec=torch.Tensor)
+        expected = MagicMock(spec=torch.Tensor)
+        batch_invariant.rms_norm_batch_invariant = MagicMock(return_value=expected)
+
+        output, aux = batch_invariant.rms_norm(x, weight, 1e-6)
+
+        batch_invariant.rms_norm_batch_invariant.assert_called_once_with(x, weight, eps=1e-6)
+        assert output is expected
+        assert aux is None
+
     def test_override_envs_for_invariance(self):
         """Test environment variable override"""
         # Clear environment variables
@@ -104,6 +133,7 @@ class TestBatchInvariant:
         mock_library.impl.assert_any_call("aten::linear", batch_invariant.linear_batch_invariant, "NPU")
         mock_library.impl.assert_any_call("aten::softmax", batch_invariant.softmax_batch_invariant, "NPU")
         mock_library.impl.assert_any_call("aten::_softmax", batch_invariant.softmax_batch_invariant, "NPU")
+        assert batch_invariant.torch_npu.npu_rms_norm == batch_invariant.rms_norm
 
     @patch("vllm_ascend.batch_invariant.HAS_TRITON", False)
     @patch("vllm_ascend.batch_invariant.HAS_ASCENDC_BATCH_INVARIANT", False)
