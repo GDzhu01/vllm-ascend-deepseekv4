@@ -37,6 +37,7 @@ class TestUtils(TestBase):
         importlib.reload(platform)
         utils.enable_dsa_cp_with_layer_shard.cache_clear()
         utils.enable_dsa_cp_with_o_proj_tp.cache_clear()
+        utils.supports_add_rms_norm_bias.cache_clear()
 
     def test_nd_to_nz_2d(self):
         # can be divided by 16
@@ -118,6 +119,22 @@ class TestUtils(TestBase):
         with mock.patch('builtins.__import__') as mock_import_module:
             mock_import_module.side_effect = ImportError("import error")
             self.assertFalse(utils.enable_custom_op())
+
+    def test_supports_add_rms_norm_bias_disables_a3(self):
+        utils.supports_add_rms_norm_bias.cache_clear()
+        with (
+            mock.patch("vllm_ascend.utils.get_ascend_device_type", return_value=utils.AscendDeviceType.A3),
+            mock.patch("torch.ops._C_ascend.npu_add_rms_norm_bias", new=mock.Mock(), create=True),
+        ):
+            self.assertFalse(utils.supports_add_rms_norm_bias())
+
+    def test_supports_add_rms_norm_bias_enabled_on_non_a3(self):
+        utils.supports_add_rms_norm_bias.cache_clear()
+        with (
+            mock.patch("vllm_ascend.utils.get_ascend_device_type", return_value=utils.AscendDeviceType.A2),
+            mock.patch("torch.ops._C_ascend.npu_add_rms_norm_bias", new=mock.Mock(), create=True),
+        ):
+            self.assertTrue(utils.supports_add_rms_norm_bias())
 
     def test_find_hccl_library(self):
         with mock.patch.dict(os.environ,

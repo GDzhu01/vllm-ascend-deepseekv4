@@ -21,6 +21,8 @@ from vllm.compilation.passes.inductor_pass import get_pass_context
 from vllm.compilation.passes.vllm_inductor_pass import VllmInductorPass
 from vllm.config import VllmConfig
 
+from vllm_ascend.utils import supports_add_rms_norm_bias
+
 
 class GraphFusionPassManager:
     """
@@ -49,6 +51,7 @@ class GraphFusionPassManager:
     def configure(self, config: VllmConfig):
         # By default, we enable the graph fusion and quantization fusion pass.
         self.ascend_compilation_config: dict = config.additional_config.get("ascend_compilation_config", {})
+        supports_rms_norm_bias = supports_add_rms_norm_bias()
         if self.ascend_compilation_config.get("fuse_norm_quant", True):
             from .passes.norm_quant_fusion_pass import AddRMSNormQuantFusionPass
 
@@ -59,7 +62,7 @@ class GraphFusionPassManager:
 
             self.passes.append(QKNormRopeFusionPass(config))
 
-        if self.ascend_compilation_config.get("fuse_allreduce_rms", True):
+        if self.ascend_compilation_config.get("fuse_allreduce_rms", True) and supports_rms_norm_bias:
             from .passes.allreduce_rmsnorm_fusion_pass import MatmulAllReduceAddRMSNormPass
 
             self.passes.append(MatmulAllReduceAddRMSNormPass(config))
@@ -69,7 +72,7 @@ class GraphFusionPassManager:
 
             self.passes.append(MulsAddFusionPass(config))
 
-        if config.compilation_config.pass_config.enable_sp:
+        if config.compilation_config.pass_config.enable_sp and supports_rms_norm_bias:
             from .passes.sequence_parallelism import SequenceParallelismPass
             from .passes.sequence_parallelism_moe import SequenceParallelismMoePass
 

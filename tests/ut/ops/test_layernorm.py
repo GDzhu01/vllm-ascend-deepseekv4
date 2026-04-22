@@ -114,6 +114,35 @@ def test_ascend_rmsnorm_batch_invariant_skips_custom_op(
     assert torch.allclose(out_residual, expected_out_residual)
 
 
+@patch("vllm_ascend.ops.layernorm.supports_add_rms_norm_bias", return_value=False)
+@patch("vllm_ascend.ops.layernorm.vllm_is_batch_invariant", return_value=False)
+@patch("vllm_ascend.ops.layernorm.enable_custom_op", return_value=True)
+@patch("torch.ops.vllm.maybe_chunk_residual", side_effect=lambda x, residual: residual)
+@patch("torch_npu.npu_add_rms_norm", side_effect=mock_add_rms_norm)
+@patch("torch.ops._C_ascend.npu_add_rms_norm_bias", side_effect=AssertionError("custom op should be skipped"))
+def test_ascend_rmsnorm_skips_unsupported_add_rms_norm_bias(
+    mock_add_rms_norm_bias,
+    mock_add_rms_norm,
+    _mock_maybe_chunk_residual,
+    _mock_enable_custom_op,
+    _mock_batch_invariant,
+    _mock_supports_add_rms_norm_bias,
+    dummy_tensor,
+    default_vllm_config,
+):
+    residual = torch.randn(4, 8, dtype=torch.float16)
+    layer = AscendRMSNorm(hidden_size=8, eps=1e-5)
+
+    out_x, out_residual = layer.forward_oot(dummy_tensor, residual)
+
+    expected_out_x = 2 * dummy_tensor
+    expected_out_residual = 2 * residual
+    mock_add_rms_norm.assert_called_once()
+    mock_add_rms_norm_bias.assert_not_called()
+    assert torch.allclose(out_x, expected_out_x)
+    assert torch.allclose(out_residual, expected_out_residual)
+
+
 @patch("vllm_ascend.ops.layernorm.get_weight_prefetch_method")
 @patch("torch_npu.npu_rms_norm", side_effect=mock_rms_norm)
 def test_ascend_rmsnorm_without_residual_uses_rms_norm(

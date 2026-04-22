@@ -22,7 +22,7 @@ Run `pytest tests/e2e/multicard/long_sequence/test_accuracy.py`.
 
 import pytest
 
-from tests.e2e.conftest import VllmRunner
+from tests.e2e.conftest import VllmRunner, ensure_npu_memory_free, wait_until_npu_memory_free
 from tests.e2e.model_utils import check_outputs_equal
 
 MODELS = [
@@ -31,8 +31,13 @@ MODELS = [
 ]
 
 
+def _wait_for_followup_runner() -> None:
+    ensure_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
+
+
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("max_tokens", [10])
+@wait_until_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
 def test_models_long_sequence_output_between_tp_and_cp(
     model: str,
     max_tokens: int,
@@ -87,6 +92,7 @@ def test_models_long_sequence_output_between_tp_and_cp(
         vllm_context_parallel_outputs = runner.generate_greedy(
             prompts, max_tokens)
 
+    _wait_for_followup_runner()
     with VllmRunner(model, **tp_full_kwargs) as runner:  # type: ignore
         vllm_eager_outputs = runner.generate_greedy(prompts, max_tokens)
 
@@ -102,6 +108,7 @@ model = "vllm-ascend/DeepSeek-V2-Lite-W8A8"
 
 
 @pytest.mark.parametrize("max_tokens", [10])
+@wait_until_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
 def test_accuracy_dcp_only_graph(max_tokens: int, ) -> None:
     prompts = [
         "The president of the United States is", "The capital of France is"
@@ -129,6 +136,7 @@ def test_accuracy_dcp_only_graph(max_tokens: int, ) -> None:
         vllm_context_parallel_outputs = runner.generate_greedy(
             prompts, max_tokens)
 
+    _wait_for_followup_runner()
     with VllmRunner(model, **tp_kwargs) as runner:  # type: ignore
         vllm_eager_outputs = runner.generate_greedy(prompts, max_tokens)
 
@@ -141,6 +149,7 @@ def test_accuracy_dcp_only_graph(max_tokens: int, ) -> None:
 
 
 @pytest.mark.parametrize("max_tokens", [10])
+@wait_until_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
 def test_accuracy_dcp_only_eager(max_tokens: int, ) -> None:
     prompts = [
         "The president of the United States is", "The capital of France is"
@@ -165,6 +174,7 @@ def test_accuracy_dcp_only_eager(max_tokens: int, ) -> None:
         vllm_context_parallel_outputs = runner.generate_greedy(
             prompts, max_tokens)
 
+    _wait_for_followup_runner()
     with VllmRunner(model, **tp_kwargs) as runner:  # type: ignore
         vllm_eager_outputs = runner.generate_greedy(prompts, max_tokens)
 
@@ -177,6 +187,7 @@ def test_accuracy_dcp_only_eager(max_tokens: int, ) -> None:
 
 
 @pytest.mark.parametrize("max_tokens", [10])
+@wait_until_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
 def test_accuracy_pcp_only(max_tokens: int, ) -> None:
     prompts = [
         "The president of the United States is", "The capital of France is"
@@ -201,6 +212,7 @@ def test_accuracy_pcp_only(max_tokens: int, ) -> None:
         vllm_context_parallel_outputs = runner.generate_greedy(
             prompts, max_tokens)
 
+    _wait_for_followup_runner()
     with VllmRunner(model, **tp_kwargs) as runner:  # type: ignore
         vllm_eager_outputs = runner.generate_greedy(prompts, max_tokens)
 
@@ -214,6 +226,7 @@ def test_accuracy_pcp_only(max_tokens: int, ) -> None:
 
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("max_tokens", [10])
+@wait_until_npu_memory_free(target_free_percentage=0.95, max_wait_seconds=90)
 def test_models_long_sequence_cp_kv_interleave_size_output_between_tp_and_cp(
     model: str,
     max_tokens: int,
@@ -270,6 +283,7 @@ def test_models_long_sequence_cp_kv_interleave_size_output_between_tp_and_cp(
         vllm_context_parallel_outputs = runner.generate_greedy(
             prompts, max_tokens)
 
+    _wait_for_followup_runner()
     with VllmRunner(model, **tp_full_kwargs) as runner:  # type: ignore
         vllm_eager_outputs = runner.generate_greedy(prompts, max_tokens)
 

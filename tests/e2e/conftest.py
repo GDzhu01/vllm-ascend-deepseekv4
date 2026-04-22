@@ -165,29 +165,38 @@ def wait_until_npu_memory_free(target_free_percentage: float = 0.5, max_wait_sec
         max_wait_seconds (float): Maximum wait time in seconds.
     """
 
+    def _wait_for_npu_memory_free():
+        # Clean up non-NPU resources in the main process
+        cleanup_dist_env_and_memory()
+
+        # Use a spawned subprocess to check NPU memory to avoid initializing NPU in the main process
+        ctx = multiprocessing.get_context("spawn")
+        p = ctx.Process(target=_check_npu_memory_worker, args=(target_free_percentage, max_wait_seconds))
+        p.start()
+        p.join()
+
+        if p.exitcode != 0:
+            raise TimeoutError(
+                f"Timeout: NPU memory free size did not reach "
+                f"{target_free_percentage} of total npu memory within {max_wait_seconds} seconds."
+            )
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # Clean up non-NPU resources in the main process
-            cleanup_dist_env_and_memory()
-
-            # Use a spawned subprocess to check NPU memory to avoid initializing NPU in the main process
-            ctx = multiprocessing.get_context("spawn")
-            p = ctx.Process(target=_check_npu_memory_worker, args=(target_free_percentage, max_wait_seconds))
-            p.start()
-            p.join()
-
-            if p.exitcode != 0:
-                raise TimeoutError(
-                    f"Timeout: NPU memory free size did not reach "
-                    f"{target_free_percentage} of total npu memory within {max_wait_seconds} seconds."
-                )
-
+            _wait_for_npu_memory_free()
             return func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+def ensure_npu_memory_free(target_free_percentage: float = 0.5, max_wait_seconds: float = 50):
+    wait_until_npu_memory_free(
+        target_free_percentage=target_free_percentage,
+        max_wait_seconds=max_wait_seconds,
+    )(lambda: None)()
 
 
 def cleanup_dist_env_and_memory(shutdown_ray: bool = False):

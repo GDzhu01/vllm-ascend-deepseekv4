@@ -332,6 +332,16 @@ def enable_custom_op():
     return _CUSTOM_OP_ENABLED
 
 
+@lru_cache
+def supports_add_rms_norm_bias() -> bool:
+    if not hasattr(torch.ops._C_ascend, "npu_add_rms_norm_bias"):
+        return False
+
+    # The current 910_93 runtime used by A3 hardware does not provide
+    # reg-info for AddRmsNormBias, so we must stay on the unfused path.
+    return get_ascend_device_type() != AscendDeviceType.A3
+
+
 def find_hccl_library() -> str:
     """
     We either use the library file specified by the `HCCL_SO_PATH`
