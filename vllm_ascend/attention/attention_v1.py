@@ -23,6 +23,7 @@ import torch_npu
 import vllm.envs as envs_vllm
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
+from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
 from vllm.utils.math_utils import cdiv
 from vllm.v1.attention.backend import (  # type: ignore
     AttentionBackend,
@@ -55,6 +56,7 @@ from vllm_ascend.compilation.acl_graph import (
     update_graph_params_workspaces,
 )
 from vllm_ascend.device.device_op import DeviceOperator
+from vllm_ascend.batch_invariant import HAS_ASCENDC_BATCH_INVARIANT
 from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import weak_ref_tensors
 
@@ -758,6 +760,99 @@ class AscendAttentionBackendImpl(AttentionImpl):
         output[:batch_size] = attn_output[:batch_size]
         return output
 
+    @staticmethod
+    def _to_int_list(lengths: torch.Tensor | list[int]) -> list[int]:
+        if isinstance(lengths, torch.Tensor):
+            return [int(x) for x in lengths.tolist()]
+        return [int(x) for x in lengths]
+
+    def _expand_kv_heads(self, key: torch.Tensor, value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if key.shape[1] == self.num_heads:
+            return key, value
+        repeat = self.num_heads // key.shape[1]
+        return key.repeat_interleave(repeat, dim=1), value.repeat_interleave(repeat, dim=1)
+
+    def _run_batch_invariant_attention_cpu(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        prefix_len: int,
+    ) -> torch.Tensor:
+        query_cpu = query.to("cpu", dtype=torch.float32)
+        key_cpu = key.to("cpu", dtype=torch.float32)
+        value_cpu = value.to("cpu", dtype=torch.float32)
+        key_cpu, value_cpu = self._expand_kv_heads(key_cpu, value_cpu)
+
+        q_len = query_cpu.shape[0]
+        kv_len = key_cpu.shape[0]
+        scores = torch.einsum("qhd,khd->hqk", query_cpu, key_cpu) * self.scale
+        query_positions = prefix_len + torch.arange(q_len).unsqueeze(1)
+        key_positions = torch.arange(kv_len).unsqueeze(0)
+        causal_mask = key_positions <= query_positions
+        scores = scores.masked_fill(~causal_mask.unsqueeze(0), -float("inf"))
+        probs = torch.softmax(scores, dim=-1, dtype=torch.float32)
+        output = torch.einsum("hqk,khd->qhd", probs, value_cpu)
+        return output.to(device=query.device, dtype=query.dtype)
+
+    def _gather_dense_kv_from_cache(
+        self,
+        block_table: torch.Tensor,
+        seq_len: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        assert self.key_cache is not None and self.value_cache is not None
+        block_size = self.key_cache.shape[1]
+        num_blocks = cdiv(seq_len, block_size)
+        block_ids = block_table[:num_blocks].to(torch.long)
+        key = self.key_cache[block_ids].reshape(-1, self.num_kv_heads, self.head_size)[:seq_len]
+        value = self.value_cache[block_ids].reshape(-1, self.num_kv_heads, self.head_size)[:seq_len]
+        return key, value
+
+    def _forward_batch_invariant_attention_fallback(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attn_metadata: AscendMetadata,
+        output: torch.Tensor,
+    ) -> torch.Tensor:
+        q_ends = self._to_int_list(attn_metadata.actual_seq_lengths_q)
+        total_q = q_ends[-1]
+        query = query[:total_q]
+        q_starts = [0] + q_ends[:-1]
+        outputs: list[torch.Tensor] = []
+
+        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+            key = key[:total_q]
+            value = value[:total_q]
+            for start, end in zip(q_starts, q_ends):
+                outputs.append(
+                    self._run_batch_invariant_attention_cpu(
+                        query[start:end],
+                        key[start:end],
+                        value[start:end],
+                        prefix_len=0,
+                    )
+                )
+        else:
+            seq_lens = self._to_int_list(attn_metadata.seq_lens_list)
+            block_tables = attn_metadata.block_tables
+            for req_idx, (start, end) in enumerate(zip(q_starts, q_ends)):
+                seq_len = seq_lens[req_idx]
+                key_seq, value_seq = self._gather_dense_kv_from_cache(block_tables[req_idx], seq_len)
+                prefix_len = seq_len - (end - start)
+                outputs.append(
+                    self._run_batch_invariant_attention_cpu(
+                        query[start:end],
+                        key_seq,
+                        value_seq,
+                        prefix_len=prefix_len,
+                    )
+                )
+
+        output[:total_q] = torch.cat(outputs, dim=0)
+        return output
+
     def forward_fused_infer_attention(
         self,
         query: torch.Tensor,
@@ -773,6 +868,14 @@ class AscendAttentionBackendImpl(AttentionImpl):
             attn_output, num_tokens = self.full_graph_fia(query, key, value, attn_metadata, output)
             output[:num_tokens] = attn_output[:num_tokens]
             return output
+        if (
+            vllm_is_batch_invariant()
+            and not HAS_ASCENDC_BATCH_INVARIANT
+            and self.attn_type == AttentionType.DECODER
+            and self.sinks is None
+            and self.sliding_window is None
+        ):
+            return self._forward_batch_invariant_attention_fallback(query, key, value, attn_metadata, output)
         if (
             attn_metadata.attn_state == AscendAttentionState.DecodeOnly
             and self.sliding_window is not None
