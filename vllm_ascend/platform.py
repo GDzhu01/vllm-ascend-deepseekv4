@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import os
 from typing import TYPE_CHECKING, Any
@@ -60,6 +61,10 @@ else:
     FlexibleArgumentParser = None
 
 _CUSTOM_OP_REGISTERED = False
+
+
+def _has_ascendc_batch_invariant_ops() -> bool:
+    return importlib.util.find_spec("batch_invariant_ops") is not None
 
 
 def config_deprecated_logging():
@@ -360,6 +365,17 @@ class NPUPlatform(Platform):
             if compilation_config.cudagraph_mode == CUDAGraphMode.FULL_DECODE_ONLY:
                 logger.warning("encoder-decoder model doesn't support FULL_DECODE_ONLY, fallback to PIECEWISE ")
             compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+
+        if (
+            os.environ.get("VLLM_BATCH_INVARIANT", "0") == "1"
+            and not _has_ascendc_batch_invariant_ops()
+            and compilation_config.cudagraph_mode in {CUDAGraphMode.FULL_DECODE_ONLY, CUDAGraphMode.FULL}
+        ):
+            logger.warning(
+                "FULL ACL Graph is unsupported when VLLM_BATCH_INVARIANT=1 and AscendC batch-invariant ops "
+                "are unavailable. Falling back to eager mode."
+            )
+            compilation_config.cudagraph_mode = CUDAGraphMode.NONE
 
         # get custom compile backend for graph fusion
         compilation_config.oot_compiler = cls.get_compile_backend()

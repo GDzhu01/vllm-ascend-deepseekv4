@@ -20,6 +20,8 @@
 import torch
 from vllm.triton_utils import tl, triton
 
+from vllm_ascend.ops.triton.triton_utils import get_vectorcore_num
+
 
 @triton.jit
 def matmul_bias_persistent_kernel(
@@ -268,9 +270,7 @@ def linear_persistent(x, y):
     # Allocate output tensor (same data type as x)
     output = torch.zeros((M, N), dtype=x.dtype, device=x.device)
 
-    grid_size = (
-        triton.runtime.driver.active.utils.get_device_properties(torch.npu.current_device())["num_vectorcore"] // 2
-    )
+    grid_size = get_vectorcore_num() // 2
 
     # Define block sizes (can be adjusted based on hardware)
     BLOCK_K = 256
