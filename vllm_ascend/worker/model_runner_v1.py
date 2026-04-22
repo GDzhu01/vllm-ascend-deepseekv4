@@ -2678,12 +2678,19 @@ class NPUModelRunner(GPUModelRunner):
             self.eplb_updator.set_adaptor(self.eplb_adaptor)
             self.eplb_updator.warm_up_eplb()
 
+    def _sync_parallel_eplb_config(self) -> None:
+        if not self.eplb_enable:
+            return
+
+        parallel_config = self.vllm_config.parallel_config
+        parallel_config.enable_eplb = True
+        parallel_config.eplb_config.num_redundant_experts = self.ascend_config.eplb_config.num_redundant_experts
+
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
 
         with DeviceMemoryProfiler() as m:  # noqa: SIM117
-            if self.eplb_enable:
-                self.vllm_config.parallel_config.enable_eplb = True
+            self._sync_parallel_eplb_config()
             self.model: nn.Module = get_model(vllm_config=self.vllm_config)
             if self.dynamic_eplb:
                 model_register(self.model)

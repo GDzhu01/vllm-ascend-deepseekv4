@@ -266,5 +266,50 @@ class TestNPUModelRunnerKVCache(unittest.TestCase):
             [128],
         )
 
+
+class TestNPUModelRunnerEPLB(unittest.TestCase):
+
+    def test_sync_parallel_eplb_config_copies_redundant_expert_count(self):
+        runner = NPUModelRunner.__new__(NPUModelRunner)
+        runner.eplb_enable = True
+        runner.vllm_config = SimpleNamespace(
+            parallel_config=SimpleNamespace(
+                enable_eplb=False,
+                eplb_config=SimpleNamespace(num_redundant_experts=0),
+            )
+        )
+        runner.ascend_config = SimpleNamespace(
+            eplb_config=SimpleNamespace(num_redundant_experts=2),
+        )
+
+        runner._sync_parallel_eplb_config()
+
+        self.assertTrue(runner.vllm_config.parallel_config.enable_eplb)
+        self.assertEqual(
+            runner.vllm_config.parallel_config.eplb_config.num_redundant_experts,
+            2,
+        )
+
+    def test_sync_parallel_eplb_config_noops_when_eplb_disabled(self):
+        runner = NPUModelRunner.__new__(NPUModelRunner)
+        runner.eplb_enable = False
+        runner.vllm_config = SimpleNamespace(
+            parallel_config=SimpleNamespace(
+                enable_eplb=False,
+                eplb_config=SimpleNamespace(num_redundant_experts=0),
+            )
+        )
+        runner.ascend_config = SimpleNamespace(
+            eplb_config=SimpleNamespace(num_redundant_experts=2),
+        )
+
+        runner._sync_parallel_eplb_config()
+
+        self.assertFalse(runner.vllm_config.parallel_config.enable_eplb)
+        self.assertEqual(
+            runner.vllm_config.parallel_config.eplb_config.num_redundant_experts,
+            0,
+        )
+
 if __name__ == "__main__":
     unittest.main()
