@@ -16,6 +16,8 @@ from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 from vllm.config import VllmConfig
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend
 
+from vllm_ascend.utils import get_ascend_device_type
+
 
 class AscendCompressorStateCache(CompressorStateCache):
     def __init__(
@@ -53,6 +55,10 @@ class AscendCompressorStateCache(CompressorStateCache):
 
     def get_kv_cache_spec(self, vllm_config) -> KVCacheSpec:
         page_size_padded = 16640 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 131072
+        
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self.dtype = torch.float8_e4m3fn
+
         return SlidingWindowMLASpec(  # only has one vector instead of K + V
             block_size=self.block_size,
             num_kv_heads=1,
@@ -83,6 +89,11 @@ class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
         print("mla attention spec: ", f"{self.head_dim=}")
+        
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self.dtype = torch.float8_e4m3fn
+            vllm_config.cache_config.cache_dtype = "float8_e4m3fn"
+            
         return AscendMLAAttentionSpec(  # Only has one vector instead of K + V
             block_size=128,
             num_kv_heads=1,
@@ -123,11 +134,16 @@ class AscendSVFSWACache(SVFSWACache):
         self.block_size = 128
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self.dtype = torch.float8_e4m3fn
+            vllm_config.cache_config.cache_dtype = "float8_e4m3fn"
         # TODO(cmq): alignment = 0 if A3 else 128
+        cached_head_size = (self.head_dim + 128) \
+            if get_ascend_device_type() in {AscendDeviceType.A5} else self.head_dim
         return SlidingWindowMLASpec(
             block_size=self.block_size,
             num_kv_heads=1,
-            head_size=self.head_dim,
+            head_size=cached_head_size,
             dtype=self.dtype,
             sliding_window=self.window_size,
             cache_dtype_str=self.cache_config.cache_dtype,
