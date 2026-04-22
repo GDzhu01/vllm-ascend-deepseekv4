@@ -84,10 +84,41 @@ logger = logging.getLogger(__name__)
 
 _TEST_DIR = os.path.dirname(__file__)
 _LONG_PROMPTS = [os.path.join(_TEST_DIR, "prompts", "long_prompt.txt")]
+_LOCAL_MODEL_ROOTS = (
+    Path("/models/pr60_e2e_needed_models"),
+    Path("/models"),
+)
 
 DISAGG_EPD_PROXY_SCRIPT = (
     Path(__file__).parent.parent.parent / "examples" / "disaggregated_encoder" / "disagg_epd_proxy.py"
 )
+
+
+def _is_valid_local_model_dir(model_path: Path) -> bool:
+    if not model_path.is_dir():
+        return False
+    return (model_path / "config.json").is_file() or (model_path / "params.json").is_file()
+
+
+def _iter_local_model_paths(model_name: str):
+    for root in _LOCAL_MODEL_ROOTS:
+        yield root / model_name
+        repo_name = model_name.rsplit("/", 1)[-1]
+        if repo_name != model_name:
+            yield root / repo_name
+
+
+def resolve_e2e_model_name(model_name: str) -> str:
+    if os.path.isabs(model_name) or Path(model_name).exists():
+        return model_name
+
+    redirected_model_name = maybe_model_redirect(model_name)
+    for candidate_name in dict.fromkeys((model_name, redirected_model_name)):
+        for candidate_path in _iter_local_model_paths(candidate_name):
+            if _is_valid_local_model_dir(candidate_path):
+                return str(candidate_path)
+
+    return redirected_model_name
 
 
 def _check_npu_memory_worker(target_free_percentage: float, max_wait_seconds: float):
@@ -768,6 +799,18 @@ class VllmRunner:
         if data_parallel_size > 1:
             raise ValueError("VllmRunner does not support `data_parallel_size > 1`; use `DPVllmRunner` instead.")
 
+        speculative_config = kwargs.get("speculative_config")
+        if isinstance(speculative_config, dict):
+            spec_model_name = speculative_config.get("model")
+            if isinstance(spec_model_name, str):
+                kwargs = dict(kwargs)
+                kwargs["speculative_config"] = dict(speculative_config)
+                kwargs["speculative_config"]["model"] = resolve_e2e_model_name(spec_model_name)
+
+        model_name = resolve_e2e_model_name(model_name)
+        if tokenizer_name is not None:
+            tokenizer_name = resolve_e2e_model_name(tokenizer_name)
+
         self.model = LLM(
             model=model_name,
             runner=runner,
@@ -989,6 +1032,18 @@ class DPVllmRunner(VllmRunner):
     ) -> None:
         if data_parallel_size < 2:
             raise ValueError("DPVllmRunner requires `data_parallel_size >= 2`")
+
+        speculative_config = kwargs.get("speculative_config")
+        if isinstance(speculative_config, dict):
+            spec_model_name = speculative_config.get("model")
+            if isinstance(spec_model_name, str):
+                kwargs = dict(kwargs)
+                kwargs["speculative_config"] = dict(speculative_config)
+                kwargs["speculative_config"]["model"] = resolve_e2e_model_name(spec_model_name)
+
+        model_name = resolve_e2e_model_name(model_name)
+        if tokenizer_name is not None:
+            tokenizer_name = resolve_e2e_model_name(tokenizer_name)
 
         self._dp_size = data_parallel_size
         self._dp_parent_conns: list[Any] = []
@@ -1311,7 +1366,7 @@ class HfRunner:
         skip_tokenizer_init: bool = False,
         auto_cls: type[_BaseAutoModelClass] = AutoModelForCausalLM,
     ) -> None:
-        model_name = maybe_model_redirect(model_name)
+        model_name = resolve_e2e_model_name(model_name)
         self.model_name = model_name
 
         self.config = AutoConfig.from_pretrained(

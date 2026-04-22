@@ -214,7 +214,6 @@ class SpecDecodeBaseProposer(EagleProposer):
         self.kernel_block_size = (
             draft_attn_layers_dict[self.attn_layer_names[0]].get_attn_backend().get_supported_kernel_block_sizes()[0]
         )
-
         self.piece_all_attn_layer_name = []
         for _ in range(self.num_speculative_tokens):
             self.piece_all_attn_layer_name.append([name for name in self.attn_layer_names])
@@ -363,6 +362,71 @@ class SpecDecodeBaseProposer(EagleProposer):
         # when update. So we can use the shallow copy.
         return copy.copy(attn_metadata)
 
+    def _pad_spec_query_start_loc_for_fia(
+        self,
+        query_start_loc_cpu: torch.Tensor,
+        num_tokens_padded: int,
+        num_reqs: int,
+    ) -> int:
+        # Keep the speculative batch's query_start_loc instead of reusing the
+        # target-model runner buffer. The runner buffer still reflects the
+        # pre-rejection target batch and can become non-monotonic once the
+        # speculative batch shrinks.
+        self.query_start_loc.cpu[: num_reqs + 1].copy_(query_start_loc_cpu[: num_reqs + 1])
+        num_reqs_padded = num_reqs
+
+        if self.query_start_loc.np[num_reqs_padded] != num_tokens_padded:
+            # FIA only requires the last cumulative query length to match the
+            # graph input token count. Speculative rejection can make the draft
+            # batch non-uniform even when the padded token count matches the
+            # runner's uniform decode heuristic, so check the real cumulative
+            # length instead of inferring uniformity from shape alone.
+            self.query_start_loc.np[num_reqs_padded + 1] = num_tokens_padded
+            num_reqs_padded += 1
+
+        self.query_start_loc.copy_to_gpu()
+        return num_reqs_padded
+
+    def _build_spec_attn_metadata(
+        self,
+        common_attn_metadata: CommonAttentionMetadata,
+        attn_group,
+        draft_step: int = 0,
+        ori_seq_len: torch.Tensor | None = None,
+    ):
+        attn_metadata_builder = attn_group.get_metadata_builder()
+        extra_attn_metadata_args = {}
+        if isinstance(attn_metadata_builder, AscendDSAMetadataBuilder):
+            extra_attn_metadata_args = dict(
+                prefill_ratio_to_sas_metadata=dict(),
+                decode_ratio_to_sas_metadata=dict(),
+                common_ratio_to_sas_metadata=dict(),
+            )
+
+        attn_metadata = attn_metadata_builder.build(
+            0,
+            common_attn_metadata,
+            self.runner.get_model(),
+            **extra_attn_metadata_args,
+        )
+
+        if self.pcp_size * self.dcp_size > 1:
+            assert ori_seq_len is not None
+            num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
+                ori_seq_len + draft_step + 1,
+                self.pcp_size,
+                self.dcp_size,
+                self.runner.parallel_config.cp_kv_cache_interleave_size,
+            )
+            cp_seq_len = num_computed_tokens_of_pcp_dcp[:, self.pcp_rank, self.dcp_rank]
+            if self.vllm_config.model_config.use_mla:
+                if getattr(attn_metadata, "decode", None):
+                    attn_metadata.decode.cp_seq_len = cp_seq_len
+            else:
+                attn_metadata.decode_meta.num_computed_tokens_of_pcp_dcp = num_computed_tokens_of_pcp_dcp
+
+        return attn_metadata
+
     @torch.inference_mode()
     def dummy_run(
         self,
@@ -409,7 +473,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 positions=self.runner.positions.gpu,
                 attn_state=self.runner.attn_state,
                 decode_token_per_req=self.runner.decode_token_per_req,
-                max_seq_len=0,
+                max_seq_len=self.runner.seq_lens.cpu[:num_reqs].max().item() if num_reqs > 0 else 0,
             )
             if self.pcp_size * self.dcp_size > 1:
                 # update long_seq related params and flatten block_table
@@ -419,19 +483,19 @@ class SpecDecodeBaseProposer(EagleProposer):
                 ]
 
             assert len(self.draft_attn_groups) > 0
-            builder = self.draft_attn_groups[0].get_metadata_builder()
             # update the tensor's address for each step.
             for draft_step in range(self.num_speculative_tokens):
                 common_attn_metadata = self.shallow_copy_metadata(common_attn_metadata)
                 # Set the real slot_mapping.
                 common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
-                attn_metadata_eagle = builder.build_for_graph_capture(
-                    common_attn_metadata,
-                    AscendAttentionState.SpecDecoding if self.method == "mtp" else AscendAttentionState.ChunkedPrefill,
-                )
                 per_layer_attn_metadata = dict()
-                for layer_name in self.attn_layer_names:
-                    per_layer_attn_metadata[layer_name] = attn_metadata_eagle
+                for attn_group in self.draft_attn_groups:
+                    attn_metadata_eagle = attn_group.get_metadata_builder().build_for_graph_capture(
+                        common_attn_metadata,
+                        AscendAttentionState.SpecDecoding if self.method == "mtp" else AscendAttentionState.ChunkedPrefill,
+                    )
+                    for layer_name in attn_group.layer_names:
+                        per_layer_attn_metadata[layer_name] = attn_metadata_eagle
                 multi_steps_attn_metadata.append(per_layer_attn_metadata)
 
         model_positions = self._get_positions(num_tokens)
@@ -568,17 +632,22 @@ class SpecDecodeBaseProposer(EagleProposer):
             # is run in eager mode currently, which means `_pad_query_start_loc_for_fia` is not called,
             # while draft model is run in graph model, which means we should pad the `query_start_loc`.
             # Need to be fixed in the future.
-            num_reqs_padded = self.runner._pad_query_start_loc_for_fia(
-                num_input_tokens, common_attn_metadata.num_reqs, common_attn_metadata.num_reqs
+            num_reqs_padded = self._pad_spec_query_start_loc_for_fia(
+                common_attn_metadata.query_start_loc_cpu,
+                num_input_tokens,
+                common_attn_metadata.num_reqs,
             )
             common_attn_metadata.num_reqs = num_reqs_padded
-            common_attn_metadata.query_start_loc = self.runner.query_start_loc.gpu[: num_reqs_padded + 1]
-            common_attn_metadata.query_start_loc_cpu = self.runner.query_start_loc.cpu[: num_reqs_padded + 1]
+            common_attn_metadata.query_start_loc = self.query_start_loc.gpu[: num_reqs_padded + 1]
+            common_attn_metadata.query_start_loc_cpu = self.query_start_loc.cpu[: num_reqs_padded + 1]
             common_attn_metadata.block_table_tensor = self._pad_tensor(
                 common_attn_metadata.block_table_tensor, num_reqs_padded
             )
-            common_attn_metadata.seq_lens = self.runner.seq_lens.gpu[:num_reqs_padded]
-            common_attn_metadata.seq_lens_cpu = self.runner.seq_lens.cpu[:num_reqs_padded]
+            common_attn_metadata.seq_lens = self._pad_tensor(common_attn_metadata.seq_lens, num_reqs_padded)
+            common_attn_metadata.seq_lens_cpu = self._pad_tensor(common_attn_metadata.seq_lens_cpu, num_reqs_padded)
+            common_attn_metadata.num_computed_tokens_cpu = self._pad_tensor(
+                common_attn_metadata.num_computed_tokens_cpu, num_reqs_padded
+            )
 
         if self.supports_mm_inputs:
             mm_embeds, is_mm_embed = mm_embed_inputs or (None, None)
@@ -600,29 +669,35 @@ class SpecDecodeBaseProposer(EagleProposer):
         self.slot_mapping_group[0][slot_mapping_lens:].fill_(-1)
         common_attn_metadata.slot_mapping = self.slot_mapping_group[0]
         common_attn_metadata.num_input_tokens = num_input_tokens
-        # FIXME(woosuk): The below two ops cause synchronization. Optimize.
         assert len(self.draft_attn_groups) > 0
-        builder = self.draft_attn_groups[0].get_metadata_builder()
-        extra_attn_metadata_args = {}
-        if isinstance(builder, AscendDSAMetadataBuilder):
-            extra_attn_metadata_args = dict(
-                        prefill_ratio_to_sas_metadata=dict(),
-                        decode_ratio_to_sas_metadata=dict(),
-                        common_ratio_to_sas_metadata=dict())
-        attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model(), **extra_attn_metadata_args)
+        per_layer_attn_metadata = dict()
+        for attn_group in self.draft_attn_groups:
+            attn_metadata = self._build_spec_attn_metadata(common_attn_metadata, attn_group)
+            for layer_name in attn_group.layer_names:
+                per_layer_attn_metadata[layer_name] = attn_metadata
 
         if self.uses_mrope:
             used_update_positions = self.mrope_positions[:, token_indices_to_sample]
         else:
             used_update_positions = self.positions[token_indices_to_sample]
-        per_layer_attn_metadata = dict()
-        # The first step of speculative.
-        for layer_name in self.attn_layer_names:
-            per_layer_attn_metadata[layer_name] = attn_metadata
         multi_steps_attn_metadata = [per_layer_attn_metadata]
 
         # Copy the old attn_metadata and update
         attn_metadata_i = per_layer_attn_metadata[self.attn_layer_names[0]]
+
+        if self.num_speculative_tokens > 1 and num_rejected_tokens_gpu is not None and not self.needs_extra_input_slots:
+            num_rejected_tokens_cpu = num_rejected_tokens_gpu.cpu()
+            common_attn_metadata.seq_lens = common_attn_metadata.seq_lens.clone()
+            common_attn_metadata.seq_lens[:batch_size] -= num_rejected_tokens_gpu
+            common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu.clone()
+            common_attn_metadata.seq_lens_cpu[:batch_size] -= num_rejected_tokens_cpu
+            common_attn_metadata.num_computed_tokens_cpu = common_attn_metadata.num_computed_tokens_cpu.clone()
+            common_attn_metadata.num_computed_tokens_cpu[:batch_size] -= num_rejected_tokens_cpu
+            common_attn_metadata.max_seq_len = (
+                common_attn_metadata.seq_lens_cpu[: common_attn_metadata.num_reqs].max().item()
+                if common_attn_metadata.num_reqs > 0
+                else 0
+            )
 
         # Clone the data so that when calculating the data at position 2 and position 3
         # in the merged graph, it does not affect position 1
@@ -679,29 +754,6 @@ class SpecDecodeBaseProposer(EagleProposer):
                 if not self.parallel_drafting:
                     for draft_step in range(1, self.num_speculative_tokens):
                         per_layer_attn_metadata = dict()
-                        for attn_group in self.draft_attn_groups:
-                            common_attn_metadata, attn_metadata = self.attn_update_stack_num_spec_norm(
-                                draft_step,
-                                attn_metadata,
-                                common_attn_metadata,
-                                batch_size,
-                                num_input_tokens,
-                                used_update_positions,
-                                aclgraph_runtime_mode,
-                                ori_seq_len,
-                                slot_indices,
-                                mtp_slot_mapping,
-                                attn_group=attn_group,
-                            )
-                            for layer_name in self.attn_layer_names:
-                                per_layer_attn_metadata[layer_name] = attn_metadata
-                        multi_steps_attn_metadata.append(per_layer_attn_metadata)
-        else:
-            # Copy the old attn_metadata and update
-            if not self.parallel_drafting:
-                for draft_step in range(1, self.num_speculative_tokens):
-                    per_layer_attn_metadata = dict()
-                    for attn_group in self.draft_attn_groups:
                         common_attn_metadata, attn_metadata = self.attn_update_stack_num_spec_norm(
                             draft_step,
                             attn_metadata,
@@ -710,9 +762,43 @@ class SpecDecodeBaseProposer(EagleProposer):
                             num_input_tokens,
                             used_update_positions,
                             aclgraph_runtime_mode,
-                            attn_group=attn_group,
+                            ori_seq_len,
+                            slot_indices,
+                            mtp_slot_mapping,
+                            attn_group=self.draft_attn_groups[0],
                         )
-                        for layer_name in self.attn_layer_names:
+                        for layer_name in self.draft_attn_groups[0].layer_names:
+                            per_layer_attn_metadata[layer_name] = attn_metadata
+                        for attn_group in self.draft_attn_groups[1:]:
+                            attn_metadata = self._build_spec_attn_metadata(
+                                common_attn_metadata,
+                                attn_group,
+                                draft_step=draft_step,
+                                ori_seq_len=ori_seq_len,
+                            )
+                            for layer_name in attn_group.layer_names:
+                                per_layer_attn_metadata[layer_name] = attn_metadata
+                        multi_steps_attn_metadata.append(per_layer_attn_metadata)
+        else:
+            # Copy the old attn_metadata and update
+            if not self.parallel_drafting:
+                for draft_step in range(1, self.num_speculative_tokens):
+                    per_layer_attn_metadata = dict()
+                    common_attn_metadata, attn_metadata = self.attn_update_stack_num_spec_norm(
+                        draft_step,
+                        attn_metadata,
+                        common_attn_metadata,
+                        batch_size,
+                        num_input_tokens,
+                        used_update_positions,
+                        aclgraph_runtime_mode,
+                        attn_group=self.draft_attn_groups[0],
+                    )
+                    for layer_name in self.draft_attn_groups[0].layer_names:
+                        per_layer_attn_metadata[layer_name] = attn_metadata
+                    for attn_group in self.draft_attn_groups[1:]:
+                        attn_metadata = self._build_spec_attn_metadata(common_attn_metadata, attn_group)
+                        for layer_name in attn_group.layer_names:
                             per_layer_attn_metadata[layer_name] = attn_metadata
                     multi_steps_attn_metadata.append(per_layer_attn_metadata)
 
@@ -1240,6 +1326,7 @@ class SpecDecodeBaseProposer(EagleProposer):
         common_attn_metadata.seq_lens_cpu[:batch_size] = common_attn_metadata.seq_lens_cpu[:batch_size] + 1
         exceeds_mask = common_attn_metadata.seq_lens_cpu[:batch_size] >= self.max_model_len
         common_attn_metadata.seq_lens_cpu[:batch_size].masked_fill_(exceeds_mask, 1)
+        common_attn_metadata.max_seq_len = min(common_attn_metadata.max_seq_len + 1, self.max_model_len)
         common_attn_metadata.num_computed_tokens_cpu[:batch_size] += 1
         if self.uses_mrope:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
@@ -1247,23 +1334,15 @@ class SpecDecodeBaseProposer(EagleProposer):
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
 
         if self.pcp_size * self.dcp_size > 1:
-            num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
-                ori_seq_len + draft_step + 1,
-                self.pcp_size,
-                self.dcp_size,
-                self.runner.parallel_config.cp_kv_cache_interleave_size,
-            )
-            cp_seq_len = num_computed_tokens_of_pcp_dcp[:, self.pcp_rank, self.dcp_rank]
             # update slot_mapping
             slot_indices += self.pcp_size
             slot_mapping = mtp_slot_mapping[slot_indices]
             self.slot_mapping_group[draft_step][: batch_size * self.pcp_size] = slot_mapping
             common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
         else:
-            # NOTE: In vllm, `block_size = attn_metadata_builder.kv_cache_spec.block_size`.
-            # However, in vllm-ascend, the above value can be multiple of `kernel_block_size`,
-            # which is not correct for computing `slot_mapping` below.
-            block_size = self.kernel_block_size
+            block_size = getattr(self, "block_size", None)
+            if not isinstance(block_size, int) or block_size <= 0:
+                block_size = attn_group.get_metadata_builder().kv_cache_spec.block_size
             if not isinstance(block_size, int):
                 block_size = 128
 
@@ -1288,26 +1367,12 @@ class SpecDecodeBaseProposer(EagleProposer):
             # Set the address of the attn_metadata.slot_mapping to the self.slot_mapping_group[idx]
             common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
 
-        attn_metadata_builder = attn_group.get_metadata_builder()
-        extra_attn_metadata_args = {}
-        if isinstance(attn_metadata_builder, AscendDSAMetadataBuilder):
-            extra_attn_metadata_args = dict(
-                        prefill_ratio_to_sas_metadata=dict(),
-                        decode_ratio_to_sas_metadata=dict(),
-                        common_ratio_to_sas_metadata=dict())
-        attn_metadata = attn_metadata_builder.build(
-            0,
+        attn_metadata = self._build_spec_attn_metadata(
             common_attn_metadata,
-            self.runner.get_model(),
-            **extra_attn_metadata_args,
+            attn_group,
+            draft_step=draft_step,
+            ori_seq_len=ori_seq_len,
         )
-
-        if self.pcp_size * self.dcp_size > 1:
-            if self.vllm_config.model_config.use_mla:
-                if getattr(attn_metadata, "decode", None):
-                    attn_metadata.decode.cp_seq_len = cp_seq_len
-            else:
-                attn_metadata.decode_meta.num_computed_tokens_of_pcp_dcp = num_computed_tokens_of_pcp_dcp
 
         return common_attn_metadata, attn_metadata
 
@@ -1476,7 +1541,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             positions_cpu=common_attn_metadata.positions_cpu[token_indices_cpu],
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
-            max_seq_len=0,
+            max_seq_len=new_seq_lens_cpu.max().item() if new_seq_lens_cpu.numel() > 0 else 0,
         )
         return spec_common_attn_metadata, token_indices
 
@@ -1557,7 +1622,11 @@ class SpecDecodeBaseProposer(EagleProposer):
             decode_token_per_req=self.runner.decode_token_per_req,
             num_computed_tokens_cpu=common_attn_metadata.num_computed_tokens_cpu,
             seq_lens=common_attn_metadata.seq_lens,
-            max_seq_len=0,
+            max_seq_len=(
+                common_attn_metadata.seq_lens_cpu[: common_attn_metadata.num_reqs].max().item()
+                if common_attn_metadata.num_reqs > 0
+                else 0
+            ),
         )
 
         return spec_common_attn_metadata, token_indices, token_indices_to_sample, num_rejected_tokens_gpu

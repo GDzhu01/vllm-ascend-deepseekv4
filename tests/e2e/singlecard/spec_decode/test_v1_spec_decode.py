@@ -12,7 +12,7 @@ from vllm import LLM, SamplingParams
 from vllm.config import CompilationConfig
 from vllm.v1.metrics.reader import Counter, Vector
 
-from tests.e2e.conftest import VllmRunner
+from tests.e2e.conftest import VllmRunner, resolve_e2e_model_name
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -350,7 +350,7 @@ def test_llama_qwen_eagle_acceptance(
     spec_model_name = MODELS[method]["spec"]
 
     tokenizer = AutoTokenizer.from_pretrained(
-        main_model_name,
+        resolve_e2e_model_name(main_model_name),
         trust_remote_code=True,
     )
     sampling_params = SamplingParams(
@@ -457,7 +457,7 @@ def test_parallel_drafting_acceptance(
     spec_model_name = DRAFT_PARALLEL_MODELS[method]["spec"]
 
     tokenizer = AutoTokenizer.from_pretrained(
-        main_model_name,
+        resolve_e2e_model_name(main_model_name),
         trust_remote_code=True,
     )
     sampling_params = SamplingParams(
