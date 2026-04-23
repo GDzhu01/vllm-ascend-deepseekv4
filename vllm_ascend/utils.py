@@ -81,6 +81,22 @@ _CUSTOM_OP_BASE_DIR = (
 )
 
 
+def clear_runtime_cache() -> None:
+    global _IS_MOE_MODEL
+    global _IS_DRAFTER_MOE_MODEL
+    global _IS_VL_MODEL
+    global _ENABLE_SP
+    global _HAS_ROPE
+    global _HAS_LAYER_IDX
+
+    _IS_MOE_MODEL = None
+    _IS_DRAFTER_MOE_MODEL = None
+    _IS_VL_MODEL = None
+    _ENABLE_SP = None
+    _HAS_ROPE = None
+    _HAS_LAYER_IDX = None
+
+
 def is_310p():
     return get_ascend_device_type() == AscendDeviceType._310P
 

@@ -25,6 +25,7 @@ from vllm.config import (CompilationConfig, ModelConfig, ParallelConfig,
 
 from tests.ut.base import TestBase
 from vllm_ascend import utils
+from vllm_ascend.ascend_config import clear_ascend_config
 from vllm_ascend.utils import REGISTERED_ASCEND_OPS
 
 
@@ -35,9 +36,26 @@ class TestUtils(TestBase):
 
         from vllm_ascend import platform
         importlib.reload(platform)
+        clear_ascend_config()
         utils.enable_dsa_cp_with_layer_shard.cache_clear()
         utils.enable_dsa_cp_with_o_proj_tp.cache_clear()
         utils.supports_add_rms_norm_bias.cache_clear()
+
+    def tearDown(self):
+        clear_ascend_config()
+
+    @staticmethod
+    def _make_vllm_config(hf_dict, *, vl=False):
+        hf_text_config = mock.MagicMock()
+        hf_text_config.to_dict.return_value = hf_dict
+
+        model_config = mock.MagicMock()
+        model_config.hf_text_config = hf_text_config
+        model_config.hf_config = mock.MagicMock() if vl else hf_text_config
+
+        vllm_config = mock.MagicMock()
+        vllm_config.model_config = model_config
+        return vllm_config
 
     def test_nd_to_nz_2d(self):
         # can be divided by 16
@@ -238,6 +256,35 @@ class TestUtils(TestBase):
         utils.vllm_version_is("1.0.0")
         hits = utils.vllm_version_is.cache_info().hits
         self.assertEqual(hits, 1)
+
+    def test_clear_ascend_config_resets_runtime_caches(self):
+        moe_vllm_config = self._make_vllm_config(
+            {"expert_map": [0, 1], "rope_parameters": {"rope_type": "yarn"}},
+            vl=True,
+        )
+        text_vllm_config = self._make_vllm_config({"hidden_size": 4096})
+
+        with mock.patch.dict(os.environ, {"VLLM_ASCEND_ENABLE_FLASHCOMM1": "1"}):
+            self.assertTrue(utils.enable_sp(text_vllm_config))
+
+        self.assertTrue(utils.is_moe_model(moe_vllm_config))
+        self.assertTrue(utils.has_rope(moe_vllm_config))
+        self.assertTrue(utils.is_vl_model(moe_vllm_config))
+
+        model_with_layer_idx = mock.MagicMock()
+        model_with_layer_idx.model = mock.MagicMock()
+        model_with_layer_idx.model.start_layer = 0
+        self.assertTrue(utils.has_layer_idx(model_with_layer_idx))
+
+        clear_ascend_config()
+
+        with mock.patch.dict(os.environ, {"VLLM_ASCEND_ENABLE_FLASHCOMM1": "0"}):
+            self.assertFalse(utils.enable_sp(text_vllm_config))
+
+        self.assertFalse(utils.is_moe_model(text_vllm_config))
+        self.assertFalse(utils.has_rope(text_vllm_config))
+        self.assertFalse(utils.is_vl_model(text_vllm_config))
+        self.assertFalse(utils.has_layer_idx(object()))
 
     def test_get_max_hidden_layers(self):
         from transformers import PretrainedConfig
