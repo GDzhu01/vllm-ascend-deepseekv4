@@ -12,7 +12,7 @@ This document will show the main verification steps of the model, including supp
 ## Environment Preparation
 
 ### Model Weight
-- `DeepSeek-V4-w8a8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/models/Modelers_Park/DeepSeek-V4)
+- `DeepSeek-V4-w8a8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/) ( Model weights are being refreshed. )
 
 It is recommended to download the model weight to the shared directory of multiple nodes, such as `/root/.cache/`
 
