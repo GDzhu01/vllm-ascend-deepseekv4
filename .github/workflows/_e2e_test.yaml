@@ -91,6 +91,7 @@ jobs:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'light' }}
         run: |
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
           pytest -sv --durations=0 tests/e2e/singlecard/test_aclgraph_accuracy.py::test_piecewise_res_consistency
           pytest -sv --durations=0 tests/e2e/singlecard/test_quantization.py::test_qwen3_w8a8_quant
 
@@ -100,17 +101,26 @@ jobs:
           PYTORCH_NPU_ALLOC_CONF: max_split_size_mb:256
         if: ${{ inputs.type == 'full' }}
         run: |
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
           # We found that if running aclgraph tests in batch, it will cause AclmdlRICaptureBegin error. So we run
           # the test separately.
           # basic 
           pytest -sv --durations=0 tests/e2e/singlecard/test_aclgraph_accuracy.py \
-            tests/e2e/singlecard/test_aclgraph_mem.py \
             tests/e2e/singlecard/test_async_scheduling.py \
             tests/e2e/singlecard/test_batch_invariant.py \
             tests/e2e/singlecard/test_camem.py \
             tests/e2e/singlecard/test_completion_with_prompt_embeds.py \
             tests/e2e/singlecard/test_cpu_offloading.py \
             tests/e2e/singlecard/test_guided_decoding.py
+
+      - name: Run e2e test (non triton)
+        if: ${{ inputs.type == 'full' }}
+        env:
+          VLLM_WORKER_MULTIPROC_METHOD: spawn
+        run: |
+          python3 -m pip uninstall -y triton-ascend
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
+          pytest -sv --durations=0 tests/e2e/singlecard/test_aclgraph_mem.py
 
   e2e-singlecard-1:
     name: singlecard(1)
@@ -185,6 +195,7 @@ jobs:
           PYTORCH_NPU_ALLOC_CONF: max_split_size_mb:256
         if: ${{ inputs.type == 'full' }}
         run: |
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
           # We found that if running aclgraph tests in batch, it will cause AclmdlRICaptureBegin error. So we run
           # the test separately.
           # basic 
@@ -278,7 +289,9 @@ jobs:
         run: |
           # We found that if running aclgraph tests in batch, it will cause AclmdlRICaptureBegin error. So we run
           # the test separately.
-          # basic   
+          # basic 
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
+          set +e
           # spec_decode
           pytest -sv --durations=0 tests/e2e/singlecard/spec_decode/test_mtp_eagle_correctness.py
 
@@ -354,6 +367,7 @@ jobs:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'light' }}
         run: |
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_qwen3_moe.py::test_qwen3_moe_distributed_mp_tp2_ep
 
       - name: Run GDzhu01/vllm-ascend-deepseekv4 test (full)
@@ -361,6 +375,8 @@ jobs:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'full' }}
         run: |
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
+          set +e
           pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_data_parallel.py \
             tests/e2e/multicard/2-cards/test_expert_parallel.py \
             tests/e2e/multicard/2-cards/test_external_launcher.py \
@@ -376,6 +392,7 @@ jobs:
             tests/e2e/multicard/2-cards/test_offline_inference_distributed.py::test_qwen3_dense_fc1_tp2 \
             tests/e2e/multicard/2-cards/test_offline_inference_distributed.py::test_qwen3_dense_prefetch_mlp_weight_tp2
 
+<<<<<<< HEAD
       - name: Run GDzhu01/vllm-ascend-deepseekv4 test (non triton)
         if: ${{ inputs.type == 'full' }}
         env:
@@ -385,6 +402,8 @@ jobs:
           # Fix me: current runner can not release the memory in time, this will cause OOM
           # pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_aclgraph_capture_replay.py
 
+=======
+>>>>>>> 5172bd48 (add new model)
   e2e-2-cards-1:
     name: multicard-2(1)
     runs-on: linux-aarch64-a3-2
@@ -457,7 +476,9 @@ jobs:
           VLLM_WORKER_MULTIPROC_METHOD: spawn
         if: ${{ inputs.type == 'full' }}
         run: |
-          pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_offline_weight_load.py \
+          . vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash
+          pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_aclgraph_capture_replay.py \
+            tests/e2e/multicard/2-cards/test_offline_weight_load.py \
             tests/e2e/multicard/2-cards/test_pipeline_parallel.py \
             tests/e2e/multicard/2-cards/test_prefix_caching.py \
             tests/e2e/multicard/2-cards/test_quantization.py \
