@@ -51,44 +51,13 @@ if (BUILD_OPEN_PROJECT)
 endif()
 
 add_ops_compile_options(
-<<<<<<<< HEAD:csrc/lightning_indexer_custom/op_host/CMakeLists.txt
-        OP_NAME LightningIndexerCustom
-========
         OP_NAME HcPost
->>>>>>>> 5172bd48 (add new model):csrc/moe/hc_post/op_host/CMakeLists.txt
         OPTIONS --cce-auto-sync=off
                 -Wno-deprecated-declarations
                 -Werror
                 -mllvm -cce-aicore-hoist-movemask=false
                 --op_relocatable_kernel_binary=true
 )
-
-<<<<<<<< HEAD:csrc/lightning_indexer_custom/op_host/CMakeLists.txt
-set(lightning_indexer_custom_depends transformer/attention/lightning_indexer_custom PARENT_SCOPE)
-
-target_sources(op_host_aclnn PRIVATE
-        lightning_indexer_custom_def.cpp
-)
-
-target_sources(optiling PRIVATE
-        lightning_indexer_custom_tiling.cpp
-)
-
-if (NOT BUILD_OPEN_PROJECT)
-    target_sources(opmaster_ct PRIVATE
-        lightning_indexer_custom_tiling.cpp
-    )
-endif ()
-
-target_include_directories(optiling PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_sources(opsproto PRIVATE
-        lightning_indexer_custom_proto.cpp
-)
-========
->>>>>>>> 5172bd48 (add new model):csrc/moe/hc_post/op_host/CMakeLists.txt
 
 if (NOT BUILD_OPS_RTY_KERNEL)
     add_modules_sources(OPTYPE hc_post ACLNNTYPE aclnn)

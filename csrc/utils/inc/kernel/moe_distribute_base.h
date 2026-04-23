@@ -1,19 +1,10 @@
 /**
-<<<<<<< HEAD
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
- * CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
-=======
  * This program is free software, you can redistribute it and/or modify.
  * Copyright (c) 2025 Huawei Technologies Co., Ltd.
  * This file is a part of the CANN Open Software.
  * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
->>>>>>> 5172bd48 (add new model)
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
@@ -25,15 +16,6 @@
 #ifndef MOE_DISTRIBUTE_BASE_H
 #define MOE_DISTRIBUTE_BASE_H
 
-<<<<<<< HEAD
-constexpr uint32_t LOCAL_NOTIFY_MAX_NUM = 64;
-constexpr uint32_t LOCAL_STREAM_MAX_NUM = 19;
-constexpr uint32_t AICPU_OP_NOTIFY_MAX_NUM = 2;
-constexpr uint32_t AICPU_MAX_RANK_NUM = 128 * 1024;
-
-struct HcclSignalInfo {
-    uint64_t resId;
-=======
 #include "kernel_operator.h"
 
 constexpr uint32_t LOCAL_NOTIFY_MAX_NUM = 64;
@@ -44,7 +26,6 @@ constexpr uint32_t TIME_CYCLE = 50; // 系统cycle数转换成时间的基准单
 
 struct HcclSignalInfo {
     uint64_t resId; // 在代表event时为eventid，notify时为notifyid
->>>>>>> 5172bd48 (add new model)
     uint64_t addr;
     uint32_t devId;
     uint32_t tsId;
@@ -62,13 +43,8 @@ struct ListCommon {
 struct HcclStreamInfo {
     int32_t streamIds;
     uint32_t sqIds;
-<<<<<<< HEAD
-    uint32_t cqIds;
-    uint32_t logicCqids;
-=======
     uint32_t cqIds;      // 记录物理cqId
     uint32_t logicCqids; // 记录逻辑cqId
->>>>>>> 5172bd48 (add new model)
 };
 
 struct LocalResInfoV2 {
@@ -77,11 +53,7 @@ struct LocalResInfoV2 {
     HcclSignalInfo localSignals[LOCAL_NOTIFY_MAX_NUM];
     HcclStreamInfo streamInfo[LOCAL_STREAM_MAX_NUM];
     HcclStreamInfo mainStreamInfo;
-<<<<<<< HEAD
-    HcclSignalInfo aicpuOpNotify[AICPU_OP_NOTIFY_MAX_NUM];
-=======
     HcclSignalInfo aicpuOpNotify[AICPU_OP_NOTIFY_MAX_NUM];  // 集合通信AICPU展开资源
->>>>>>> 5172bd48 (add new model)
     ListCommon nextTagRes;                                  // HccltagLocalResV2
 };
 
@@ -92,21 +64,12 @@ enum class rtFloatOverflowMode_t {
 };
 
 struct AlgoTopoInfo {
-<<<<<<< HEAD
-    uint32_t userRank;
-    uint32_t userRankSize;
-    int32_t deviceLogicId;
-    bool isSingleMeshAggregation;
-    uint32_t deviceNumPerAggregation;
-    uint32_t superPodNum;
-=======
     uint32_t userRank;     // 通信域 RankID
     uint32_t userRankSize; // 通信域的Rank数量
     int32_t deviceLogicId;
     bool isSingleMeshAggregation;
     uint32_t deviceNumPerAggregation;  // 每个Module中的Device数量
     uint32_t superPodNum;              // 集群中总的超节点数
->>>>>>> 5172bd48 (add new model)
     uint32_t devicePhyId;
     uint32_t topoType; // TopoType
     uint32_t deviceType;
@@ -124,29 +87,6 @@ struct AlgoTopoInfo {
     uint32_t pairLinkCounterNum;
     uint64_t pairLinkCounter;
     uint32_t nicNum;
-<<<<<<< HEAD
-    uint64_t nicList;
-    uint64_t complanRankLength;
-    uint64_t complanRank;
-    uint64_t bridgeRankNum;
-    uint64_t bridgeRank;
-    uint64_t serverAndsuperPodRankLength;
-    uint64_t serverAndsuperPodRank;
-};
-
-struct HcclOpConfig {
-    uint8_t deterministic;
-    uint8_t retryEnable;
-    uint8_t highPerfEnable;
-    uint8_t padding[5];
-    uint8_t linkTimeOut[8];
-    uint64_t notifyWaitTime;
-    uint32_t retryHoldTime;
-    uint32_t retryIntervalTime;
-    bool interHccsDisable = false;
-    rtFloatOverflowMode_t floatOverflowMode = rtFloatOverflowMode_t::RT_OVERFLOW_MODE_UNDEF;
-    uint32_t multiQpThreshold = 512;
-=======
     uint64_t nicList;           // niclist数组指针
     uint64_t complanRankLength; // complanRank占用的字节数
     uint64_t complanRank;       // 指针
@@ -168,7 +108,6 @@ struct HcclOpConfig {
     bool interHccsDisable = false; //使能rdma开关
     rtFloatOverflowMode_t floatOverflowMode = rtFloatOverflowMode_t::RT_OVERFLOW_MODE_UNDEF;
     uint32_t multiQpThreshold = 512;  // 多QP每个QP分担数据量最小阈值
->>>>>>> 5172bd48 (add new model)
 };
 
 struct HcclMC2WorkSpace {
@@ -200,19 +139,6 @@ struct HcclRankRelationResV2 {
 };
 
 struct HcclOpResParam {
-<<<<<<< HEAD
-    HcclMC2WorkSpace mc2WorkSpace;
-    uint32_t localUsrRankId; // usrrankid
-    uint32_t rankSize;
-    uint64_t winSize;
-    uint64_t localWindowsIn;
-    uint64_t localWindowsOut;
-    char hcomId[128];
-    uint64_t winExpSize;
-    uint64_t localWindowsExp;
-    uint32_t rWinStart;
-    uint32_t rWinOffset;
-=======
     // 本地资源
     HcclMC2WorkSpace mc2WorkSpace;
     uint32_t localUsrRankId; // usrrankid
@@ -226,83 +152,35 @@ struct HcclOpResParam {
     uint64_t localWindowsExp;
     uint32_t rWinStart; // 为HcclRankRelationRes起始位置
     uint32_t rWinOffset; // 为HcclRemoteRes的大小
->>>>>>> 5172bd48 (add new model)
     uint64_t version;
     LocalResInfoV2 localRes;
     AlgoTopoInfo topoInfo;
 
-<<<<<<< HEAD
-=======
     // 外部配置参数
->>>>>>> 5172bd48 (add new model)
     HcclOpConfig config;
     uint64_t hostStateInfo;
     uint64_t aicpuStateInfo;
     uint64_t lockAddr;
     uint32_t rsv[16];
-<<<<<<< HEAD
-    uint32_t notifysize;
-    uint32_t remoteResNum;
-    RemoteResPtr remoteRes[AICPU_MAX_RANK_NUM];
-=======
     uint32_t notifysize;                         // RDMA场景使用，910B/910_93为4B，其余芯片为8B
     uint32_t remoteResNum;                       // 有效的remoteResNum
     RemoteResPtr remoteRes[AICPU_MAX_RANK_NUM];  //数组指针，指向HcclRankRelationResV2，下标为remoteUserRankId
->>>>>>> 5172bd48 (add new model)
 
     // communicate retry
     HDCommunicateParams kfcControlTransferH2DParams;
     HDCommunicateParams kfcStatusTransferD2HParams;
     uint64_t tinyMem;  // for all2all
     uint64_t tinyMemSize;
-<<<<<<< HEAD
-    uint64_t zeroCopyHeadPtr;
-    uint64_t zeroCopyTailPtr;
-    uint64_t zeroCopyRingBuffer;
-    uint64_t zeroCopyIpcPtrs[16];
-    uint32_t zeroCopyDevicePhyId[16];
-=======
     // 零拷贝场景使用
     uint64_t zeroCopyHeadPtr;
     uint64_t zeroCopyTailPtr;
     uint64_t zeroCopyRingBuffer;
     uint64_t zeroCopyIpcPtrs[16];                // 保存集合通信时每个对端的输入输出内存地址
     uint32_t zeroCopyDevicePhyId[16];            // 保存每个rank对应的物理卡Id
->>>>>>> 5172bd48 (add new model)
 
     bool utraceStatusFlag;
 };
 
-<<<<<<< HEAD
-// Transport
-enum class HcclAiRMAMemType : uint32_t {
-    LOCAL_INPUT = 0,
-    REMOTE_INPUT,
-    LOCAL_OUTPUT,
-    REMOTE_OUTPUT,
-    MAX_NUM
-};
-
-struct HcclAiRMAMemInfo {
-    uint32_t memMaxNum{0};
-    uint32_t sizeOfMemDetails{0};
-    uint64_t memDetailPtr{0};
-};
-
-// Transport QP/Mem
-struct HcclAiRMAInfo {
-    uint32_t curRankId{0};
-    uint32_t rankNum{0};
-    uint32_t qpNum{0};
-    uint32_t sizeOfAiRMAWQ{0};  // sizeof(HcclAiRMAWQ)
-    uint32_t sizeOfAiRMACQ{0};  // sizeof(HcclAiRMACQ)
-    uint32_t sizeOfAiRMAMem{0};  // sizeof(HcclAiRMAMemInfo)
-    uint64_t sqPtr{0};
-    uint64_t scqPtr{0};
-    uint64_t rqPtr{0};
-    uint64_t rcqPtr{0};
-    uint64_t memPtr{0};
-=======
 // Transport 内存类型
 enum class HcclAiRMAMemType : uint32_t {
     LOCAL_INPUT = 0,
@@ -368,7 +246,6 @@ struct HcclAiRMAInfo {
 };
 struct CombinedCapability {
     uint64_t dataplaneModeBitmap;
->>>>>>> 5172bd48 (add new model)
 };
 
 struct HcclA2CombineOpParam {
@@ -388,11 +265,6 @@ struct HcclA2CombineOpParam {
     uint8_t multiFlag;
     __gm__ AscendC::IbVerbsData *data;
     uint64_t dataSize;
-<<<<<<< HEAD
-
-    uint64_t sizeOfAiRMAInfo;
-    uint64_t aiRMAInfo;
-=======
     // 追加字段
     uint64_t sizeOfAiRMAInfo; // sizeof(HcclAiRMAInfo)
     uint64_t aiRMAInfo; // HcclAiRMAInfo* 单个结构体指针
@@ -404,7 +276,6 @@ enum class DataplaneMode : uint32_t {
     HOST = 0,
     AICPU = 1,
     AIV = 2,
->>>>>>> 5172bd48 (add new model)
 };
 
 enum class DBMode : int32_t {
@@ -465,9 +336,6 @@ __aicore__ inline void cacheWriteThrough(__gm__ uint8_t* sourceAddr, uint64_t le
             AscendC::DcciDst::CACHELINE_OUT>(global[i]);
     }
 }
-<<<<<<< HEAD
-
-=======
 __aicore__ inline DataplaneMode GetDataplaneMode(GM_ADDR contextGM0) {
     __gm__ HcclA2CombineOpParam *winContext_ = (__gm__ HcclA2CombineOpParam *)contextGM0;
     CombinedCapability* capability = winContext_->capability;
@@ -494,5 +362,4 @@ __aicore__ inline void RecordRankCommDuration(AscendC::LocalTensor<int32_t> perf
     int32_t duration = static_cast<int32_t>(endTime - startTime); // int32_t可以表示2^31(us)，约35min在实际场景下满足需要
     performanceInfoU32Tensor.SetValue(rankId * sizeof(int64_t) / sizeof(int32_t), duration); // 使用int32_t是因为atomicAdd不支持int64_t类型，这里只赋值到int64_t的低32位。
 }
->>>>>>> 5172bd48 (add new model)
 #endif // MOE_DISTRIBUTE_BASE_H

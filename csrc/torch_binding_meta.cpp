@@ -99,9 +99,10 @@ std::tuple<at::Tensor &, at::Tensor &, at::Tensor &, at::Tensor &, at::Tensor &>
     return {q_out0, kv_cache_out0, q_out1, kv_cache_out1, inner_out};
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant(
+std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weight_nz(
     const at::Tensor &x, const at::Tensor &weight, const at::Tensor &weight_scale, const at::Tensor &x_scale,
-    const at::Tensor &group_list, const c10::optional<at::Tensor> &bias, const c10::optional<at::Tensor> &offset)
+    const at::Tensor &group_list, const c10::optional<at::Tensor> &bias, const c10::optional<at::Tensor> &offset,
+    double swiglu_limit)
 {
     int m = x.sizes()[0];
     int n = weight.sizes()[2];
@@ -122,7 +123,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weigh
     const at::Tensor & x_scale,
     const at::Tensor & group_list,
     const c10::optional<at::Tensor> & bias,
-    const c10::optional<at::Tensor> & offset)
+    const c10::optional<at::Tensor> & offset,
+    double swiglu_limit)
 {
     auto x_size = x.sizes();
     int n = weight[0].sizes()[1];
@@ -186,6 +188,7 @@ at::Tensor& dispatch_ffn_combine_meta(
     const at::Tensor& probs,
     c10::string_view group,
     int64_t max_output_size,
+    double swiglu_limit,
     at::Tensor& out
 ) {
     return out;
@@ -959,8 +962,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("sgmv_expand", &vllm_ascend::meta::sgmv_expand_meta);
     // MLA preprocess
     ops.impl("mla_preprocess", &vllm_ascend::meta::mla_preprocess);
-    // grouped_matmul_swiglu_quant meta implementation
-    ops.impl("grouped_matmul_swiglu_quant", &vllm_ascend::meta::grouped_matmul_swiglu_quant);
+    // grouped_matmul_swiglu_quant_weight_nz meta implementation
+    ops.impl("grouped_matmul_swiglu_quant_weight_nz", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz);
     // Grouped matmul swiglu quant weight nz tensor list
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz_tensor_list_meta);
     // dispatch_gmm_combine_decode meta implementation

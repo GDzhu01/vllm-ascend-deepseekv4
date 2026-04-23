@@ -24,14 +24,11 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     ABSOLUTE_CATLASS_PATH=$(cd "${CATLASS_PATH}" && pwd)
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
-<<<<<<< HEAD
-    CUSTOM_OPS="grouped_matmul_swiglu_quant_weight_nz_tensor_list;lightning_indexer_custom;sparse_flash_attention_custom;matmul_allreduce_add_rmsnorm;moe_init_routing_custom;moe_gating_top_k;add_rms_norm_bias;"
-=======
     CUSTOM_OPS_ARRAY=(
+        "grouped_matmul_swiglu_quant_clamp"
         "sparse_flash_attention"
         "lightning_indexer"
-        # TODO(maoqi): This is not used anymore
-        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
 
 
         "add_rms_norm_bias"
@@ -58,7 +55,6 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
 
 
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
->>>>>>> 5172bd48 (add new model)
     SOC_ARG="ascend910b"
 elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     # ASCEND910C (A3) series
@@ -103,15 +99,10 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     #     "dispatch_layout"
     #     "notify_dispatch"
     # )
-    # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
     CUSTOM_OPS_ARRAY=(
-<<<<<<< HEAD
+        "grouped_matmul_swiglu_quant_clamp"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
-        "lightning_indexer_custom"
-        "sparse_flash_attention_custom"
-=======
         "notify_dispatch"
->>>>>>> 5172bd48 (add new model)
         "dispatch_ffn_combine"
         "dispatch_gmm_combine_decode"
         "moe_combine_normal"

@@ -219,13 +219,20 @@ def quant_apply_mlp(hidden_states: torch.Tensor,
                 ))
         elif fusion and not dynamic_eplb:
             # gmm1: gate_up_proj & act_fn: swiglu
-            hidden_states, swiglu_out_scale, _ = torch_npu.npu_grouped_matmul_swiglu_quant(
-                x=hidden_states,
-                weight=w1[0],
-                bias=bias1,
-                group_list=cumsum_group_list(group_list, group_list_type, 0),
-                weight_scale=w1_scale[0],
-                x_scale=pertoken_scale)
+            # hidden_states, swiglu_out_scale, _ = torch_npu.npu_grouped_matmul_swiglu_quant(
+            #     x=hidden_states,
+            #     weight=w1[0],
+            #     bias=bias1,
+            #     group_list=cumsum_group_list(group_list, group_list_type, 0),
+            #     weight_scale=w1_scale[0],
+            #     x_scale=pertoken_scale)
+            hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz(x=hidden_states,
+                                                                      weight=w1[0],
+                                                                      bias=bias1,
+                                                                      x_scale=pertoken_scale,
+                                                                       weight_scale=w1_scale[0],
+                                                                      group_list=cumsum_group_list(group_list, group_list_type, 0),
+                                                                      swiglu_limit=10.0)
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
         else:

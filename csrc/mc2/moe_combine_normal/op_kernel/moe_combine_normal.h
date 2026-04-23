@@ -3,11 +3,7 @@
 
 #include "kernel_operator.h"
 #include "kernel_tiling/kernel_tiling.h"
-<<<<<<< HEAD:csrc/moe_combine_normal/op_kernel/moe_combine_normal.h
-#include "moe_distribute_base.h"
-=======
 #include "utils/moe_distribute_base.h"
->>>>>>> 5172bd48 (add new model):csrc/mc2/moe_combine_normal/op_kernel/moe_combine_normal.h
 #include "moe_combine_normal_tiling.h"
 
 namespace MoeCombineNormalImpl {

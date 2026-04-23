@@ -632,8 +632,8 @@ class DeepseekV4Attention(nn.Module):
         )
         self.compress_ratio = config.compress_ratios[layer_idx]
 
-        if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 40000
+        if self.compress_ratio >1:
+            config.rope_parameters['rope_theta'] = 160000
             rope_groups = ['default', f'c{self.compress_ratio}']
         else:
             config.rope_parameters['rope_theta'] = 10000

@@ -10,11 +10,7 @@
 #ifndef DISPATCH_GMM_COMBINE_DECODE_BASE_H
 #define DISPATCH_GMM_COMBINE_DECODE_BASE_H
 
-<<<<<<< HEAD:csrc/dispatch_gmm_combine_decode/op_kernel/dispatch_gmm_combine_decode_base.h
-#include "moe_distribute_base.h"
-=======
 #include "../../../utils/inc/kernel/moe_distribute_base.h"
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_gmm_combine_decode/op_kernel/dispatch_gmm_combine_decode_base.h
 
 #define TemplateMC2TypeClass typename ExpandXType, typename ExpandIdxType, bool IsNeedReduceScatter, uint32_t EXEC_FLAG
 #define TemplateMC2TypeFunc ExpandXType, ExpandIdxType, IsNeedReduceScatter, EXEC_FLAG

@@ -22,17 +22,10 @@ constexpr uint32_t LOCAL_NOTIFY_MAX_NUM = 64;
 constexpr uint32_t LOCAL_STREAM_MAX_NUM = 19U;
 constexpr uint32_t AICPU_OP_NOTIFY_MAX_NUM = 2;
 constexpr uint32_t AICPU_MAX_RANK_NUM = 128 * 1024;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-constexpr uint32_t TIME_CYCLE = 50;
-
-struct HcclSignalInfo {
-    uint64_t resId;
-=======
 constexpr uint32_t TIME_CYCLE = 50; // 系统cycle数转换成时间的基准单位，固定为50
 
 struct HcclSignalInfo {
     uint64_t resId; // 在代表event时为eventid，notify时为notifyid
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     uint64_t addr;
     uint32_t devId;
     uint32_t tsId;
@@ -50,13 +43,8 @@ struct ListCommon {
 struct HcclStreamInfo {
     int32_t streamIds;
     uint32_t sqIds;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    uint32_t cqIds;
-    uint32_t logicCqids;
-=======
     uint32_t cqIds;      // 记录物理cqId
     uint32_t logicCqids; // 记录逻辑cqId
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 };
 
 struct LocalResInfoV2 {
@@ -65,11 +53,7 @@ struct LocalResInfoV2 {
     HcclSignalInfo localSignals[LOCAL_NOTIFY_MAX_NUM];
     HcclStreamInfo streamInfo[LOCAL_STREAM_MAX_NUM];
     HcclStreamInfo mainStreamInfo;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    HcclSignalInfo aicpuOpNotify[AICPU_OP_NOTIFY_MAX_NUM];
-=======
     HcclSignalInfo aicpuOpNotify[AICPU_OP_NOTIFY_MAX_NUM];  // 集合通信AICPU展开资源
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     ListCommon nextTagRes;                                  // HccltagLocalResV2
 };
 
@@ -80,21 +64,12 @@ enum class rtFloatOverflowMode_t {
 };
 
 struct AlgoTopoInfo {
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    uint32_t userRank;
-    uint32_t userRankSize;
-    int32_t deviceLogicId;
-    bool isSingleMeshAggregation;
-    uint32_t deviceNumPerAggregation;
-    uint32_t superPodNum;
-=======
     uint32_t userRank;     // 通信域 RankID
     uint32_t userRankSize; // 通信域的Rank数量
     int32_t deviceLogicId;
     bool isSingleMeshAggregation;
     uint32_t deviceNumPerAggregation;  // 每个Module中的Device数量
     uint32_t superPodNum;              // 集群中总的超节点数
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     uint32_t devicePhyId;
     uint32_t topoType; // TopoType
     uint32_t deviceType;
@@ -112,29 +87,6 @@ struct AlgoTopoInfo {
     uint32_t pairLinkCounterNum;
     uint64_t pairLinkCounter;
     uint32_t nicNum;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    uint64_t nicList;
-    uint64_t complanRankLength;
-    uint64_t complanRank;
-    uint64_t bridgeRankNum;
-    uint64_t bridgeRank;
-    uint64_t serverAndsuperPodRankLength;
-    uint64_t serverAndsuperPodRank;
-};
-
-struct HcclOpConfig {
-    uint8_t deterministic;
-    uint8_t retryEnable;
-    uint8_t highPerfEnable;
-    uint8_t padding[5];
-    uint8_t linkTimeOut[8];
-    uint64_t notifyWaitTime;
-    uint32_t retryHoldTime;
-    uint32_t retryIntervalTime;
-    bool interHccsDisable = false;
-    rtFloatOverflowMode_t floatOverflowMode = rtFloatOverflowMode_t::RT_OVERFLOW_MODE_UNDEF;
-    uint32_t multiQpThreshold = 512;
-=======
     uint64_t nicList;           // niclist数组指针
     uint64_t complanRankLength; // complanRank占用的字节数
     uint64_t complanRank;       // 指针
@@ -156,7 +108,6 @@ struct HcclOpConfig {
     bool interHccsDisable = false; //使能rdma开关
     rtFloatOverflowMode_t floatOverflowMode = rtFloatOverflowMode_t::RT_OVERFLOW_MODE_UNDEF;
     uint32_t multiQpThreshold = 512;  // 多QP每个QP分担数据量最小阈值
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 };
 
 struct HcclMC2WorkSpace {
@@ -188,21 +139,6 @@ struct HcclRankRelationResV2Custom {
 };
 
 struct HcclOpResParamCustom {
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    // local resource info
-    HcclMC2WorkSpace mc2WorkSpace;
-    uint32_t localUsrRankId; // usrrankid
-    uint32_t rankSize;
-    uint64_t winSize;
-    uint64_t localWindowsIn;
-    uint64_t localWindowsOut;
-    char hcomId[128];
-    // aicore remote window
-    uint64_t winExpSize;
-    uint64_t localWindowsExp;
-    uint32_t rWinStart;
-    uint32_t rWinOffset;
-=======
     // 本地资源
     HcclMC2WorkSpace mc2WorkSpace;
     uint32_t localUsrRankId; // usrrankid
@@ -216,60 +152,36 @@ struct HcclOpResParamCustom {
     uint64_t localWindowsExp;
     uint32_t rWinStart; // 为HcclRankRelationRes起始位置
     uint32_t rWinOffset; // 为HcclRemoteRes的大小
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     uint64_t version;
     LocalResInfoV2 localRes;
     AlgoTopoInfo topoInfo;
 
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    // outer resource info
-=======
     // 外部配置参数
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     HcclOpConfig config;
     uint64_t hostStateInfo;
     uint64_t aicpuStateInfo;
     uint64_t lockAddr;
     uint32_t rsv[16];
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    uint32_t notifysize;
-    uint32_t remoteResNum;
-    RemoteResPtr remoteRes[AICPU_MAX_RANK_NUM];
-=======
     uint32_t notifysize;                         // RDMA场景使用，910B/910_93为4B，其余芯片为8B
     uint32_t remoteResNum;                       // 有效的remoteResNum
     RemoteResPtr remoteRes[AICPU_MAX_RANK_NUM];  //数组指针，指向HcclRankRelationResV2，下标为remoteUserRankId
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 
     // communicate retry
     HDCommunicateParams kfcControlTransferH2DParams;
     HDCommunicateParams kfcStatusTransferD2HParams;
     uint64_t tinyMem;  // for all2all
     uint64_t tinyMemSize;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    // zero copy
-    uint64_t zeroCopyHeadPtr;
-    uint64_t zeroCopyTailPtr;
-    uint64_t zeroCopyRingBuffer;
-    uint64_t zeroCopyIpcPtrs[16];
-    uint32_t zeroCopyDevicePhyId[16];
-=======
     // 零拷贝场景使用
     uint64_t zeroCopyHeadPtr;
     uint64_t zeroCopyTailPtr;
     uint64_t zeroCopyRingBuffer;
     uint64_t zeroCopyIpcPtrs[16];                // 保存集合通信时每个对端的输入输出内存地址
     uint32_t zeroCopyDevicePhyId[16];            // 保存每个rank对应的物理卡Id
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 
     bool utraceStatusFlag;
 };
 
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-// Transport memory type
-=======
 // Transport 内存类型
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 enum class HcclAiRMAMemType : uint32_t {
     LOCAL_INPUT = 0,
     REMOTE_INPUT,
@@ -277,29 +189,12 @@ enum class HcclAiRMAMemType : uint32_t {
     LOCAL_OUTPUT,
     REMOTE_OUTPUT,
 
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-=======
     // 可透传更多的内存，可在MAX_NUM之前追加，例如：
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
     // LOCAL_EXP,
     // REMOTE_EXP,
     MAX_NUM
 };
 
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-// Transport memory info
-struct HcclAiRMAMemInfo {
-    uint32_t memMaxNum{0};
-    uint32_t sizeOfMemDetails{0};
-    uint64_t memDetailPtr{0};
-    // appended fields
-};
-
-struct HcclAiRMAInfo {
-    uint32_t curRankId{0};
-    uint32_t rankNum{0};
-    uint32_t qpNum{0};
-=======
 // Transport 内存信息
 struct HcclAiRMAMemInfo {
     uint32_t memMaxNum{0};  // 最大内存数量，等于 HcclAiRMAMemType::MAX_NUM
@@ -313,32 +208,11 @@ struct HcclAiRMAInfo {
     uint32_t curRankId{0};  // 当前rankId
     uint32_t rankNum{0};  // rank数量
     uint32_t qpNum{0};  // 单个Transport的QP数量
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 
     uint32_t sizeOfAiRMAWQ{0};  // sizeof(HcclAiRMAWQ)
     uint32_t sizeOfAiRMACQ{0};  // sizeof(HcclAiRMACQ)
     uint32_t sizeOfAiRMAMem{0};  // sizeof(HcclAiRMAMemInfo)
 
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    // QP num: rankNum * qpNum
-    // 0 <= qpIndex < qpNum
-    uint64_t sqPtr{0};
-
-    // QP num: rankNum * qpNum
-    // 0 <= qpIndex < qpNum
-    uint64_t scqPtr{0};
-
-    // QP num: rankNum * qpNum
-    // 0 <= qpIndex < qpNum
-    uint64_t rqPtr{0};
-
-    // QP num: rankNum * qpNum
-    // 0 <= qpIndex < qpNum
-    uint64_t rcqPtr{0};
-
-    uint64_t memPtr{0};
-    // appended fields
-=======
     // HcclAiRMAWQ二维数组首地址
     // QP个数: rankNum * qpNum
     // 计算偏移获取SQ指针：sqPtr + (dstRankId * qpNum + qpIndex) * sizeOfAiRMAWQ
@@ -369,7 +243,6 @@ struct HcclAiRMAInfo {
     // srcRankId 获取自身内存信息，dstRankId 获取 Transport 内存信息
     uint64_t memPtr{0};
     // 可往后追加字段
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 };
 struct CombinedCapability {
     uint64_t dataplaneModeBitmap;
@@ -382,11 +255,7 @@ struct HcclA2CombineOpParam {
     uint32_t rankId;                            // id of this rank
     uint32_t rankNum;                           // num of ranks in this comm group
     uint64_t winSize;                           // size of each windows memory
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    uint64_t windowsIn[AscendC::HCCL_MAX_RANK_NUM];     // windows address for input, windowsIn[rankId] corresponds
-=======
     uint64_t windowsIn[AscendC::HCCL_MAX_RANK_NUM];      // windows address for input, windowsIn[rankId] corresponds
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
                                                 // to the local card address,
                                                 // and others are cross-card mapping addresses.
     uint64_t windowsOut[AscendC::HCCL_MAX_RANK_NUM];     // windows address for output, windowsOut[rankId] corresponds
@@ -396,15 +265,9 @@ struct HcclA2CombineOpParam {
     uint8_t multiFlag;
     __gm__ AscendC::IbVerbsData *data;
     uint64_t dataSize;
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    // appendand fields
-    uint64_t sizeOfAiRMAInfo; // sizeof(HcclAiRMAInfo)
-    uint64_t aiRMAInfo; // HcclAiRMAInfo*
-=======
     // 追加字段
     uint64_t sizeOfAiRMAInfo; // sizeof(HcclAiRMAInfo)
     uint64_t aiRMAInfo; // HcclAiRMAInfo* 单个结构体指针
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 
     CombinedCapability* capability;             // address of the communication capability information structure on the Device
     uint64_t capabilitySize;                    // size of the communication capability information structure
@@ -496,12 +359,7 @@ __aicore__ inline int64_t GetCurrentTimestampUs()
 __aicore__ inline void RecordRankCommDuration(AscendC::LocalTensor<int32_t> performanceInfoU32Tensor, uint32_t rankId, int64_t startTime)
 {
     int64_t endTime = GetCurrentTimestampUs();
-<<<<<<< HEAD:csrc/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
-    int32_t duration = static_cast<int32_t>(endTime - startTime);
-    performanceInfoU32Tensor.SetValue(rankId * sizeof(int64_t) / sizeof(int32_t), duration);
-=======
     int32_t duration = static_cast<int32_t>(endTime - startTime); // int32_t可以表示2^31(us)，约35min在实际场景下满足需要
     performanceInfoU32Tensor.SetValue(rankId * sizeof(int64_t) / sizeof(int32_t), duration); // 使用int32_t是因为atomicAdd不支持int64_t类型，这里只赋值到int64_t的低32位。
->>>>>>> 5172bd48 (add new model):csrc/mc2/dispatch_ffn_combine/op_kernel/utils/moe_distribute_base.h
 }
 #endif // MOE_DISTRIBUTE_BASE_H

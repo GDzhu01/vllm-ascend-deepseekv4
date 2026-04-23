@@ -118,6 +118,7 @@ public:
         uint32_t epilogueCoreNum;
         uint32_t epilogueGranularity;
         optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData;
+        float swigluLimit;
         //--------------
 
         // Methods
@@ -140,7 +141,7 @@ public:
             GM_ADDR moeInitRoutingQuantV2Offset_,
             GM_ADDR expertTokensBeforeCapacity_, GM_ADDR probs_,
             GM_ADDR ptrWorkspace_, int32_t ubMoveNum_,
-            optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData_
+            optiling::MoeInitRoutingQuantV2TilingData moeInitRoutingQuantV2TilingData_, float swigluLimit_
         ) : problemShape(problemShape_),
             EP(EP_), listLen(listLen_), expertPerRank(expertPerRank_), maxOutputSize(maxOutputSize_),
             rank(rank_), rankSize(rankSize_), topK(topK_),
@@ -156,7 +157,7 @@ public:
             moeInitRoutingQuantV2Offset(moeInitRoutingQuantV2Offset_), 
             expertTokensBeforeCapacity(expertTokensBeforeCapacity_), probs(probs_),
             ptrWorkspace(ptrWorkspace_), ubMoveNum(ubMoveNum_),
-            moeInitRoutingQuantV2TilingData(moeInitRoutingQuantV2TilingData_)
+            moeInitRoutingQuantV2TilingData(moeInitRoutingQuantV2TilingData_), swigluLimit(swigluLimit_)
         {
         }
     };
@@ -734,10 +735,39 @@ private:
                 LayoutC layoutC{dequantLen, params.problemShape.n()};
                 int64_t gmOffsetC = layoutC.GetOffset(offsetC);
                 int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
-                blockEpilogue(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], coreNum);
+                blockEpilogue(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
+                    gmPerTokenScale2[rowStartThisCore], params.epilogueCoreNum, params.swigluLimit);
             }
-            AscendC::SyncAll<true>();
-            AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(SYNCFLAGV2C); 
+            prevGroupSum1 += cumsumMM((params.EP - 1) * params.expertPerRank + groupIdx);
+            dequantSum += cumsumMM((params.EP - 1) * params.expertPerRank + groupIdx);
+            if (groupIdx + 1 == params.epilogueGranularity && groupIdx < params.expertPerRank - 1) {
+                dequantSum = 0;
+            }
+        }
+        syncLoopIdx ++;
+        AscendC::CrossCoreWaitFlag<0x2>(syncLoopIdx /8 + 1 + SYNCGMM1_BASE);
+        AscendC::SyncAll<true>();
+ 
+        uint32_t lastDequantExpertNum = params.expertPerRank;
+        if (params.epilogueGranularity < params.expertPerRank) {
+            lastDequantExpertNum = params.expertPerRank - params.epilogueGranularity;
+        }
+        if (lastDequantExpertNum < params.expertPerRank) {
+            AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(2 + SYNCGMM1_BASE); // V to C GMM2
+        }
+        if (prevGroupSum1 - dequantSum < params.maxOutputSize) {
+            uint32_t rowStartThisCore = prevGroupSum1 - dequantSum;;
+            MatrixCoord offsetC{rowStartThisCore, 0};
+            uint32_t dequantLen = dequantSum;
+            if (prevGroupSum1 >= params.maxOutputSize) {
+                dequantLen = dequantSum - (prevGroupSum1 - params.maxOutputSize);
+            }
+            MatrixCoord shapeC{dequantLen, params.problemShape.n()};
+            LayoutC layoutC{dequantLen, params.problemShape.n()};
+            int64_t gmOffsetC = layoutC.GetOffset(offsetC);
+            int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
+            blockEpilogue(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
+                gmPerTokenScale2[rowStartThisCore], coreNum, params.swigluLimit);
         }
         blockEpilogue.Finalize();
 

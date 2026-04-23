@@ -220,14 +220,14 @@ class DeepseekV4Config(PretrainedConfig):
         self.routed_scaling_factor = routed_scaling_factor
 
         # mqa
-        self.q_lora_rank = q_lora_rank
-        self.head_dim = head_dim
-        self.rope_head_dim = rope_head_dim
-        self.norm_eps = norm_eps
-        self.o_groups = o_groups
-        self.o_lora_rank = o_lora_rank
-        self.window_size = window_size
-        self.compress_ratios = compress_ratios
+        self.q_lora_rank=q_lora_rank
+        self.head_dim=head_dim
+        self.rope_head_dim=rope_head_dim
+        self.norm_eps=norm_eps
+        self.o_groups=o_groups
+        self.o_lora_rank=o_lora_rank
+        self.window_size=window_size
+        self.compress_ratios=[1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4]
         # NOTE: This is only for making is_deepseek_mla is True
         self.kv_lora_rank = o_lora_rank
 

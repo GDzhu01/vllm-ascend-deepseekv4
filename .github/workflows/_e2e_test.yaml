@@ -392,7 +392,6 @@ jobs:
             tests/e2e/multicard/2-cards/test_offline_inference_distributed.py::test_qwen3_dense_fc1_tp2 \
             tests/e2e/multicard/2-cards/test_offline_inference_distributed.py::test_qwen3_dense_prefetch_mlp_weight_tp2
 
-<<<<<<< HEAD
       - name: Run GDzhu01/vllm-ascend-deepseekv4 test (non triton)
         if: ${{ inputs.type == 'full' }}
         env:
@@ -402,8 +401,6 @@ jobs:
           # Fix me: current runner can not release the memory in time, this will cause OOM
           # pytest -sv --durations=0 tests/e2e/multicard/2-cards/test_aclgraph_capture_replay.py
 
-=======
->>>>>>> 5172bd48 (add new model)
   e2e-2-cards-1:
     name: multicard-2(1)
     runs-on: linux-aarch64-a3-2
