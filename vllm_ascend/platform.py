@@ -305,6 +305,18 @@ class NPUPlatform(Platform):
 
         from vllm.config.compilation import CUDAGraphMode
 
+        quant_config = getattr(vllm_config, "quant_config", None)
+        quant_description = getattr(quant_config, "quant_description", None)
+        uses_w4a4_dynamic = isinstance(quant_description, dict) and any(
+            value == "W4A4_DYNAMIC" for value in quant_description.values()
+        )
+
+        if uses_w4a4_dynamic and not enforce_eager:
+            logger.info("Compilation disabled for W4A4_DYNAMIC on Ascend, using eager mode")
+            enforce_eager = True
+            model_config.enforce_eager = True
+            compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+
         if ascend_config.xlite_graph_config.enabled:
             if ascend_config.xlite_graph_config.full_mode:
                 logger.info("ACLGraph is disabled under xlite full mode")
