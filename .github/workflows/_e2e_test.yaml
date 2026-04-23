@@ -102,9 +102,9 @@ jobs:
         run: |
           # We found that if running aclgraph tests in batch, it will cause AclmdlRICaptureBegin error. So we run
           # the test separately.
-          # basic 
+          # basic
+          pytest -sv --durations=0 tests/e2e/singlecard/test_aclgraph_mem.py
           pytest -sv --durations=0 tests/e2e/singlecard/test_aclgraph_accuracy.py \
-            tests/e2e/singlecard/test_aclgraph_mem.py \
             tests/e2e/singlecard/test_async_scheduling.py \
             tests/e2e/singlecard/test_batch_invariant.py \
             tests/e2e/singlecard/test_camem.py \
