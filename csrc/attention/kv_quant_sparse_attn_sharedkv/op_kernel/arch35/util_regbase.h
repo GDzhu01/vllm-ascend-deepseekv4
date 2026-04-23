@@ -101,8 +101,7 @@ struct RunParamStr {  // 分核与切块需要使用到参数
     uint8_t multiCoreIdxMod2 = 0; \
     uint8_t multiCoreIdxMod3 = 0; \
     int64_t sOuterOffset; \
-    int64_t mOuterOffset; \
-    bool    isCmp; \
+    int64_t mOuterOffset
 
 struct RunInfo {
     COMMON_RUN_INFO;
@@ -205,9 +204,7 @@ struct RunInfo {
     int32_t oriWinRight; \
     uint32_t sparseBlockSize; \
     uint32_t cmpRatio; \
-    float softmaxScale; \
-    uint32_t oriKvStride; \
-    uint32_t cmpKvStride; \
+    float softmaxScale
 
 #define CV_SHARED_PARAMS \
     /* base params */ \
@@ -237,9 +234,7 @@ struct RunInfo {
     uint32_t oriBlockSize : 12; \
     uint32_t cmpBlockSize : 12; \
     uint32_t oriMaxBlockNumPerBatch; \
-    uint32_t cmpMaxBlockNumPerBatch; \
-    uint32_t oriKvStride; \
-    uint32_t cmpKvStride; \
+    uint32_t cmpMaxBlockNumPerBatch
 
 
 struct ConstInfo{

@@ -203,7 +203,7 @@ function(add_compile_cmd_target)
         if(OP_DEBUG_CONFIG)
             set(OP_DEBUG_CONFIG_OPTION --op-debug-config ${OP_DEBUG_CONFIG})
         endif()
-        set(OP_TILING_KEY_OPTION --tiling-keys ${ASCEND_CUSTOM_TILING_KEYS})
+        set(OP_TILING_KEY_OPTION --kernel_template_input ${ASCEND_CUSTOM_TILING_KEYS})
     endif()
 
     set(_OUT_DIR           ${ASCEND_BINARY_OUT_DIR}/${CMD_COMPUTE_UNIT})
@@ -322,7 +322,7 @@ function(add_ops_tiling_keys)
         list(JOIN OP_COMPILE_TILING_KEYS "," STRING_TILING_KEYS)
         add_ops_compile_options(
                 OP_NAME ${OP_COMPILE_OP_NAME}
-                OPTIONS --tiling_key=${STRING_TILING_KEYS}
+                OPTIONS --kernel_template_input=${STRING_TILING_KEYS}
         )
     else()
         file(APPEND ${ASCEND_CUSTOM_TILING_KEYS}
@@ -396,11 +396,9 @@ function(add_ops_src_copy)
     set(MC2_OPS_LIST "matmul_reduce_scatter;"
         "matmul_reduce_scatter_v2;"
         "grouped_mat_mul_allto_allv;"
-        "quant_grouped_mat_mul_allto_allv;"
         "grouped_mat_mul_all_reduce;"
         "batch_mat_mul_reduce_scatter_allto_all;"
         "allto_allv_grouped_mat_mul;"
-        "allto_allv_quant_grouped_mat_mul;"
         "allto_all_all_gather_batch_mat_mul;"
         "distribute_barrier;"
         "moe_distribute_combine_add_rms_norm;"
@@ -677,7 +675,6 @@ function(add_bin_compile_target)
                 add_dependencies(${OP_TARGET_NAME}_${op_index} optiling_compat generate_ops_info)
             endif ()
             add_dependencies(${OP_TARGET_NAME}_${op_index} ${OP_TARGET_NAME}_src_copy ${OP_TARGET_NAME}_py_copy ${OP_TARGET_NAME}_mkdir)
-            add_dependencies(${OP_TARGET_NAME}_${op_index} generate_compile_cmd)
             add_dependencies(${OP_TARGET_NAME} ${OP_TARGET_NAME}_${op_index})
         endif ()
     endforeach()
@@ -816,6 +813,122 @@ function(add_static_ops)
                 DEPENDS ${static_src_temp_dir}
         )
     endif()
+endfunction()
+function(add_aicpu_kernel_modules)
+  if(NOT TARGET ${OPHOST_NAME}_aicpu_obj)
+    add_library(${OPHOST_NAME}_aicpu_obj OBJECT)
+    target_include_directories(${OPHOST_NAME}_aicpu_obj PRIVATE ${AICPU_INCLUDE})
+    target_compile_definitions(
+      ${OPHOST_NAME}_aicpu_obj PRIVATE _FORTIFY_SOURCE=2 google=ascend_private
+                                       $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
+      )
+    target_compile_options(
+      ${OPHOST_NAME}_aicpu_obj PRIVATE $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
+                                       -fvisibility=hidden ${AICPU_DEFINITIONS}
+      )
+    target_link_libraries(
+      ${OPHOST_NAME}_aicpu_obj
+      PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
+              $<BUILD_INTERFACE:dlog_headers>
+      )
+  endif()
+endfunction()
+
+function(add_aicpu_cust_kernel_modules op_name aicpu_sources aicpu_jsons)
+  set(target_name ${op_name}_obj)
+  if(NOT TARGET ${target_name})
+    add_library(${target_name} OBJECT)
+    target_include_directories(${target_name} PRIVATE ${AICPU_INCLUDE})
+    target_compile_definitions(
+      ${target_name} PRIVATE
+                    _FORTIFY_SOURCE=2 _GLIBCXX_USE_CXX11_ABI=1
+                    google=ascend_private
+                    $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
+      )
+    target_compile_options(
+      ${target_name} PRIVATE
+                    $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
+                    -fvisibility=hidden ${AICPU_DEFINITIONS}
+      )
+    target_link_libraries(
+      ${target_name}
+      PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
+              $<BUILD_INTERFACE:dlog_headers>
+              -Wl,--no-whole-archive
+      )
+    if (NOT (UT_TEST_ALL OR OP_KERNEL_AICPU_UT))
+      set_property(TARGET ${target_name} PROPERTY 
+        CXX_COMPILER_LAUNCHER ${ASCEND_DIR}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++)
+    endif()    
+    target_sources(${target_name} PRIVATE ${aicpu_sources})
+    set_property(GLOBAL APPEND PROPERTY AICPU_JSON_FILES ${aicpu_jsons})
+    if (NOT ${target_name} IN_LIST AICPU_CUST_OBJ_TARGETS)
+      set(AICPU_CUST_OBJ_TARGETS ${AICPU_CUST_OBJ_TARGETS} ${target_name} CACHE INTERNAL "All aicpu cust obj targets")
+    endif()
+  endif()
+endfunction()
+
+# 添加待编译算子
+function(add_need_compile_ops op_name)
+  if(NOT ASCEND_OP_NAME)
+    # 为空则不需要更新
+    return()
+  endif()
+
+  set(NEW_OP_NAMES ${ASCEND_OP_NAME} ${op_name})
+  list(REMOVE_DUPLICATES NEW_OP_NAMES)
+  set(ASCEND_OP_NAME
+      ${NEW_OP_NAMES}
+      CACHE STRING "Ascend op names to compile" FORCE
+    )
+endfunction()
+
+function(add_dependent_ops dependent_ops)
+  foreach(dep_op ${dependent_ops})
+    # 查询依赖算子所在目录
+    set(dep_op_path_list "")
+    if(ENABLE_EXPERIMENTAL)
+      foreach(ops_category ${OPS_CATEGORY_LIST})
+        file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/experimental/${ops_category}/${dep_op}")
+        list(APPEND dep_op_path_list ${dep_op_path})
+      endforeach()
+    endif()
+    set(outside_experimental FALSE)
+    # 如果非 experimental，或 experimental 下没找到，则去常规目录查找
+    if(NOT dep_op_path_list)
+      foreach(ops_category ${OPS_CATEGORY_LIST})
+        file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/${ops_category}/${dep_op}")
+        list(APPEND dep_op_path_list ${dep_op_path})
+      endforeach()
+      set(outside_experimental ${ENABLE_EXPERIMENTAL})
+    endif()
+    # 检查依赖存在
+    if(NOT dep_op_path_list)
+      message(FATAL_ERROR "dependent operator(${dep_op}) not exists")
+    endif()
+    list(LENGTH ${dep_op_path_list} find_dep_ops_count)
+    if(find_dep_ops_count GREATER 1)
+      message(FATAL_ERROR "dependent operator(${dep_op}) is not unique, the found operators:${dep_op_path_list}")
+    endif()
+
+    # ASCEND_OP_NAME 为空表示全部编译，则不需要特意添加目录；但指定experimental时未扫描常规算子，如果依赖常规算子，需要添加目录
+    # 已在待编译列表，则不需要加入
+    # 已在编译列表，则不需要重复加入
+
+    if((ASCEND_OP_NAME OR outside_experimental)
+        AND (NOT (dep_op IN_LIST ASCEND_OP_NAME))
+        AND (NOT (dep_op IN_LIST COMPILED_OPS))
+    )
+      # 加入依赖并去重
+      add_need_compile_ops("${dep_op}")
+      # 添加目录
+      get_filename_component(dep_op_path "${dep_op_path_list}" ABSOLUTE)
+      get_filename_component(dep_op_parent "${dep_op_path}" DIRECTORY)
+      get_filename_component(parent_path "${dep_op_parent}" NAME)
+      message(STATUS "add dependent operator: ${parent_path}/${dep_op}, path: ${dep_op_path}")
+      add_subdirectory("${dep_op_path}" "${CMAKE_BINARY_DIR}/dependent-ops/${parent_path}/${dep_op}")
+    endif()
+  endforeach()
 endfunction()
 
 function(pack_tiling_sink)
@@ -990,3 +1103,129 @@ function(add_version_info_targets)
         add_custom_target(version_${pkg_name}_info ALL DEPENDS ${CMAKE_BINARY_DIR}/version.${pkg_name}.info)
     endforeach()
 endfunction()
+
+function(add_aicpu_kernel_modules)
+    if(NOT TARGET ${OPHOST_NAME}_aicpu_obj)
+        add_library(${OPHOST_NAME}_aicpu_obj OBJECT)
+        target_include_directories(${OPHOST_NAME}_aicpu_obj PRIVATE ${AICPU_INCLUDE})
+        target_compile_definitions(
+        ${OPHOST_NAME}_aicpu_obj PRIVATE _FORTIFY_SOURCE=2 google=ascend_private
+                                        $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
+        )
+        target_compile_options(
+        ${OPHOST_NAME}_aicpu_obj PRIVATE $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
+                                        -fvisibility=hidden ${AICPU_DEFINITIONS}
+        )
+        target_link_libraries(
+        ${OPHOST_NAME}_aicpu_obj
+        PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
+                $<BUILD_INTERFACE:dlog_headers>
+        )
+    endif()
+endfunction()
+
+function(add_aicpu_cust_kernel_modules op_name aicpu_sources aicpu_jsons)
+    set(target_name ${op_name}_obj)
+    if(NOT TARGET ${target_name})
+        add_library(${target_name} OBJECT)
+        target_include_directories(${target_name} PRIVATE ${AICPU_INCLUDE})
+        target_compile_definitions(
+        ${target_name} PRIVATE
+                        _FORTIFY_SOURCE=2 _GLIBCXX_USE_CXX11_ABI=1
+                        google=ascend_private
+                        $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
+        )
+        target_compile_options(
+        ${target_name} PRIVATE
+                        $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
+                        -fvisibility=hidden ${AICPU_DEFINITIONS}
+        )
+        target_link_libraries(
+        ${target_name}
+        PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
+                $<BUILD_INTERFACE:dlog_headers>
+                -Wl,--no-whole-archive
+        )
+        if (NOT (UT_TEST_ALL OR OP_KERNEL_AICPU_UT))
+        set_property(TARGET ${target_name} PROPERTY 
+            CXX_COMPILER_LAUNCHER ${ASCEND_DIR}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++)
+        endif()    
+        target_sources(${target_name} PRIVATE ${aicpu_sources})
+        set_property(GLOBAL APPEND PROPERTY AICPU_JSON_FILES ${aicpu_jsons})
+        if (NOT ${target_name} IN_LIST AICPU_CUST_OBJ_TARGETS)
+        set(AICPU_CUST_OBJ_TARGETS ${AICPU_CUST_OBJ_TARGETS} ${target_name} CACHE INTERNAL "All aicpu cust obj targets")
+        endif()
+    endif()
+endfunction()
+
+# 添加待编译算子
+function(add_need_compile_ops op_name)
+    if(NOT ASCEND_OP_NAME)
+        # 为空则不需要更新
+        return()
+endif()
+
+set(NEW_OP_NAMES ${ASCEND_OP_NAME} ${op_name})
+list(REMOVE_DUPLICATES NEW_OP_NAMES)
+set(ASCEND_OP_NAME
+    ${NEW_OP_NAMES}
+    CACHE STRING "Ascend op names to compile" FORCE
+    )
+endfunction()
+
+function(add_dependent_ops dependent_ops)
+    foreach(dep_op ${dependent_ops})
+        # 查询依赖算子所在目录
+        set(dep_op_path_list "")
+        if(ENABLE_EXPERIMENTAL)
+        foreach(ops_category ${OPS_CATEGORY_LIST})
+            file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/experimental/${ops_category}/${dep_op}")
+            list(APPEND dep_op_path_list ${dep_op_path})
+        endforeach()
+        endif()
+        set(outside_experimental FALSE)
+        # 如果非 experimental，或 experimental 下没找到，则去常规目录查找
+        if(NOT dep_op_path_list)
+        foreach(ops_category ${OPS_CATEGORY_LIST})
+            file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/${ops_category}/${dep_op}")
+            list(APPEND dep_op_path_list ${dep_op_path})
+        endforeach()
+        set(outside_experimental ${ENABLE_EXPERIMENTAL})
+        endif()
+        # 检查依赖存在
+        if(NOT dep_op_path_list)
+        message(FATAL_ERROR "dependent operator(${dep_op}) not exists")
+        endif()
+        list(LENGTH ${dep_op_path_list} find_dep_ops_count)
+        if(find_dep_ops_count GREATER 1)
+        message(FATAL_ERROR "dependent operator(${dep_op}) is not unique, the found operators:${dep_op_path_list}")
+        endif()
+
+        # ASCEND_OP_NAME 为空表示全部编译，则不需要特意添加目录；但指定experimental时未扫描常规算子，如果依赖常规算子，需要添加目录
+        # 已在待编译列表，则不需要加入
+        # 已在编译列表，则不需要重复加入
+
+        if((ASCEND_OP_NAME OR outside_experimental)
+            AND (NOT (dep_op IN_LIST ASCEND_OP_NAME))
+            AND (NOT (dep_op IN_LIST COMPILED_OPS))
+        )
+        # 加入依赖并去重
+        add_need_compile_ops("${dep_op}")
+        # 添加目录
+        get_filename_component(dep_op_path "${dep_op_path_list}" ABSOLUTE)
+        get_filename_component(dep_op_parent "${dep_op_path}" DIRECTORY)
+        get_filename_component(parent_path "${dep_op_parent}" NAME)
+        message(STATUS "add dependent operator: ${parent_path}/${dep_op}, path: ${dep_op_path}")
+        add_subdirectory("${dep_op_path}" "${CMAKE_BINARY_DIR}/dependent-ops/${parent_path}/${dep_op}")
+        endif()
+    endforeach()
+endfunction()
+
+if (BUILD_OPEN_PROJECT)
+    if (TESTS_UT_OPS_TEST)
+        include(${OPS_ADV_CMAKE_DIR}/func_utest.cmake)
+    endif ()
+    if (TESTS_EXAMPLE_OPS_TEST)
+        include(${OPS_ADV_CMAKE_DIR}/func_examples.cmake)
+    endif ()
+endif ()

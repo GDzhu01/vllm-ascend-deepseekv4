@@ -26,7 +26,7 @@ constexpr uint32_t AIV_CORE_NUM = 72;
 constexpr uint32_t SAS_META_SIZE = 1024;
 using SAS_METADATA_T = int32_t;
 
-constexpr uint32_t FA_METADATA_SIZE = 9;
+constexpr uint32_t FA_METADATA_SIZE = 8;
 constexpr uint32_t FD_METADATA_SIZE = 8;
 
 // FA Metadata Index Definitions
@@ -38,7 +38,6 @@ constexpr uint32_t FA_BN2_END_INDEX = 4;
 constexpr uint32_t FA_M_END_INDEX = 5;
 constexpr uint32_t FA_S2_END_INDEX = 6;
 constexpr uint32_t FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX = 7;
-constexpr uint32_t FA_S2_MAX_NUM = 8;
 
 // FD Metadata Index Definitions
 constexpr uint32_t FD_CORE_ENABLE_INDEX = 0;

@@ -35,7 +35,6 @@ option(OP_KERNEL_UT               "Enable kernel ut"                OFF)
 option(OP_KERNEL_AICPU_UT         "Enable aicpu kernel ut"          OFF)
 option(UT_TEST_ALL                "Enable all ut"                   OFF)
 option(ENABLE_OOM                 "Enable kernel oom"               OFF)
-option(UT_INFERSHAPE_FLAG         "Enable infershape ut"            OFF)
 
 set(ASCEND_COMPUTE_UNIT           "ascend910b"           CACHE   STRING   "soc that need to be compiled")
 set(ASCEND_OP_NAME                "ALL"                           CACHE   STRING   "operators that need to be compiled")
@@ -44,9 +43,8 @@ set(VENDOR_NAME                   "custom"                     CACHE   STRING   
 set(ASCEND_ALL_COMPUTE_UNIT       "ascend910b;ascend910_93;ascend950;mc62cm12a;kirinx90;kirin9030" CACHE STRING "all soc list")
 
 set(SOC_VERSION_LIST ascend310p ascend910b ascend910_93 ascend950 mc62cm12a kirinx90 kirin9030)
-set(ARCH_DIRECTORY_LIST arch20 arch32 arch32 arch35 arch35 arch32 arch32)
+set(ARCH_DIRECTORY_LIST arch20 arch32 arch32 arch35 arch38 arch32 arch32)
 set(BISHENG_FLAGS "" CACHE STRING "bisheng compiler flags")
-set(ENABLE_AICPU_KERNEL FALSE CACHE BOOL "Enable AICPU Kernel")
 
 # 获取基础 CANN 路径
 if (CUSTOM_ASCEND_CANN_PACKAGE_PATH)
@@ -151,6 +149,7 @@ if (BUILD_OPEN_PROJECT)
         include(cmake/third_party/ascend_protobuf.cmake)
 
         include(cmake/third_party/makeself-fetch.cmake)
+        include(cmake/opbuild.cmake)
         include(cmake/custom_build.cmake)
         message(STATUS "End building custom package.")
         include(cmake/opbuild.cmake)

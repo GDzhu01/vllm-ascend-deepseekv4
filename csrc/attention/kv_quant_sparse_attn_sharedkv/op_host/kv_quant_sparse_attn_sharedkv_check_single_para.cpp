@@ -258,8 +258,8 @@ ge::graphStatus KvQuantSASTilingCheck::CheckLayoutSupport(const SASLayout &actua
 
 ge::graphStatus KvQuantSASTilingCheck::CheckSingleParaNumHeads() const
 {
-    OP_CHECK_IF(n1Size_ != 64 && n1Size_ != 128,
-        OP_LOGE(opName_, "n1Size_ only support 64 and 128 now, but got %u.", n1Size_),
+    OP_CHECK_IF(n1Size_ != 64,
+        OP_LOGE(opName_, "n1Size_ only support 64 now, but got %u.", n1Size_),
         return ge::GRAPH_FAILED);
     return ge::GRAPH_SUCCESS;
 }

@@ -32,7 +32,6 @@ function(add_execute_example)
                 ${OPAPI_SHARED_REL_PATH}
                 -lascendcl
                 -lnnopbase
-                -Wl,-Bsymbolic
                 -lc_sec
     )
     target_compile_options(${EXAMPLE_TARGET_NAME}

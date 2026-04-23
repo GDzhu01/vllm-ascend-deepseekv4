@@ -545,10 +545,8 @@ def generate_and_save_testdata(params, save_pt=False, save_path=""):
     nope_head_dim = D - rope_head_dim
     quant_scale_head_dim = (nope_head_dim + tile_size - 1) // tile_size
     d_aligned_128 = (nope_head_dim + rope_head_dim * 2 + quant_scale_head_dim + 127) // 128 * 128
-    d_combined = nope_head_dim + rope_head_dim * 2 + quant_scale_head_dim
     print(f"d_aligned_128={d_aligned_128}, nope_head_dim={nope_head_dim}, rope_head_dim={rope_head_dim}, quant_scale_head_dim={quant_scale_head_dim}")
     pad_d = d_aligned_128 - nope_head_dim - rope_head_dim * 2 - quant_scale_head_dim
-    block_num = block_num1 if block_num1 >= block_num2 else block_num2
     # 根据输入的data range，计算scale范围，生成scale tensor，取倒数保存为bin
     quant_param_range_left = DATA_RANGE_LEFT / FP8_DATA_RANGE_LEFT
     quant_param_range_right = DATA_RANGE_RIGHT / FP8_DATA_RANGE_RIGHT
@@ -558,14 +556,14 @@ def generate_and_save_testdata(params, save_pt=False, save_path=""):
     
     # generate ori_kv tensor
     ori_k_bnsd, ori_k_in_pa_shape, ori_block_table = gen_ori_kv(q_type, ori_kv_type, B, N2, rope_head_dim, nope_head_dim, tile_size, quant_scale_head_dim, d_aligned_128, 
-                                                pad_d, block_num, block_size1, ori_max_s2, ori_max_block_num_per_batch,
+                                                pad_d, block_num1, block_size1, ori_max_s2, ori_max_block_num_per_batch,
                                                 seqused_kv, quant_param_range_left, quant_param_range_right)
 
     # generate cmp_kv and sparse_indices
     if template_run_mode == "CFA" or template_run_mode == "SCFA":
         cmp_k_bnsd, cmp_k_in_pa_shape, cmp_block_table, cmp_sparse_indices = gen_cmp_kv(q_type, layout_q, cmp_kv_type, B, S1,
                                                                         T1, N2, D, K, rope_head_dim, nope_head_dim, tile_size, quant_scale_head_dim, d_aligned_128, 
-                                                                        pad_d, block_num,
+                                                                        pad_d, block_num2,
                                                                         block_size2, cmp_max_s2, cmp_max_block_num_per_batch, cu_seqlens_q,
                                                                         seqused_kv, cmp_ratio, cmp_mask_mode, template_run_mode,
                                                                         quant_param_range_left, quant_param_range_right)
@@ -574,14 +572,6 @@ def generate_and_save_testdata(params, save_pt=False, save_path=""):
         cmp_sparse_indices = None
         cmp_block_table = None
         cmp_k_bnsd = None
-
-    if layout_kv == "PA_BNBD" and (template_run_mode == "CFA" or template_run_mode == "SCFA"):
-        fusionBlock = torch.zeros((block_num, block_size1 + block_size2, N2, d_combined + pad_d), dtype=ori_kv_type)
-        fusionBlock.view(block_num, -1)[:, : block_size1 * N2 * (d_combined + pad_d)] = ori_k_in_pa_shape.view(block_num, -1)
-        fusionBlock.view(block_num, -1)[:, block_size1 * N2 * (d_combined + pad_d) :] = cmp_k_in_pa_shape.view(block_num, -1)
-        fusionBlock.npu()
-        ori_k_in_pa_shape = fusionBlock.view(block_num, -1)[:, : block_size1 * N2 * (d_combined + pad_d)].view(block_num, block_size1, N2, d_combined + pad_d)
-        cmp_k_in_pa_shape = fusionBlock.view(block_num, -1)[:, block_size1 * N2 * (d_combined + pad_d) :].view(block_num, block_size2, N2, d_combined + pad_d)
 
     test_sas = GeneralizedSFAQuant(layout_q, layout_kv, q_type, ori_kv_type, cmp_kv_type, B, S1, T1, N1, N2, D, K,
                               block_num1, block_num2, block_size1, block_size2, cu_seqlens_q, seqused_kv, softmax_scale, cmp_ratio,

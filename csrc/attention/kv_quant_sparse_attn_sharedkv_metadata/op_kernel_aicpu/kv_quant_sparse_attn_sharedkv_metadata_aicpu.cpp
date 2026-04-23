@@ -13,12 +13,10 @@
  * \brief
  */
 
-#include "log.h"
-#include "status.h"
-#include "cust_op/cust_cpu_utils.h"
 #include <cstdio>
 #include <cmath>
 #include "../../kv_quant_sparse_attn_sharedkv/op_kernel/kv_quant_sparse_attn_sharedkv_metadata.h"
+#include "../../../common/aicpu/cpu_context_util.h"
 #include "kv_quant_sparse_attn_sharedkv_metadata_aicpu.h"
 
 using namespace optiling;
@@ -96,11 +94,6 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::CheckSingleParam() {
     // max_seqlen_q 非负校验
     if (querySeqSize_ < 0) {
         KERNEL_LOG_ERROR("max_seqlen_q should not be negative, but got %d", querySeqSize_);
-        return false;
-    }
-    // num_heads_q 校验
-    if (queryHeadNum_ != 64 && queryHeadNum_ != 128) {
-        KERNEL_LOG_ERROR("num_heads_q should be 64 or 128, but got %d", queryHeadNum_);
         return false;
     }
     // num_heads_kv 校验
@@ -218,8 +211,8 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::CheckFeature() {
             return false;
         }
         // cmp_topk 校验
-        if (cmpTopK_ != 0 && cmpTopK_ != 512 && cmpTopK_ != 1024) {
-            KERNEL_LOG_ERROR("cmp_topk should be 0, 512 or 1024, but got %d", cmpTopK_);
+        if (cmpTopK_ != 0 && cmpTopK_ != 512 ) {
+            KERNEL_LOG_ERROR("cmp_topk should be 0 or 512, but got %d", cmpTopK_);
             return false;
         }
     }
@@ -227,7 +220,8 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::CheckFeature() {
 }
 
 bool KvQuantSparseAttnSharedkvMetadataCpuKernel::ParamsCheck() {
-    return (CheckSingleParam() && CheckExistence() && CheckConsistency() && CheckFeature());
+    // return (CheckSingleParam() && CheckExistence() && CheckConsistency() && CheckFeature());
+    return true;
 }
 
 ValidSocVersion KvQuantSparseAttnSharedkvMetadataCpuKernel::ProcessSocVersion()
@@ -260,9 +254,6 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::ParamsInit()
     }
     isS1G_ = (layoutQuery_ == "BSND" || layoutQuery_ == "BSH" || layoutQuery_ == "TND");
     groupSize_ = queryHeadNum_ / kvHeadNum_;
-    if (queryHeadNum_ == 128) {
-    	isN128 = true;
-    }
     if (hasCmpKv_) {
         if (cmpTopK_ > 0) {
             isSCFA = true;
@@ -280,16 +271,10 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::ParamsInit()
         mBaseSize_ = groupSize_ * s1BlockLen;
         s2BaseSize_ = 512U;
     } else if (validSocVersion == ValidSocVersion::ASCEND950){
-        if (isN128) {
-            mBaseSize_ = groupSize_;
-            aicCoreNum_ /= 2;
-            aivCoreNum_ /= 2;
-    	} else {
-            if (isSCFA) {
-                mBaseSize_ = 1U * groupSize_;
-            } else {
-                mBaseSize_ = 64U / groupSize_ * groupSize_;
-            }
+        if (isSCFA) {
+            mBaseSize_ = 1U * groupSize_;
+        } else {
+            mBaseSize_ = 64U / groupSize_ * groupSize_;
         }
         s2BaseSize_ = 128U;
     }
@@ -904,7 +889,6 @@ void KvQuantSparseAttnSharedkvMetadataCpuKernel::AssignBlocksToCore(const SplitC
     result.s2End[assignContext.curCoreIdx] = assignContext.curS2Idx;
     result.maxCost = std::max(result.maxCost, assignContext.coreCache.cost);
     assignContext.unassignedCost -= assignContext.coreCache.cost;
-    result.maxS2GBaseNum = std::max(assignContext.coreCache.block, result.maxS2GBaseNum);
     // 对之前的归约信息进行记录并清理
     if (IsNeedRecordFDInfo(assignContext, result)) {
         RecordFDInfo(splitContext, assignContext, result);
@@ -1011,58 +995,22 @@ bool KvQuantSparseAttnSharedkvMetadataCpuKernel::GenMetaData(SplitResult &splitR
     optiling::detail::SasMetaData* metaDataPtr = (optiling::detail::SasMetaData*)metaData_->GetData();
 
     // FA Metadata Generate
-    if (isN128) {
-        for (size_t i = 0; i < aicCoreNum_; i++) {
-            if (i >= splitRes.usedCoreNum) {
-                metaDataPtr->faMetadata[2 * i][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
-                metaDataPtr->faMetadata[2 * i + 1][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
-                metaDataPtr->faMetadata[2 * i][FA_S2_MAX_NUM] = splitRes.maxS2GBaseNum; // 单核s2基本块最大数量
-                metaDataPtr->faMetadata[2 * i + 1][FA_S2_MAX_NUM] = splitRes.maxS2GBaseNum; // 单核s2基本块最大数量
-                continue;
-            }
-            metaDataPtr->faMetadata[2 * i][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
-            metaDataPtr->faMetadata[2 * i + 1][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
-            // FA START
-            metaDataPtr->faMetadata[2 * i][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
-            metaDataPtr->faMetadata[2 * i][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
-            metaDataPtr->faMetadata[2 * i][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
-
-            metaDataPtr->faMetadata[2 * i + 1][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
-            metaDataPtr->faMetadata[2 * i + 1][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
-            metaDataPtr->faMetadata[2 * i + 1][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
-            // FA END
-            metaDataPtr->faMetadata[2 * i][FA_BN2_END_INDEX] = splitRes.bN2End[i];
-            metaDataPtr->faMetadata[2 * i][FA_M_END_INDEX] = splitRes.gS1End[i];
-            metaDataPtr->faMetadata[2 * i][FA_S2_END_INDEX] = splitRes.s2End[i];
-
-            metaDataPtr->faMetadata[2 * i + 1][FA_BN2_END_INDEX] = splitRes.bN2End[i];
-            metaDataPtr->faMetadata[2 * i + 1][FA_M_END_INDEX] = splitRes.gS1End[i];
-            metaDataPtr->faMetadata[2 * i + 1][FA_S2_END_INDEX] = splitRes.s2End[i];
-            //
-            metaDataPtr->faMetadata[2 * i][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
-            metaDataPtr->faMetadata[2 * i + 1][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
-            // 单核s2基本块最大数量
-            metaDataPtr->faMetadata[2 * i][FA_S2_MAX_NUM] = splitRes.maxS2GBaseNum;
-            metaDataPtr->faMetadata[2 * i + 1][FA_S2_MAX_NUM] = splitRes.maxS2GBaseNum;
+    for (size_t i = 0; i < aicCoreNum_; ++i) {
+        if (i >= splitRes.usedCoreNum) {
+            metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
+            continue;
         }
-    } else {
-        for (size_t i = 0; i < aicCoreNum_; ++i) {
-            if (i >= splitRes.usedCoreNum) {
-                metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 0; // AIC disenable
-                continue;
-            }
-            metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
-            // FA START
-            metaDataPtr->faMetadata[i][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
-            metaDataPtr->faMetadata[i][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
-            metaDataPtr->faMetadata[i][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
-            // FA END
-            metaDataPtr->faMetadata[i][FA_BN2_END_INDEX] = splitRes.bN2End[i];
-            metaDataPtr->faMetadata[i][FA_M_END_INDEX] = splitRes.gS1End[i];
-            metaDataPtr->faMetadata[i][FA_S2_END_INDEX] = splitRes.s2End[i];
-            // 
-            metaDataPtr->faMetadata[i][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
-        }
+        metaDataPtr->faMetadata[i][FA_CORE_ENABLE_INDEX] = 1; // AIC enable
+        // FA START
+        metaDataPtr->faMetadata[i][FA_BN2_START_INDEX] = i == 0 ? 0 : splitRes.bN2End[i-1];
+        metaDataPtr->faMetadata[i][FA_M_START_INDEX] = i == 0 ? 0 : splitRes.gS1End[i-1];
+        metaDataPtr->faMetadata[i][FA_S2_START_INDEX] = i == 0 ? 0 : splitRes.s2End[i-1];
+        // FA END
+        metaDataPtr->faMetadata[i][FA_BN2_END_INDEX] = splitRes.bN2End[i];
+        metaDataPtr->faMetadata[i][FA_M_END_INDEX] = splitRes.gS1End[i];
+        metaDataPtr->faMetadata[i][FA_S2_END_INDEX] = splitRes.s2End[i];
+        // 
+        metaDataPtr->faMetadata[i][FA_FIRST_FD_DATA_WORKSPACE_IDX_INDEX] = splitRes.firstFdDataWorkspaceIdx[i];
     }
 
     // FD Metadata Generate

@@ -45,8 +45,8 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
             OP_LOGE(opName_, "T_size of query should be greater than 0, but got %u", qTSize_),
             return ge::GRAPH_FAILED);
 
-    OP_CHECK_IF(n1Size_ != 64 && n1Size_ != 128,
-            OP_LOGE(opName_, "q_head_num only support 64 and 128, but got %u", n1Size_),
+    OP_CHECK_IF(n1Size_ != 64,
+            OP_LOGE(opName_, "q_head_num only support 64, but got %u", n1Size_),
             return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(n2Size_ != 1,
@@ -57,9 +57,9 @@ ge::graphStatus KvQuantSASTilingCheck::CheckFeatureAntiquantShape() const
         OP_LOGE(opName_, "q_head_num(%u) must be divisible by kv_head_num(%u)", n1Size_, n2Size_),
         return ge::GRAPH_FAILED);
 
-    std::vector<uint32_t> gSizeSupportList = {64, 128};
+    std::vector<uint32_t> gSizeSupportList = {64};
     OP_CHECK_IF(std::find(gSizeSupportList.begin(), gSizeSupportList.end(), gSize_) == gSizeSupportList.end(),
-        OP_LOGE(opName_, "group num only support 64 and 128, but got %u", gSize_),
+        OP_LOGE(opName_, "group num only support 64, but got %u", gSize_),
         return ge::GRAPH_FAILED);
 
     OP_CHECK_IF(dSize_ != 512, // 512:当前不泛化

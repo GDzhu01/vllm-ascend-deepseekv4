@@ -73,67 +73,6 @@ inline bool IsWithinTolerance(T limit, T tolerance, T value)
     return limit + tolerance >= value;
 }
 
-template <typename T>
-inline typename std::enable_if<std::is_integral_v<T>, bool>::type GetAttrValue(CpuKernelContext &ctx,
-                                                                               const std::string &name, T &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (!attr) {
-        KERNEL_LOG_ERROR("attr is null: %s", name.c_str());
-        return false;
-    }
-    value = static_cast<T>(attr->GetInt());
-    return true;
-}
-
-inline bool GetAttrValue(CpuKernelContext &ctx, const std::string &name, std::string &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (!attr) {
-        KERNEL_LOG_ERROR("attr is null: %s", name.c_str());
-        return false;
-    }
-    value = attr->GetString();
-    return true;
-}
-
-inline bool GetAttrValue(CpuKernelContext &ctx, const std::string &name, bool &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (!attr) {
-        KERNEL_LOG_ERROR("attr is null: %s", name.c_str());
-        return false;
-    }
-    value = attr->GetBool();
-    return true;
-}
-
-template <typename T>
-inline typename std::enable_if<std::is_integral_v<T>, void>::type GetAttrValueOpt(CpuKernelContext &ctx,
-                                                                                  const std::string &name, T &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (attr != nullptr) {
-        value = static_cast<T>(attr->GetInt());
-    }
-}
-
-inline void GetAttrValueOpt(CpuKernelContext &ctx, const std::string &name, std::string &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (attr != nullptr) {
-        value = attr->GetString();
-    }
-}
-
-inline void GetAttrValueOpt(CpuKernelContext &ctx, const std::string &name, bool &value)
-{
-    auto attr = ctx.GetAttr(name);
-    if (attr != nullptr) {
-        value = attr->GetBool();
-    }
-}
-
 // 分核功能模块输出：FD信息，包含需要归约的数据索引及其分核信息
 struct FlashDecodeResult {
     uint32_t fdUsedVecNum { 0U };             // 归约过程使用的vector数量
@@ -169,7 +108,6 @@ struct SplitResult {
     int64_t maxCost { 0 };            // 慢核开销
     uint32_t numOfFdHead { 0U };        // 归约任务数量
     uint32_t maxS2SplitNum { 0U };      // 单个归约任务最大分核数量
-    uint32_t maxS2GBaseNum { 0U };      // 单个核最大s2基本块数量
     FlashDecodeResult fdRes { 0U, 0U };     // FD信息
 
     SplitResult(uint32_t aicNum, uint32_t aivNum) :
@@ -390,8 +328,6 @@ private:
     uint32_t sparseMode_ = 0;
     uint32_t attentionMode_ = 1;
     BlockCost<int64_t> typeCost_;
-    bool isN128 = false;
-    
 private:
     enum class ParamId : uint32_t {
     // input

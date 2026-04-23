@@ -351,132 +351,27 @@ class BinParamBuilder(opdesc_parser.OpDesc):
         with os.fdopen(os.open(param_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
             json.dump(param, fd, indent='  ')
 
-    def _generate_check_result(
-        self, enable_tiling_keys: bool, bin_file: str, ci_mode_flag: bool
-    ) -> str:
-        """根据模式和 tiling keys 启用状态生成检查脚本"""
-        if ci_mode_flag:
-            if not enable_tiling_keys:
-                return self._gen_ci_no_tiling(bin_file)
-            else:
-                return self._gen_ci_tiling(bin_file)
+    def _generate_check_result(self: any, enable_tiling_keys: bool, bin_file: str):
+        check_result = ""
+        if enable_tiling_keys is False:
+            check_result += "echo \"${res}\"\n"
+            check_result += const_var.CHK_CMD.format(res_file=bin_file + '.json')
+            check_result += const_var.CHK_CMD.format(res_file=bin_file + '.o')
         else:
-            if not enable_tiling_keys:
-                return self._gen_local_no_tiling(bin_file)
-            else:
-                return self._gen_local_tiling(bin_file)
-
-    def _gen_ci_no_tiling(self, bin_file: str) -> str:
-        """CI模式，未启用tiling keys：任何错误仅记录，成功执行检查"""
-        return f"""
-    __ret=$?
-    if [ $__ret -eq 0 ]; then
-        echo "${{res}}"
-        echo "{self.op_intf} {bin_file}" >> success_ops.log
-        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
-        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
-    else
-        echo "${{res}}"
-        echo "{self.op_intf} {bin_file}" >> failed_ops.log
-    fi
-    """
-
-    def _gen_ci_tiling(self, bin_file: str) -> str:
-        """CI模式，启用tiling keys：处理特定返回码1错误，其余错误仅记录，成功执行检查"""
-        return f"""
-    __ret=$?
-    if [ $__ret -eq 0 ]; then
-        echo "${{res}}"
-        echo "{self.op_intf} {bin_file}" >> success_ops.log
-        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
-        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
-    elif [ $__ret -eq 1 ] && echo "${{res}}" | grep -q "None of the given tiling keys are in the supported list"; then
-        echo "${{res}}"
-        echo "{self.op_intf} {bin_file}" >> failed_ops.log
-    else
-        echo "${{res}}"
-        echo "{self.op_intf} {bin_file}" >> failed_ops.log
-    fi
-    """
-
-    def _gen_local_no_tiling(self, bin_file: str) -> str:
-        """线下模式，未启用tiling keys：任何错误立即退出，成功执行检查"""
-        return f"""
-    __ret=$?
-    if [ $__ret -eq 0 ]; then
-        echo "${{res}}"
-        remove_pid
-        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
-        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
-    else
-        echo "${{res}}"
-        on_failure
-        exit 1
-    fi
-    """
-
-    def _gen_local_tiling(self, bin_file: str) -> str:
-        """线下模式，启用tiling keys：特定返回码1错误仅打印，其他错误退出，成功执行检查"""
-        return f"""
-    __ret=$?
-    if [ $__ret -eq 0 ]; then
-        echo "${{res}}"
-        remove_pid
-        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
-        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
-    elif [ $__ret -eq 1 ] && echo "${{res}}" | grep -q "None of the given tiling keys are in the supported list"; then
-        echo "${{res}}"
-    else
-        echo "${{res}}"
-        on_failure
-        exit 1
-    fi
-    """
-
-    def _get_no_ci_shell_str(self):
-        return f"""
-PID_FILE="{self.out_path}/compile_pids.txt"
-STOP_FILE="{self.out_path}/compile_stop.flag"
-""" + """
-add_pid() {
-    (
-        flock 9
-        echo $$ >> "$PID_FILE"
-    ) 9>"${PID_FILE}.lock"
-}
-
-remove_pid() {
-    (
-        flock 9
-        grep -v "^$$$" "$PID_FILE" > "${PID_FILE}.tmp" && mv "${PID_FILE}.tmp" "$PID_FILE"
-    ) 9>"${PID_FILE}.lock"
-}
-
-check_stop() {
-    if [ -f "$STOP_FILE" ]; then
-        echo "Stop flag detected, exiting..."
-        exit 1
-    fi
-}
-
-on_failure() {
-    touch "$STOP_FILE"
-    
-    # PIDPID
-    (
-        flock 9
-        while read pid; do
-            if [ "$pid" -ne $$ ]; then
-                kill -9 "$pid" 2>/dev/null || true
-            fi
-        done < "$PID_FILE"
-    ) 9>"${PID_FILE}.lock"
-}
-
-check_stop
-add_pid
-check_stop
-"""
+            check_result += "if [ $? -eq 1 ]; then\n"
+            check_result += "    if echo \"${res}\" | \
+grep -q \"None of the given tiling keys are in the supported list\"; then\n"
+            check_result += "        echo \"${res}\"\n"
+            check_result += "    else\n"
+            check_result += "        echo \"${res}\"\n"
+            check_result += "        exit 1\n"
+            check_result += "    fi\n"
+            check_result += "else\n"
+            check_result += "echo \"${res}\"\n"
+            check_result += const_var.CHK_CMD.format(res_file=bin_file + '.json')
+            check_result += const_var.CHK_CMD.format(res_file=bin_file + '.o')
+            check_result += "fi\n"
+        return check_result
 
 
     def _write_build_cmd(self: any, param_file: str, bin_file: str, index: int, auto_gen_path: str, bisheng_flags: str,
@@ -488,17 +383,11 @@ check_stop
         compile_file = os.path.join(self.out_path, '-'.join(name_com) + '.sh')
         compile_file = os.path.realpath(compile_file)
 
-        if const_var.CHECK_ASC_DEVKIT_VERSION:
-            bin_cmd_str = 'res=$(asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
-                 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
-        else:
-            bin_cmd_str = 'res=$(opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
-                 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
-        ci_mode_flag = (os.environ.get('CI_MODE', 'FALSE') == 'TRUE')
+        bin_cmd_str = 'res=$(asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+                --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
+
         build_cmd_var = "#!/bin/bash\n"
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} ..."\n'
-        if not ci_mode_flag:
-            build_cmd_var += self._get_no_ci_shell_str()
         build_cmd_var += f"start_time=$(date +%s.%N)\n"
         plog_level = os.environ.get("ASCEND_GLOBAL_LOG_LEVEL")
         plog_stdout = os.environ.get("ASCEND_SLOG_PRINT_TO_STDOUT")
@@ -540,7 +429,7 @@ check_stop
 
         build_cmd_var += ")\n\n"
     
-        check_result = self._generate_check_result(enable_tiling_keys, bin_file, ci_mode_flag)
+        check_result = self._generate_check_result(enable_tiling_keys, bin_file)
         build_cmd_var += check_result
         build_cmd_var += f'end_time=$(date +%s.%N)\n'
         build_cmd_var += f'duration=$(awk "BEGIN {{ print $end_time - $start_time }}")\n'
@@ -553,6 +442,7 @@ check_stop
             f'>> {self.op_file}-{str(index)}.txt\n'
         )
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} Done"\n'
+
         with os.fdopen(os.open(compile_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
             fd.write(build_cmd_var)
 
