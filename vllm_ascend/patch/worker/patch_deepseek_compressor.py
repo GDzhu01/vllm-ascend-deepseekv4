@@ -56,8 +56,10 @@ class AscendCompressorStateCache(CompressorStateCache):
 
 
     def get_kv_cache_spec(self, vllm_config) -> KVCacheSpec:
-        page_size_padded = 16640 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 131072
-        
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            page_size_padded = 16896 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 81920
+        else:
+            page_size_padded = 16640 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 131072
         if get_ascend_device_type() in {AscendDeviceType.A5}:
             self.dtype = torch.float8_e4m3fn
 

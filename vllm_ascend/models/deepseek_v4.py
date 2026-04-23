@@ -542,7 +542,7 @@ class Compressor(nn.Module):
                 dtype=state_dtype,
                 compress_ratio=compress_ratio,
                 prefix=f"{prefix}.state_cache",
-                block_size=32
+                block_size=16
             )
         else:
             raise ValueError(f"Only support compress_ratio in [4, 128]. Got unsupported compress_ratio: {compress_ratio}")
