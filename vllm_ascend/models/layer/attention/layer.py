@@ -17,7 +17,10 @@ from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
-from vllm_ascend.utils import get_ascend_device_type
+from vllm_ascend.utils import (
+    AscendDeviceType,
+    get_ascend_device_type,
+)
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 

@@ -512,7 +512,7 @@ class Compressor(nn.Module):
             self.dim,
             self.coff * self.head_dim,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wkv",
             return_bias=False,
         )
@@ -520,7 +520,7 @@ class Compressor(nn.Module):
             self.dim,
             self.coff * self.head_dim,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wgate",
             return_bias=False,
         )
@@ -1169,6 +1169,9 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 name = name.replace('.w2.', '.down_proj.')
             if '.w3.' in name:
                 name = name.replace('.w3.', '.up_proj.')
+
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
 
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.', 'lm_head.')

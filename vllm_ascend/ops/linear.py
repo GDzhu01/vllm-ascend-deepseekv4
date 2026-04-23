@@ -424,10 +424,10 @@ class AscendColumnParallelLinear(ColumnParallelLinear):
     
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
         super().weight_loader(param, loaded_weight)
-        if "wo_a" in self.prefix:
-            self.weight.data = self.weight.data.view(
-                self.n_local_groups, self.o_lora_rank,
-                -1).transpose(2, 1).contiguous()
+        # if "wo_a" in self.prefix:
+        #     self.weight.data = self.weight.data.view(
+        #         self.n_local_groups, self.o_lora_rank,
+        #         -1).transpose(2, 1).contiguous()
 
 
 class AscendReplicatedLinear(ReplicatedLinear):
