@@ -2551,7 +2551,7 @@ class NPUModelRunner(GPUModelRunner):
 
     def initialize_kv_state(self):
         hf_config = self.model_config.hf_config
-        if hf_config.model_type != 'deepseek_v4':
+        if hf_config.model_type != 'deepseek_xyz':
             return
         kv_states: Dict[str, tuple[torch.Tensor]] = {}
         compress_ratio_to_layers = {}
