@@ -36,6 +36,7 @@
 #include "mc2/dispatch_gmm_combine_decode/dispatch_gmm_combine_decode_torch_adpt.h"
 #include "mc2/dispatch_layout/dispatch_layout_torch_adpt.h"
 #include "gmm/grouped_matmul_swiglu_quant_weight_nz_tensor_list/grouped_matmul_swiglu_quant_torch_adpt.h"
+#include "gmm/grouped_matmul_swiglu_quant_weight_nz_tensor_list/grouped_matmul_swiglu_quant_v2_torch_adpt.h“
 #include "attention/lightning_indexer_vllm/lightning_indexer_vllm_torch_adpt.h"
 #include "mc2/matmul_allreduce_add_rmsnorm/matmul_allreduce_add_rmsnorm_torch_adpt.h"
 #include "mla_preprocess/mla_preprocess_torch_adpt.h"
@@ -1633,6 +1634,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                                                  (Tensor output, Tensor output_scale, Tensor output_offset)"
     );
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_weight_nz_tensor_list);
+    
+    ops.def(
+        "grouped_matmul_swiglu_quant_v2(Tensor x, Tensor x_scale, Tensor group_list, Tensor[] weight,  Tensor[] weight_scale, Tensor[] weight_assist_matrix,"
+        "                                                   Tensor? bias=None, Tensor? smooth_scale=None, int dequant_mode=1, int dequant_dtype=1, int quant_mode=1,"
+        "                                                 int quant_dtype=3, bool transpose_weight=False, int group_list_type=1, int[2] tuning_config=[],float swiglu_limit=-1000000.0) ->"
+        "                                                  (Tensor y, Tensor y_scale)"
+    );
+    ops.impl("grouped_matmul_swiglu_quant_v2", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_v2);
 
     ops.def(
         "npu_lightning_indexer(Tensor query, Tensor key, Tensor weights, *,"
