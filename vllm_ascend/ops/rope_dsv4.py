@@ -112,6 +112,7 @@ class ComplexExpRotaryEmbedding(nn.Module):
         head_size: int,
         rotary_dim: int,
         max_position_embeddings: int,
+        original_max_position_embeddings: int,
         base: int,
         scaling_factor: float,
         rope_groups: List[str] = ("default",),
@@ -123,7 +124,7 @@ class ComplexExpRotaryEmbedding(nn.Module):
         dtype = torch.get_default_dtype()
         beta_fast = extra_kwargs.get("beta_fast", 32)
         beta_slow = extra_kwargs.get("beta_slow", 1)
-        config_key = (f"rotary_dim{rotary_dim}_max_position_embeddings{max_position_embeddings}_"
+        config_key = (f"rotary_dim{rotary_dim}_original_max_position_embeddings{original_max_position_embeddings}_"
                       f"base{base}_scaling_factor{scaling_factor}_beta_fast{beta_fast}_beta_slow{beta_slow}")
         _ROPE_STATE.layer_info[layername] = (config_key, rope_groups)
 
@@ -134,7 +135,7 @@ class ComplexExpRotaryEmbedding(nn.Module):
 
         if config_key not in _ROPE_STATE.static_cache:
             complex_cis = self.precompute_freqs_cis(
-                rotary_dim, max_position_embeddings, max_position_embeddings,
+                rotary_dim, max_position_embeddings, original_max_position_embeddings,
                 base, scaling_factor, beta_fast, beta_slow
             )
             cos = complex_cis.real.repeat_interleave(2, dim=-1).to(dtype)
