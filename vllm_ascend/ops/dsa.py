@@ -111,7 +111,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.prefix = prefix
 
         ascend_device_type = get_ascend_device_type()
-        k_dtype = torch.fp8 if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
+        k_dtype = torch.float8_e4m3fn if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
         self.swa_cache_layer = SVFSWACache(
             head_dim=self.head_dim,
             window_size=self.window_size,

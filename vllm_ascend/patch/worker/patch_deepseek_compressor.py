@@ -16,8 +16,10 @@ from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 from vllm.config import VllmConfig
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend
 
-from vllm_ascend.utils import get_ascend_device_type
-
+from vllm_ascend.utils import (
+    AscendDeviceType,
+    get_ascend_device_type,
+)
 
 class AscendCompressorStateCache(CompressorStateCache):
     def __init__(
