@@ -1,0 +1,73 @@
+# export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.0/opp/vendors/customize/op_api/lib/:${LD_LIBRARY_PATH}
+# export ASCEND_CUSTOM_OPP_PATH=/usr/local/Ascend/cann-8.5.0/opp/vendors/customize:${ASCEND_CUSTOM_OPP_PATH}
+export OMP_PROC_BIND=false
+export OMP_NUM_THREADS=10
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export VLLM_USE_V1=1
+export HCCL_BUFFSIZE=2048
+export ACL_OP_INIT_MODE=1
+export ASCEND_A3_ENABLE=1
+export VLLM_VERSION=0.13.0
+export USE_MULTI_BLOCK_POOL=1
+export ASCEND_RT_VISIBLE_DEVICES=6,7
+# export ASCEND_RT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+# export ASCEND_RT_VISIBLE_DEVICES=8,9
+# nohup vllm serve /home/weights/hello2026/ \
+export ASCEND_PROCESS_LOG_PATH="/home/m00511366/plog/p"
+#export ASCEND_LAUNCH_BLOCKING=1
+
+unset HCCL_INTRA_ROCE_ENABLE
+
+nic_name="eth0"
+local_ip="141.61.41.210"
+export HCCL_IF_IP=$local_ip
+export GLOO_SOCKET_IFNAME=$nic_name
+export TP_SOCKET_IFNAME=$nic_name
+export HCCL_SOCKET_IFNAME=$nic_name
+
+export HCCL_TOPO_FILE_PATH=/home/hccl/superpod_1d_noroce.json
+export HCCL_ALGO=level0:fullmesh
+export ASCEND_LOCAL_COMM_RES_PATH=/etc/hixlep/
+
+
+nohup vllm serve /home/weights/DeepSeek-V4-HF-FP4/ \
+  --max_model_len 1024 \
+  --max-num-batched-tokens 1024 \
+  --served-model-name deepseek \
+  --gpu-memory-utilization 0.95 \
+  --data-parallel-size 2 \
+  --enable-expert-parallel \
+  --async-scheduling \
+  --max-num-seqs 64 \
+  --port 7826 \
+  --block-size 128 \
+  --reasoning-parser deepseek_r1 \
+  --tool-call-parser deepseek_v32 \
+  --enable-auto-tool-choice \
+  --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true, "multistream_dsa_preprocess":true}' \
+  --kv-transfer-config \
+  '{"kv_connector": "MooncakeConnectorV1",
+  "kv_role": "kv_producer",
+  "kv_port": "30100",
+  "engine_id": "0",
+  "kv_connector_module_path": "vllm_ascend.distributed.mooncake_connector",
+  "kv_connector_extra_config": {
+              "prefill": {
+                      "dp_size": 2,
+                      "tp_size": 1
+              },
+              "decode": {
+                      "dp_size": 2,
+                      "tp_size": 1
+              }
+      }
+  }' \
+  2>&1 | tee run_online.log
+
+#   --enforce_eager \ --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
+#   --quantization ascend \
+# --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  # --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+  # --speculative-config '{"num_speculative_tokens": 2,"method": "deepseek_mtp"}' \
+  # --additional_config '{"enable_cpu_binding": "True", "multistream_overlap_shared_expert": true, "multistream_dsa_preprocess":true}' \
