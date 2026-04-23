@@ -6,8 +6,7 @@ import importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from transformers import AutoConfig
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
-
-AutoConfig.register("deepseek_v4", DeepseekV4Config)
+AutoConfig.register("deepseek_xyz", DeepseekV4Config)
 
 import vllm  # noqa: E402
 from vllm.transformers_utils.config import _CONFIG_REGISTRY  # noqa: E402
@@ -73,9 +72,9 @@ class HFConfigParser(ConfigParserBase):
         # Allow hf_overrides to override model_type before checking _CONFIG_REGISTRY
         if (hf_overrides := kwargs.pop("hf_overrides", None)) is not None:
             model_type = hf_overrides.get("model_type", model_type)
-
-        if "deepseek_v4" not in _CONFIG_REGISTRY:
-            _CONFIG_REGISTRY.update(deepseek_v4="DeepseekV4Config")
+        
+        if  "deepseek_xyz" not in _CONFIG_REGISTRY:
+            _CONFIG_REGISTRY.update(deepseek_xyz="DeepseekV4Config")
 
         if model_type in _CONFIG_REGISTRY:
             config_class = _CONFIG_REGISTRY[model_type]

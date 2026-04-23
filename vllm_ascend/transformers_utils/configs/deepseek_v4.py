@@ -111,7 +111,7 @@ class DeepseekV4Config(PretrainedConfig):
     >>> configuration = model.config
     ```"""
 
-    model_type = "deepseek_v4"
+    model_type = "deepseek_xyz"
     keys_to_ignore_at_inference = ["past_key_values"]
     base_model_tp_plan = {  # TODO: only replicate attention layers when > first_k_dense_replace
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",
