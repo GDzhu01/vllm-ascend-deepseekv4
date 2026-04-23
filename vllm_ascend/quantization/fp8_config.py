@@ -115,6 +115,7 @@ class AscendFp8Config(QuantizationConfig):
         self,
         layer: torch.nn.Module,
         prefix: str,
+        tid2eid=None,
     ) -> Optional["QuantizeMethodBase"]:
         from .method_adapters import (
             AscendFusedMoEMethod,
@@ -129,7 +130,7 @@ class AscendFp8Config(QuantizationConfig):
         if isinstance(layer, FusedMoE):
             layer.ascend_quant_method = FP8_METHOD
             scheme = create_scheme_for_layer(self.quant_description, prefix, "w4a8_moe", self.packed_modules_mapping)
-            quant_method = AscendFusedMoEMethod(scheme, layer.moe_config)
+            quant_method = AscendFusedMoEMethod(scheme, layer.moe_config, tid2eid=tid2eid)
             return quant_method
         return None
 

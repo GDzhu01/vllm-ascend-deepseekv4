@@ -22,6 +22,8 @@ import math
 import torch
 import torch_npu
 
+from vllm.config import get_current_vllm_config
+
 from .base import QuantType
 from .w8a8_mxfp8 import AscendW8A8MXFP8DynamicLinearMethod
 from .w4a8_mxfp4 import AscendW4A8MXFPDynamicFusedMoEMethod
@@ -42,6 +44,12 @@ class AscendW8A8MXFP8DSDynamicLinearMethod(AscendW8A8MXFP8DynamicLinearMethod):
     def __init__(self, quant_config):
         super().__init__()
         self.block_size = quant_config.get('weight_block_size', [128, 128])[0]
+        vllm_config = get_current_vllm_config()
+        tp_size = vllm_config.parallel_config.tensor_parallel_size
+        hf_config = vllm_config.model_config.hf_config
+        self.n_groups = hf_config.o_groups
+        self.n_local_groups = self.n_groups // tp_size
+        self.o_lora_rank = hf_config.o_lora_rank
 
     def get_pergroup_param(
         self, input_size: int, output_size: int, params_dtype: torch.dtype, layer_type: str | None = None
@@ -58,6 +66,10 @@ class AscendW8A8MXFP8DSDynamicLinearMethod(AscendW8A8MXFP8DynamicLinearMethod):
         layer.weight_scale.data = layer.weight_scale.data.reshape(n_dim, k_dim // 2, 2)
         layer.weight.data = layer.weight.data.transpose(0, 1)
         layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1)
+        
+        if layer.prefix.endswith('wo_a'):
+            layer.weight.data=layer.weight.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1).transpose(1, 2).contiguous()
+            layer.weight_scale.data = layer.weight_scale.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1, 2).transpose(1, 2).contiguous()
 
 
 @register_scheme("FP8", "w4a8_moe")
@@ -67,8 +79,9 @@ class AscendW4A8MXFPDSDynamicFusedMoEMethod(AscendW4A8MXFPDynamicFusedMoEMethod)
     model_dtype = None
     quant_type: QuantType = QuantType.MXFP8
 
-    def __init__(self):
+    def __init__(self, quant_config, tid2eid = None):
         super().__init__()
+        self.tid2eid = tid2eid
 
     def get_dynamic_quant_param(
         self, num_experts: int, intermediate_size_per_partition: int, hidden_sizes: int, params_dtype: torch.dtype

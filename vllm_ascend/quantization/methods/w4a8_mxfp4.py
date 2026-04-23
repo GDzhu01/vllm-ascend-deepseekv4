@@ -43,11 +43,11 @@ from .registry import register_scheme
 class AscendW4A8MXFPDynamicLinearMethod(AscendLinearScheme):
     """Linear method for Ascend W4A8_MXFP (Microscaling) quantization.
     """
-    def __init__(self):
+    def __init__(self, quant_config, tid2eid = None):
         ensure_mxfp4_linear_available("W8A8_MXFP8 linear quantization")
         vllm_config = get_current_vllm_config()
         self.group_size = vllm_config.quant_config.quant_description.get("group_size", 32)
-
+        self.tid2eid = tid2eid
 
     @staticmethod
     def get_weight(input_size: int, output_size: int,
@@ -195,6 +195,7 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
     ) -> torch.Tensor:
         assert router_logits.shape[
                    1] == global_num_experts - global_redundant_expert_num, "Number of global experts mismatch (excluding redundancy)"
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -206,7 +207,9 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
             custom_routing_function=custom_routing_function,
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
-            global_num_experts=global_num_experts)
+            global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids)
 
         # this is a naive implementation for experts load balance so as
         # to avoid accumulating too much tokens on a single rank.
