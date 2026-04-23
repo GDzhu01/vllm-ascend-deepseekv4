@@ -12,11 +12,17 @@ cmake_minimum_required(VERSION 3.16)
 
 project(cann_ops-transformer)
 
+set(CMAKE_C_FLAGS_RELEASE "")
+set(CMAKE_CXX_FLAGS_RELEASE "")
+
+
 option(BUILD_OPEN_PROJECT         "Build open ascend ops project."  ON)
 option(BUILD_OPS_RTY_KERNEL       "Build return yellow kernel."     OFF)
 option(ENABLE_CCACHE              "Enable ccache capability"        ON)
 option(ENABLE_BUILT_IN            "Enable built-in package"         OFF)
 option(ENABLE_STATIC              "Enable Static"                   OFF)
+option(ENABLE_TILING_SINK         "Enable tiling sink"              ON)
+option(ENABLE_AICPU               "Enable aicpu"                    ON)
 option(ENABLE_EXPERIMENTAL        "Enable experimental module"      OFF)
 option(ENABLE_TEST                "Enable test"                     OFF)
 option(ENABLE_UT_EXEC             "Enable exec ut"                  OFF)
@@ -29,28 +35,50 @@ option(OP_KERNEL_UT               "Enable kernel ut"                OFF)
 option(OP_KERNEL_AICPU_UT         "Enable aicpu kernel ut"          OFF)
 option(UT_TEST_ALL                "Enable all ut"                   OFF)
 option(ENABLE_OOM                 "Enable kernel oom"               OFF)
+option(UT_INFERSHAPE_FLAG         "Enable infershape ut"            OFF)
 
 set(ASCEND_COMPUTE_UNIT           "ascend910b"           CACHE   STRING   "soc that need to be compiled")
 set(ASCEND_OP_NAME                "ALL"                           CACHE   STRING   "operators that need to be compiled")
 set(ARCH_DIRECTORY                ""                           CACHE   STRING   "arch directory that need to be compiled")
 set(VENDOR_NAME                   "custom"                     CACHE   STRING   "vendor name")
-set(ASCEND_ALL_COMPUTE_UNIT       "ascend910b;ascend910_93;ascend910_95;kirinx90" CACHE STRING "all soc list")
+set(ASCEND_ALL_COMPUTE_UNIT       "ascend910b;ascend910_93;ascend950;mc62cm12a;kirinx90;kirin9030" CACHE STRING "all soc list")
 
-set(SOC_VERSION_LIST ascend910b ascend910_93 ascend910_95 kirinx90)
-set(ARCH_DIRECTORY_LIST arch32 arch32 arch35 arch32)
+set(SOC_VERSION_LIST ascend310p ascend910b ascend910_93 ascend950 mc62cm12a kirinx90 kirin9030)
+set(ARCH_DIRECTORY_LIST arch20 arch32 arch32 arch35 arch35 arch32 arch32)
+set(BISHENG_FLAGS "" CACHE STRING "bisheng compiler flags")
+set(ENABLE_AICPU_KERNEL FALSE CACHE BOOL "Enable AICPU Kernel")
 
-if ("ascend910_95" IN_LIST ASCEND_COMPUTE_UNIT)
-message(STATUS "build with 3~8 packages........")
-set(BUILD_WITH_3_8_PACKAGE  ON CACHE BOOL "build with 3~8 package and opsbase")
+# 获取基础 CANN 路径
+if (CUSTOM_ASCEND_CANN_PACKAGE_PATH)
+    set(ASCEND_CANN_PACKAGE_PATH  ${CUSTOM_ASCEND_CANN_PACKAGE_PATH})
+elseif (DEFINED ENV{ASCEND_HOME_PATH})
+    set(ASCEND_CANN_PACKAGE_PATH  $ENV{ASCEND_HOME_PATH})
+elseif (DEFINED ENV{ASCEND_OPP_PATH})
+    get_filename_component(ASCEND_CANN_PACKAGE_PATH "$ENV{ASCEND_OPP_PATH}/.." ABSOLUTE)
+else()
+    set(ASCEND_CANN_PACKAGE_PATH  "/usr/local/Ascend/latest")
+endif ()
+message(STATUS "ASCEND_CANN_PACKAGE_PATH=${ASCEND_CANN_PACKAGE_PATH}")
+
+get_filename_component(OPS_ADV_DIR                  "${CMAKE_CURRENT_SOURCE_DIR}"           REALPATH)
+get_filename_component(OPS_ADV_CMAKE_DIR            "${OPS_ADV_DIR}/cmake"                  REALPATH)
+include(cmake/func.cmake)
+
+include(version.cmake)
+if (BUILD_OPEN_PROJECT)
+    check_pkg_build_deps(${CANN_VERSION_PACKAGES})
 endif()
-
+add_version_info_targets()
+#################################################################
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/utils/inc)
+#################################################################
 foreach(SOC_VERSION ${ASCEND_COMPUTE_UNIT})
   list(FIND SOC_VERSION_LIST ${SOC_VERSION} INDEX)
   if(NOT INDEX EQUAL -1)
     list(GET ARCH_DIRECTORY_LIST ${INDEX} VAL)
     list(APPEND ARCH_DIRECTORY ${VAL})
   else()
-    message(STATUS "unsupported chip type")
+    message(STATUS "unsupport chip type")
     if ((NOT BUILD_OPS_RTY_KERNEL) AND (BUILD_OPEN_PROJECT))
       include(cmake/build_empty_package.cmake)
       cpack_empty_package()
@@ -98,8 +126,8 @@ set_directory_properties(PROPERTIES
     ADDITIONAL_MAKE_CLEAN_FILES "${CMAKE_BINARY_DIR}/_CPack_Packages"
 )
 
+include(cmake/third_party/opbase.cmake)
 include(cmake/config.cmake)
-include(cmake/func.cmake)
 include(cmake/third_party/json.cmake)
 if (ENABLE_TEST)
     include(${PROJECT_SOURCE_DIR}/cmake/third_party/gtest.cmake)
@@ -118,23 +146,22 @@ if (BUILD_OPEN_PROJECT)
         include(cmake/dependencies.cmake)
         include(cmake/variables.cmake)
         include(cmake/obj_func.cmake)
+        include(cmake/third_party/eigen.cmake)
         include(cmake/third_party/abseil-cpp.cmake)
         include(cmake/third_party/ascend_protobuf.cmake)
 
         include(cmake/third_party/makeself-fetch.cmake)
-        include(cmake/opbuild.cmake)
         include(cmake/custom_build.cmake)
         message(STATUS "End building custom package.")
+        include(cmake/opbuild.cmake)
         if (ENABLE_OPS_HOST)
             gen_aclnn_with_opdef()
         endif()
         if (ENABLE_STATIC)
             include(cmake/static.cmake)
         endif()
-        if (ENABLE_AICPU)
-            include(cmake/symbol.cmake)
-            gen_cust_aicpu_json_symbol()
-            gen_cust_aicpu_kernel_symbol()
+        if (ENABLE_TILING_SINK)
+            pack_tiling_sink()
         endif()
         if (ENABLE_BUILT_IN)
             message(STATUS "Start building built-in package.")
@@ -143,8 +170,11 @@ if (BUILD_OPEN_PROJECT)
             include(cmake/package.cmake)
             pack_built_in()
         else()
-            include(cmake/package.cmake)
-            pack_tiling_sink()
+            message(STATUS "Start building custom package.")
+            include(cmake/symbol.cmake)
+            if (ENABLE_AICPU)
+                gen_cust_aicpu_symbol()
+            endif()
         endif()
         return()
     endif()
@@ -298,14 +328,6 @@ list(APPEND OP_LIST ${COMPILED_OPS})
 list(REMOVE_DUPLICATES OP_LIST)
 list(APPEND OP_DIR_LIST ${COMPILED_OP_DIRS})
 list(REMOVE_DUPLICATES OP_DIR_LIST)
-add_subdirectory(gmm)
-list(REMOVE_DUPLICATES OP_LIST)
-list(APPEND OP_DIR_LIST ${COMPILED_OP_DIRS})
-list(REMOVE_DUPLICATES OP_DIR_LIST)
-add_subdirectory(mc2)
-list(REMOVE_DUPLICATES OP_LIST)
-list(APPEND OP_DIR_LIST ${COMPILED_OP_DIRS})
-list(REMOVE_DUPLICATES OP_DIR_LIST)
 
 set(OP_DEPEND_DIR_LIST)
 op_add_depend_directory(
@@ -321,12 +343,8 @@ foreach (OP_DEPEND_DIR ${OP_DEPEND_DIR_LIST})
     endif()
 endforeach ()
 
-install(DIRECTORY ${OPS_ADV_ACT}/
-        DESTINATION ${IMPL_INSTALL_DIR}/ascendc/common/act
-)
-
-install(DIRECTORY ${OPS_GROUPEDMATMUL_ACT}/
-        DESTINATION ${IMPL_INSTALL_DIR}/ascendc/common/groupedmatmul_act
+install(DIRECTORY ${OPS_CGMCT}/
+        DESTINATION ${IMPL_INSTALL_DIR}/ascendc/common/cgmct
 )
 
 
@@ -433,6 +451,7 @@ if (BUILD_OPS_RTY_KERNEL)
             $<BUILD_INTERFACE:intf_pub>
     )
     add_dependencies(ops_aclnn opbuild_gen_default opbuild_gen_inner)
+    add_dependencies(ops-transformer version_ops-transformer_info)
 
     set_source_files_properties(${generate_proto_srcs}
             PROPERTIES GENERATED TRUE
@@ -534,6 +553,13 @@ if (BUILD_OPS_RTY_KERNEL)
                 DESTINATION ${IMPL_DYNAMIC_INSTALL_DIR}
                 OPTIONAL
         )
+
+        if(EXISTS ${ASCEND_IMPL_OUT_DIR}/dynamic/${_op_name}_apt.py)
+            install(FILES ${ASCEND_IMPL_OUT_DIR}/dynamic/${_op_name}_apt.py
+                DESTINATION ${IMPL_DYNAMIC_INSTALL_DIR}
+                OPTIONAL
+            )
+        endif()
     endforeach ()
 
     install(DIRECTORY ${OPS_ADV_UTILS_KERNEL_INC}/

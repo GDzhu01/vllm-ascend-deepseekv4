@@ -1,5 +1,6 @@
 import torch
 from torch.library import Library
+from .utils import is_310p, is_950
 
 # This file provides a template and registration utilities for writing "meta" implementations
 # of custom operators in Python for the vllm_ascend project.
@@ -85,7 +86,7 @@ def sgmv_expand_meta(
     y_out = torch.empty_like(y)
     return y_out
 
-
-register_meta_if_necessary("_C_ascend", "get_masked_input_and_mask", get_masked_input_and_mask_meta)
-register_meta_if_necessary("_C_ascend", "bgmv_expand", bgmv_expand_meta)
-register_meta_if_necessary("_C_ascend", "sgmv_expand", sgmv_expand_meta)
+if not is_310p and not is_950:
+    register_meta_if_necessary("_C_ascend", "get_masked_input_and_mask", get_masked_input_and_mask_meta)
+    register_meta_if_necessary("_C_ascend", "bgmv_expand", bgmv_expand_meta)
+    register_meta_if_necessary("_C_ascend", "sgmv_expand", sgmv_expand_meta)

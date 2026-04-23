@@ -5,19 +5,17 @@ SOC_VERSION=$2
 
 if [[ "$SOC_VERSION" =~ ^ascend310 ]]; then
     # ASCEND310P series
-    CUSTOM_OPS_ARRAY=(
-        "causal_conv1d_v310"
-        "recurrent_gated_delta_rule_v310"
-    )
-    CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
-    SOC_ARG="ascend310p"
+    # currently, no custom aclnn ops for ASCEND310 series
+    # CUSTOM_OPS=""
+    # SOC_ARG="ascend310p"
+    exit 0
 elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     # ASCEND910B (A2) series
-    # dependency: catlass
+    # depdendency: catlass
     git config --global --add safe.directory "$ROOT_DIR"
     CATLASS_PATH=${ROOT_DIR}/csrc/third_party/catlass/include
     if [[ ! -d "${CATLASS_PATH}" ]]; then
-        echo "dependency catlass is missing, try to fetch it..."
+        echo "depdendency catlass is missing, try to fetch it..."
         if ! git submodule update --init --recursive; then
             echo "fetch failed"
             exit 1
@@ -27,50 +25,50 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
     CUSTOM_OPS_ARRAY=(
-        "scatter_nd_update_v2"
-        "moe_grouped_matmul"
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
-        "lightning_indexer_vllm"
         "sparse_flash_attention"
-        "matmul_allreduce_add_rmsnorm"
+        "lightning_indexer"
+        # TODO(maoqi): This is not used anymore
+        # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
+
+
+        "add_rms_norm_bias"
+
         "moe_init_routing_custom"
         "moe_gating_top_k"
         "moe_gating_top_k_hash"
-        "add_rms_norm_bias"
-        "apply_top_k_top_p_custom"
-        "transpose_kv_cache_by_block"
-        "copy_and_expand_eagle_inputs"
-        "causal_conv1d"
-        "lightning_indexer_quant"
+
         "compressor"
         "quant_lightning_indexer"
         "quant_lightning_indexer_metadata"
         "lightning_indexer_quant_metadata"
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
+
         "hc_pre_sinkhorn"
         "hc_pre_inv_rms"
         "hc_post"
+        
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
-        "grouped_matmul_swiglu_quant"
+
     )
+
 
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910b"
 elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     # ASCEND910C (A3) series
-    # dependency: catlass
+    # depdendency: catlass
     git config --global --add safe.directory "$ROOT_DIR"
     CATLASS_PATH=${ROOT_DIR}/csrc/third_party/catlass/include
     if [[ ! -d "${CATLASS_PATH}" ]]; then
-        echo "dependency catlass is missing, try to fetch it..."
+        echo "depdendency catlass is missing, try to fetch it..."
         if ! git submodule update --init --recursive; then
             echo "fetch failed"
             exit 1
         fi
     fi
-    # dependency: cann-toolkit file moe_distribute_base.h
+    # depdendency: cann-toolkit file moe_distribute_base.h
     HCCL_STRUCT_FILE_PATH=$(find -L "${ASCEND_TOOLKIT_HOME}" -name "moe_distribute_base.h" 2>/dev/null | head -n1)
     if [ -z "$HCCL_STRUCT_FILE_PATH" ]; then
         echo "cannot find moe_distribute_base.h file in CANN env"
@@ -91,18 +89,6 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
     sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
 
-    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine_bf16/op_kernel/utils/"
-    TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
-    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
-    sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
-    sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
-
-    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine_w4_a8/op_kernel/utils/"
-    TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
-    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
-    sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
-    sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
-
     # for dispatch_normal and combine_normal
     TARGET_DIR="$SCRIPT_DIR/mc2/moe_dispatch_normal/op_kernel/utils/"
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
@@ -111,43 +97,86 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     echo "$TARGET_DIR"
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
     
+    # CUSTOM_OPS_ARRAY=(
+    #     "dispatch_ffn_combine"
+    #     "dispatch_gmm_combine_decode"
+    #     "moe_combine_normal"
+    #     "moe_dispatch_normal"
+    #     "dispatch_layout"
+    #     "notify_dispatch"
+    # )
+    # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
     CUSTOM_OPS_ARRAY=(
-        "scatter_nd_update_v2"
-        "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
-        "lightning_indexer_vllm"
-        "sparse_flash_attention"
+        "notify_dispatch"
         "dispatch_ffn_combine"
-        "dispatch_ffn_combine_w4_a8"
-        "dispatch_ffn_combine_bf16"
         "dispatch_gmm_combine_decode"
         "moe_combine_normal"
         "moe_dispatch_normal"
         "dispatch_layout"
-        "notify_dispatch"
+
+        "sparse_flash_attention"
+        "lightning_indexer"
+
+
+        "add_rms_norm_bias"
+
         "moe_init_routing_custom"
         "moe_gating_top_k"
         "moe_gating_top_k_hash"
-        "add_rms_norm_bias"
-        "apply_top_k_top_p_custom"
-        "transpose_kv_cache_by_block"
-        "copy_and_expand_eagle_inputs"
-        "causal_conv1d"
-        "moe_grouped_matmul"
-        "lightning_indexer_quant"
+
         "compressor"
         "quant_lightning_indexer"
         "quant_lightning_indexer_metadata"
         "sparse_attn_sharedkv"
         "sparse_attn_sharedkv_metadata"
+
         "hc_pre_sinkhorn"
         "hc_pre_inv_rms"
         "hc_post"
+
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
-        "grouped_matmul_swiglu_quant"
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
+elif [[ "$SOC_VERSION" =~ ^ascend950 ]]; then
+    # ASCEND910B (A2) series
+    # depdendency: catlass
+    git config --global --add safe.directory "$ROOT_DIR"
+    CATLASS_PATH=${ROOT_DIR}/csrc/third_party/catlass/include
+    if [[ ! -d "${CATLASS_PATH}" ]]; then
+        echo "depdendency catlass is missing, try to fetch it..."
+        if ! git submodule update --init --recursive; then
+            echo "fetch failed"
+            exit 1
+        fi
+    fi
+    ABSOLUTE_CATLASS_PATH=$(cd "${CATLASS_PATH}" && pwd)
+    export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
+
+    CUSTOM_OPS_ARRAY=(
+        "moe_gating_top_k_hash"
+        
+        "indexer_compress_epilog"
+        "inplace_partial_rotary_mul"
+        "kv_compress_epilog"
+        "compressor"
+        "quant_lightning_indexer"
+        "quant_lightning_indexer_metadata"
+        "kv_quant_sparse_attn_sharedkv"
+        "kv_quant_sparse_attn_sharedkv_metadata"
+
+        "hc_pre_sinkhorn"
+        "hc_pre_inv_rms"
+        "hc_post"
+        "swiglu_group_quant"
+        "load_index_kv_cache"
+        "indexer_compress_epilog_v2"
+    )
+
+
+    CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
+    SOC_ARG="ascend950"
 else
     # others
     # currently, no custom aclnn ops for other series

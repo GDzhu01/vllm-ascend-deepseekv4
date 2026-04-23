@@ -21,8 +21,9 @@ function(cpack_empty_package)
   endif ()
 
   # CPack config
-  install(FILES ${CMAKE_SOURCE_DIR}/version.info
+  install(FILES ${CMAKE_BINARY_DIR}/version.ops-transformer.info
       DESTINATION share/info/ops_transformer
+      RENAME version.info
   )
   install(FILES ${CMAKE_SOURCE_DIR}/scripts/package/ops_transformer/scripts/help.info
       DESTINATION share/info/ops_transformer/script
@@ -75,6 +76,7 @@ function(cpack_empty_package)
   endif()
   set(CPACK_EXTERNAL_ENABLE_STAGING true)
   set(CPACK_PACKAGE_DIRECTORY "${CMAKE_INSTALL_PREFIX}")
+  set(CPACK_PACKAGE_PARAM_NAME "ops_transformer")
 
   message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
   include(CPack)
