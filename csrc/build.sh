@@ -41,7 +41,7 @@ ENABLE_BUILT_CUSTOM=FALSE
 ENABLE_STATIC=FALSE
 ENABLE_EXPERIMENTAL=FALSE
 ASCEND_SOC_UNITS="ascend910b"
-SUPPORT_COMPUTE_UNIT_SHORT=("ascend910b" "ascend910_93" "ascend910_95" "kirinx90")
+SUPPORT_COMPUTE_UNIT_SHORT=("ascend910b" "ascend910_93" "ascend950" "kirinx90")
 CMAKE_BUILD_MODE=""
 BUILD_TYPE=""
 VERSION=""
@@ -253,7 +253,7 @@ function help_info() {
                 echo $dotted_line
                 echo "Examples:"
                 echo "    bash build.sh --run_example abs eager"
-                echo "    bash build.sh --run_example abs eager --soc=ascend910_95"
+                echo "    bash build.sh --run_example abs eager --soc=ascend950"
                 echo "    bash build.sh --run_example abs graph"
                 echo "    bash build.sh --run_example abs eager cust"
                 echo "    bash build.sh --run_example abs eager cust --vendor_name=custom"
@@ -428,7 +428,7 @@ function build_example()
     fi
 
     files=($(find ../ -path "*/${EXAMPLE_NAME}/examples/${pattern}*.cpp"))
-    if [[ "$ASCEND_SOC_UNITS" == "ascend910_95" ]]; then
+    if [[ "$ASCEND_SOC_UNITS" == "ascend950" ]]; then
         files+=($(find ../ -path "*/${EXAMPLE_NAME}/examples/arch35/${pattern}*.cpp"))
     fi
     if [[ "${EXAMPLE_MODE}" == "eager" ]]; then
@@ -665,7 +665,7 @@ package_static() {
 
 function process_soc_input(){
     local input_string="$1"
-    input_string=$(echo "$input_string" | sed 's/ascend950/ascend910_95/g')
+    input_string=$(echo "$input_string" | sed 's/ascend950/ascend950/g')
     local value_part="${input_string#*=}"
     ASCEND_SOC_UNITS="${value_part//,/;}"
 }

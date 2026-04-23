@@ -81,6 +81,8 @@ _CUSTOM_OP_BASE_DIR = (
     os.path.dirname(__file__) if os.path.isabs(__file__) else os.path.abspath(os.path.dirname(__file__))
 )
 
+def is_950():
+    return get_ascend_device_type() == AscendDeviceType.A5
 
 def is_310p():
     return get_ascend_device_type() == AscendDeviceType._310P
@@ -298,7 +300,7 @@ def enable_custom_op():
     # FIXME(linfeng): Currently custom op compilation and execution are partially available
     # in ASCEND950 chip, we temporarily disable all custom ops. Please refer to
     # https://github.com/vllm-project/vllm-ascend/issues/7157 for latest update about custom op.
-    if vllm_is_batch_invariant() or get_ascend_device_type() == AscendDeviceType.A5:
+    if vllm_is_batch_invariant():
         _CUSTOM_OP_ENABLED = False
         return _CUSTOM_OP_ENABLED
 

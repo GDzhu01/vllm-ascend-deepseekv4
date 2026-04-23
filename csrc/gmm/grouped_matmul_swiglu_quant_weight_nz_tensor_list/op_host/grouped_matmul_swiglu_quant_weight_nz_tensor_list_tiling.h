@@ -20,7 +20,7 @@
 #include "tiling/tiling_api.h"
 
 namespace optiling {
-BEGIN_TILING_DATA_DEF(GMMSwigluTensorListBaseParams)
+BEGIN_TILING_DATA_DEF(GMMSwigluBaseParams)
   TILING_DATA_FIELD_DEF(uint32_t, groupNum);
   TILING_DATA_FIELD_DEF(uint32_t, coreNum);
   TILING_DATA_FIELD_DEF(uint32_t, K);
@@ -29,23 +29,22 @@ BEGIN_TILING_DATA_DEF(GMMSwigluTensorListBaseParams)
   TILING_DATA_FIELD_DEF(uint32_t, mLimit);
   TILING_DATA_FIELD_DEF(uint64_t, isPreFill);
 END_TILING_DATA_DEF;
-REGISTER_TILING_DATA_CLASS(GMMSwigluTensorListBaseParamsOp, GMMSwigluTensorListBaseParams)
+REGISTER_TILING_DATA_CLASS(GMMSwigluBaseParamsOp, GMMSwigluBaseParams)
 
-BEGIN_TILING_DATA_DEF(GMMSwigluTensorList)
+BEGIN_TILING_DATA_DEF(GMMSwiglu)
   TILING_DATA_FIELD_DEF(uint32_t, maxProcessRowNum);
   TILING_DATA_FIELD_DEF(uint32_t, groupListLen);
   TILING_DATA_FIELD_DEF(uint32_t, tokenLen);
-  TILING_DATA_FIELD_DEF(float, swigluLimit);
 END_TILING_DATA_DEF;
-REGISTER_TILING_DATA_CLASS(GMMSwigluTensorListOp, GMMSwigluTensorList)
+REGISTER_TILING_DATA_CLASS(GMMSwigluOp, GMMSwiglu)
 
-BEGIN_TILING_DATA_DEF(GMMSwigluQuantTensorListTilingData)
-  TILING_DATA_FIELD_DEF_STRUCT(GMMSwigluTensorListBaseParams, gmmSwigluTensorListBaseParams);
-  TILING_DATA_FIELD_DEF_STRUCT(GMMSwigluTensorList, gmmSwigluTensorList);
+BEGIN_TILING_DATA_DEF(GMMSwigluQuantTilingData)
+  TILING_DATA_FIELD_DEF_STRUCT(GMMSwigluBaseParams, gmmSwigluBaseParams);
+  TILING_DATA_FIELD_DEF_STRUCT(GMMSwiglu, gmmSwiglu);
   TILING_DATA_FIELD_DEF_STRUCT(TCubeTiling, mmTilingData);
 END_TILING_DATA_DEF;
 
-REGISTER_TILING_DATA_CLASS(GroupedMatmulSwigluQuantWeightNzTensorList, GMMSwigluQuantTensorListTilingData)
+REGISTER_TILING_DATA_CLASS(GroupedMatmulSwigluQuantWeightNzTensorList, GMMSwigluQuantTilingData)
 }
 
 namespace GroupedMatmulSwigluQuantWeightNzTensorListTiling {

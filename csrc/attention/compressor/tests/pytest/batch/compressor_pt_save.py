@@ -314,7 +314,16 @@ def compressor_output_single(data_case):
         else:
             kv_state = torch.tensor(np.random.uniform(kv_state_datarange[0], kv_state_datarange[1], (torch.max(block_table) + 1, block_size, coff * head_dim))).to(torch.float32)
             score_state = torch.tensor(np.random.uniform(score_state_datarange[0], score_state_datarange[1], (torch.max(block_table) + 1, block_size, coff * head_dim))).to(torch.float32)
-
+    else:
+        block_table = torch.tensor(random.sample(list(range(batch_size)), batch_size), dtype=torch.int32)
+        token_size = (2*cmp_ratio+Seq_len-1) if coff == 2 else (cmp_ratio+Seq_len-1)
+        if batch_size==0:
+            kv_state = torch.tensor(np.random.uniform(kv_state_datarange[0], kv_state_datarange[1], (batch_size, token_size, coff * head_dim))).to(torch.float32)
+            score_state = torch.tensor(np.random.uniform(score_state_datarange[0], score_state_datarange[1], (0, token_size, coff * head_dim))).to(torch.float32)
+        else:
+            kv_state = torch.tensor(np.random.uniform(kv_state_datarange[0], kv_state_datarange[1], (batch_size, token_size, coff * head_dim))).to(torch.float32)
+            score_state = torch.tensor(np.random.uniform(score_state_datarange[0], score_state_datarange[1], (batch_size, token_size, coff * head_dim))).to(torch.float32)
+        
     # other input
     if layout_x == "TH":
         x_shape = (cu_seqlens[-1], hidden_size)

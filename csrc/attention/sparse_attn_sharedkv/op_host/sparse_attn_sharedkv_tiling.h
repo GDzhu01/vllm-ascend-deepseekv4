@@ -1,12 +1,12 @@
 /**
- * Copyright (c) 2026 Huawei Technologies Co., Ltd.
- * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
- * CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * This file is a part of the CANN Open Software.
+ * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
 /*!
  * \file sparse_attn_sharedkv_tiling.h
@@ -91,13 +91,10 @@ constexpr uint32_t ATTR_SOFTMAX_SCALE_INDEX = 0;
 constexpr uint32_t ATTR_CMP_RATIO_INDEX = 1;
 constexpr uint32_t ATTR_ORI_MASK_MODE_INDEX = 2;
 constexpr uint32_t ATTR_CMP_MASK_MODE_INDEX = 3;
-constexpr uint32_t ATTR_ORI_KV_STRIDE_INDEX = 4;
-constexpr uint32_t ATTR_CMP_KV_STRIDE_INDEX = 5;
-constexpr uint32_t ATTR_ORI_WIN_LEFT_INDEX = 6;
-constexpr uint32_t ATTR_ORI_WIN_RIGHT_INDEX = 7;
-constexpr uint32_t ATTR_LAYOUT_Q_INDEX = 8;
-constexpr uint32_t ATTR_LAYOUT_KV_INDEX = 9;
-constexpr uint32_t ATTR_RETURN_SOFTMAX_LSE = 10;
+constexpr uint32_t ATTR_ORI_WIN_LEFT_INDEX = 4;
+constexpr uint32_t ATTR_ORI_WIN_RIGHT_INDEX = 5;
+constexpr uint32_t ATTR_LAYOUT_Q_INDEX = 6;
+constexpr uint32_t ATTR_LAYOUT_KV_INDEX = 7;
 
 // Dim Index
 constexpr uint32_t DIM_IDX_ONE = 1;
@@ -144,7 +141,6 @@ TILING_DATA_FIELD_DEF(uint32_t, actualLenDimsKV)
 TILING_DATA_FIELD_DEF(float, softmaxScale) // 即 scaleValue
 TILING_DATA_FIELD_DEF(uint32_t, outputLayout)
 TILING_DATA_FIELD_DEF(uint64_t, oriMaskMode)
-TILING_DATA_FIELD_DEF(int64_t, oriKvStride)
 TILING_DATA_FIELD_DEF(int64_t, oriWinLeft)
 TILING_DATA_FIELD_DEF(int64_t, oriWinRight)
 TILING_DATA_FIELD_DEF(int64_t, sparseBlockSize)
@@ -156,7 +152,6 @@ TILING_DATA_FIELD_DEF(uint32_t, bmm2ResUbSize);
 
 TILING_DATA_FIELD_DEF(uint32_t, mBaseSize)
 TILING_DATA_FIELD_DEF(uint32_t, s2BaseSize)
-TILING_DATA_FIELD_DEF(bool, returnSoftmaxLse)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(SparseAttnSharedkvSwaParamsOp, SparseAttnSharedkvSwaParams)
 
@@ -166,7 +161,6 @@ TILING_DATA_FIELD_DEF(uint32_t, cmpMaxBlockNumPerBatch)
 TILING_DATA_FIELD_DEF(uint32_t, sparseBlockCount)
 TILING_DATA_FIELD_DEF(int64_t, cmpRatio)
 TILING_DATA_FIELD_DEF(uint64_t, cmpMaskMode)
-TILING_DATA_FIELD_DEF(int64_t, cmpKvStride)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(SparseAttnSharedkvCmpParamsOp, SparseAttnSharedkvCmpParams)
 
@@ -188,7 +182,7 @@ struct SASParaInfo {
     SASTilingOptionalParaInfo cuSeqLensQ = {nullptr, nullptr};
     SASTilingOptionalParaInfo seqUsedQ = {nullptr, nullptr};
     SASTilingOptionalParaInfo cuSeqLensKv = {nullptr, nullptr};
- 	SASTilingOptionalParaInfo cuSeqLensCmpKv = {nullptr, nullptr};
+    SASTilingOptionalParaInfo cuSeqLensCmpKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo sequsedKv = {nullptr, nullptr};
     SASTilingOptionalParaInfo sinks = {nullptr, nullptr};
     SASTilingOptionalParaInfo metadata = {nullptr, nullptr};
@@ -198,13 +192,10 @@ struct SASParaInfo {
     const uint32_t *cmpRatio = nullptr;
     const uint32_t *oriMaskMode = nullptr;
     const uint32_t *cmpMaskMode = nullptr;
-    const uint32_t *oriKvStride = nullptr;
-    const uint32_t *cmpKvStride = nullptr;
     const uint32_t *oriWinLeft = nullptr;
     const uint32_t *oriWinRight = nullptr;
     const char *layoutQ = nullptr;
     const char *layoutKv = nullptr;
-    const bool *returnSoftmaxLse = nullptr;
 };
 
 static std::string SASDataTypeToSerialString(ge::DataType type);
@@ -241,8 +232,6 @@ public:
     int64_t cmpRatio = 1;
     uint64_t oriMaskMode = 0;
     uint64_t cmpMaskMode = 0;
-    uint64_t oriKvStride = 0;
-    uint64_t cmpKvStride = 0;
     int64_t oriWinLeft = 0;
     int64_t oriWinRight = 0;
     int64_t sparseBlockSize = 0;
@@ -252,7 +241,6 @@ public:
     // Others Flag
     uint32_t sparseCount = 0;
     
-    bool returnSoftmaxLse = false;
     // PageAttention
     uint32_t blockTypeSize = 0;
     uint32_t oriMaxBlockNumPerBatch = 0;
@@ -319,8 +307,6 @@ private:
     ge::graphStatus CheckSingleParaCmpRatio() const;
     ge::graphStatus CheckSingleParaOriMaskMode() const;
     ge::graphStatus CheckSingleParaCmpMaskMode() const;
-    ge::graphStatus CheckSingleParaOriKvStride() const;
-    ge::graphStatus CheckSingleParaCmpKvStride() const;
     ge::graphStatus CheckSingleParaOriWinLeft() const;
     ge::graphStatus CheckSingleParaOriWinRight() const;
     ge::graphStatus CheckSingleParaOriBlockTable() const;

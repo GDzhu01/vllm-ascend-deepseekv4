@@ -33,6 +33,7 @@ set(CMAKE_PREFIX_PATH ${ASCEND_DIR}/)
 set(CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules
   ${CMAKE_MODULE_PATH}
+  ${ASCEND_DIR}/include/ge/cmake
 )
 message(STATUS "CMAKE_MODULE_PATH            :${CMAKE_MODULE_PATH}")
 
@@ -62,3 +63,11 @@ find_package(runtime MODULE REQUIRED)
 find_package(nnopbase MODULE REQUIRED)
 find_package(tilingapi MODULE REQUIRED)
 find_package(aicpu MODULE REQUIRED)
+
+if(BUILD_WITH_INSTALLED_DEPENDENCY_CANN_PKG)
+ 	message(STATUS "Finding gen es pkg")
+ 	find_package(GenerateEsPackage MODULE QUIET)
+ 	if(NOT GenerateEsPackage_FOUND)
+ 	  message(FATAL_ERROR "GenerateEsPackage not found")
+ 	endif()
+endif()
