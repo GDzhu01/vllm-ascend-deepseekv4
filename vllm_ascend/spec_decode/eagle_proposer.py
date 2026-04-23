@@ -203,7 +203,13 @@ class SpecDecodeBaseProposer(EagleProposer):
             AttentionLayerBase,  # type: ignore[type-abstract]
         )
         all_indexer_layer_names = set(get_layers_from_vllm_config(self.vllm_config, DeepseekV32IndexerCache).keys())
-        self._draft_attn_layer_names = set(all_attn_layers.keys()) - target_attn_layer_names - all_indexer_layer_names
+        
+        # Filter to only layers that have KV cache specs.
+        self._draft_attn_layer_names = {
+            name
+            for name in (set(all_attn_layers.keys()) - target_attn_layer_names)
+            if all_attn_layers[name].get_kv_cache_spec(self.vllm_config) is not None
+        } - all_indexer_layer_names
 
         self.attn_layer_names = list(sorted(self._draft_attn_layer_names))
         draft_attn_layers_dict = get_layers_from_vllm_config(self.vllm_config, AttentionLayerBase)
