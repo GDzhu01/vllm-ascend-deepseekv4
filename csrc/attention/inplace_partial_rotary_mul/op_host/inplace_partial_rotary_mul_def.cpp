@@ -49,7 +49,7 @@ public:
             .DynamicRankSupportFlag(true)
             .DynamicShapeSupportFlag(true)
             .ExtendCfgInfo("opFile.value", "inplace_partial_rotary_mul");
-        this->AICore().AddConfig("ascend910_95", regbaseCfg);
+        this->AICore().AddConfig("ascend950", regbaseCfg);
         this->AICore().AddConfig("ascend910b", regbaseCfg);
         this->AICore().AddConfig("ascend910_93", regbaseCfg);
 

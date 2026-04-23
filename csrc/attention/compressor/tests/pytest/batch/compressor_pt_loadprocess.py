@@ -63,6 +63,20 @@ def test_compressor_process(filepath, device_id=0):
         # state_cache = state_cache.to("npu:%s" % DEVICE_ID)
         state_cache[:, :, :state_cache.shape[2]//2] = kv_state.clone()
         state_cache[:, :, state_cache.shape[2]//2:] = score_state.clone()
+    else:
+        layer_num = random.randint(1, 50)
+        layer_start_idx = random.randint(0, layer_num-1)
+        print(f"layer_num: {layer_num}")
+        print(f"layer_start_idx: {layer_start_idx}")
+        state_cache_pad = torch.zeros((kv_state.shape[0], layer_num*kv_state.shape[1]*kv_state.shape[2]*2))
+        print(f"state_cache_pad: shape {state_cache_pad.shape}")
+        # state_cache_pad = state_cache_pad.to("npu:%s" % DEVICE_ID)
+        state_cache = state_cache_pad[:, layer_start_idx*kv_state.shape[1]*kv_state.shape[2]*2: (layer_start_idx+1)*kv_state.shape[1]*kv_state.shape[2]*2].view(-1, kv_state.shape[1], kv_state.shape[2]*2)
+        # state_cache = state_cache.to("npu:%s" % DEVICE_ID)
+        state_cache[:, :, :state_cache.shape[2]//2] = kv_state.clone()
+        state_cache[:, :, state_cache.shape[2]//2:] = score_state.clone()
+        print(f"state_cache: shape {state_cache.shape}, dtype: {state_cache.dtype}, is_contiguous: {state_cache.is_contiguous()}, stride0: {state_cache.stride(0)}")
+
 
     state_cache = state_cache.npu()
     if cu_seqlens is not None: 
@@ -72,7 +86,8 @@ def test_compressor_process(filepath, device_id=0):
     if start_pos is not None: 
         start_pos = torch.tensor(start_pos).to(torch.int32).npu()
     if block_table is not None: 
-        block_table = block_table.npu()
+        kv_block_table = block_table.npu()
+        score_block_table = block_table.npu()
 
     #调用compressor算子
     npu_result = torch.ops.custom.compressor(
@@ -84,15 +99,15 @@ def test_compressor_process(filepath, device_id=0):
                 norm_weight.npu(), 
                 rope_sin.npu(),
                 rope_cos.npu(),
-                state_block_table = block_table,
+                rope_head_dim = rope_head_dim,
+                cmp_ratio = cmp_ratio,
+                state_block_table = kv_block_table,
                 cu_seqlens = cu_seqlens,
                 seqused = seqused,
                 start_pos = start_pos,
-                rope_head_dim = rope_head_dim,
-                cmp_ratio = cmp_ratio,
                 coff = coff,
                 norm_eps = norm_eps,
                 rotary_mode = rotary_mode,
-                cache_mode = cache_mode,
+                cache_mode = cache_mode
             )
     return cpu_result, kv_mask_result, npu_result ,cpu_kv_state, update_kv, cpu_score_state, update_score, state_cache, params

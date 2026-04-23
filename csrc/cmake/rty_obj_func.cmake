@@ -8,7 +8,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-# usage: add_modules_sources(DIR OPTYPE ACLNNTYPE)
+# useage: add_modules_sources(DIR OPTYPE ACLNNTYPE)
 # ACLNNTYPE 支持类型aclnn/aclnn_inner/aclnn_exclude
 # OPTYPE 和 ACLNNTYPE 需一一对应
 
@@ -101,6 +101,9 @@ function(add_opapi_modules)
       $<BUILD_INTERFACE:adump_headers>
       $<BUILD_INTERFACE:dlog_headers>)
   endif()
+  if(NOT BUILD_OPEN_PROJECT)
+    add_dependencies(${OPHOST_NAME}_opapi_obj opbuild_gen_inner)
+  endif()
 endfunction()
 
 # 添加gentask object
@@ -150,6 +153,9 @@ function(add_opmaster_ct_gentask_modules)
         error_manager
         ops_utils_tiling
       -Wl,--as-needed
+      -Wl,--whole-archive
+        tiling_api
+      -Wl,--no-whole-archive
         c_sec
         json
         platform
@@ -166,7 +172,7 @@ function(add_opmaster_ct_gentask_modules)
   endif()
 endfunction()
 
-# usage: add_aicpu_kernel_modules()
+# useage: add_aicpu_kernel_modules()
 # 添加aicpu kernel object
 function(add_aicpu_kernel_modules)
   message(STATUS "add_aicpu_kernel_modules")
@@ -189,7 +195,7 @@ function(add_aicpu_kernel_modules)
   endif()
 endfunction()
 
-# usage: add_aicpu_cust_kernel_modules(target_name)
+# useage: add_aicpu_cust_kernel_modules(target_name)
 # 添加aicpu cust kernel object target
 function(add_aicpu_cust_kernel_modules target_name)
   message(STATUS "add_aicpu_cust_kernel_modules for ${target_name}")
@@ -212,7 +218,7 @@ function(add_aicpu_cust_kernel_modules target_name)
       PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
               $<BUILD_INTERFACE:dlog_headers>
               -Wl,--no-whole-archive
-              Eigen3::EigenCv
+              Eigen3::EigenTransformer
       )
     if (NOT ${target_name} IN_LIST AICPU_CUST_OBJ_TARGETS)
       set(AICPU_CUST_OBJ_TARGETS ${AICPU_CUST_OBJ_TARGETS} ${target_name} CACHE INTERNAL "All aicpu cust obj targets")
@@ -220,12 +226,12 @@ function(add_aicpu_cust_kernel_modules target_name)
   endif()
 endfunction()
 
-# usage: add_modules_sources(DIR OPTYPE ACLNNTYPE)
+# useage: add_modules_sources(DIR OPTYPE ACLNNTYPE)
 # ACLNNTYPE 支持类型aclnn/aclnn_inner/aclnn_exclude
 # OPTYPE 和 ACLNNTYPE 需一一对应
 macro(add_modules_sources)
   set(oneValueArgs OP_API_INDEPENDENT OP_API_DIR)
-  set(multiValueArgs OPTYPE ACLNNTYPE)
+  set(multiValueArgs OPTYPE ACLNNTYPE ACLNN_EXTRA_VERSION)
 
   cmake_parse_arguments(MODULE "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
   set(SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -312,7 +318,7 @@ macro(add_modules_sources)
       elseif(${AclnnType} STREQUAL "no_need_aclnn")
         message(STATUS "aicpu or host aicpu no need aclnn.")
       else()
-        message(FATAL_ERROR "ACLNN TYPE UNSUPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
+        message(FATAL_ERROR "ACLNN TYPE UNSPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
       endif()
     endforeach()
   else()
@@ -416,7 +422,7 @@ macro(add_modules_sources_with_soc)
       elseif(${AclnnType} STREQUAL "no_need_aclnn")
         message(STATUS "aicpu or host aicpu no need aclnn.")
       else()
-        message(FATAL_ERROR "ACLNN TYPE UNSUPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
+        message(FATAL_ERROR "ACLNN TYPE UNSPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
       endif()
     endforeach()
   else()
@@ -518,7 +524,7 @@ macro(add_mc2_modules_sources)
       elseif(${AclnnType} STREQUAL "no_need_aclnn")
         message(STATUS "aicpu or host aicpu no need aclnn.")
       else()
-        message(FATAL_ERROR "ACLNN TYPE UNSUPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
+        message(FATAL_ERROR "ACLNN TYPE UNSPPORTED, ONLY SUPPORT aclnn/aclnn_inner/aclnn_exclude")
       endif()
     endforeach()
   else()
@@ -533,7 +539,7 @@ macro(add_mc2_modules_sources)
   endif()
 endmacro()
 
-# usage: add_graph_plugin_sources()
+# useage: add_graph_plugin_sources()
 macro(add_graph_plugin_sources)
   set(SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 

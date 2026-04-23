@@ -14,7 +14,6 @@ if (TARGET ${OPHOST_NAME}_infer_obj OR TARGET ${OPHOST_NAME}_tiling_obj OR TARGE
         $<$<TARGET_EXISTS:${OPHOST_NAME}_tiling_obj>:$<TARGET_OBJECTS:${OPHOST_NAME}_tiling_obj>>
         $<$<TARGET_EXISTS:${OPHOST_NAME}_aicpu_objs>:$<TARGET_OBJECTS:${OPHOST_NAME}_aicpu_objs>>
         $<$<TARGET_EXISTS:${COMMON_NAME}_obj>:$<TARGET_OBJECTS:${COMMON_NAME}_obj>>
-        $<$<TARGET_EXISTS:${OPHOST_NAME}_opmaster_ct_gentask_obj>:$<TARGET_OBJECTS:${OPHOST_NAME}_opmaster_ct_gentask_obj>>
     )
     add_custom_command(TARGET ${OPHOST_NAME}_static
                        POST_BUILD
@@ -29,7 +28,9 @@ if (TARGET ${OPHOST_NAME}_infer_obj OR TARGET ${OPHOST_NAME}_tiling_obj OR TARGE
                 -Wl,--no-as-needed
                 register
                 $<$<BOOL:${BUILD_WITH_INSTALLED_DEPENDENCY_CANN_PKG}>:$<BUILD_INTERFACE:optiling>>
-                $<$<TARGET_EXISTS:opsbase>:opsbase>
+                $<$<TARGET_EXISTS:opbase_util_objs>:$<TARGET_OBJECTS:opbase_util_objs>>
+ 	            $<$<TARGET_EXISTS:opbase_infer_objs>:$<TARGET_OBJECTS:opbase_infer_objs>>
+ 	            $<$<TARGET_EXISTS:opbase_tiling_objs>:$<TARGET_OBJECTS:opbase_tiling_objs>>
                 -Wl,--as-needed
                 -Wl,--whole-archive
                 rt2_registry_static

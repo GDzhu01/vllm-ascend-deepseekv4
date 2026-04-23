@@ -301,21 +301,10 @@ void MoeInitRountingCustomTilingBase::Reset()
 ge::graphStatus MoeInitRountingCustomTilingBase::GetPlatformInfo()
 {
     auto compileInfoPtr = reinterpret_cast<const MoeInitRoutingCustomCompileInfo*>(context_->GetCompileInfo());
-    if (compileInfoPtr == nullptr) {
-        auto platformInfo = context_->GetPlatformInfo();
-        CHECK_FAIL(context_, platformInfo == nullptr, "fail to get platform info");
-        auto ascendcPlatform = platform_ascendc::PlatformAscendC(platformInfo);
-        aivNum = ascendcPlatform.GetCoreNumAiv();
-        uint64_t ubSize = 0;
-        ascendcPlatform.GetCoreMemSize(platform_ascendc::CoreMemType::UB, ubSize);
-        aicoreParams_.blockDim = aivNum;
-        aicoreParams_.ubSize = static_cast<int64_t>(ubSize);
-    } else {
-        aivNum = compileInfoPtr->aivNum;
-        aicoreParams_.blockDim = aivNum;
-        aicoreParams_.ubSize = compileInfoPtr->ubSize;
-    }
-    CHECK_FAIL(context_, aivNum <= 0 || aicoreParams_.ubSize <= 0, "fail to init platform info");
+    CHECK_FAIL(context_, compileInfoPtr == nullptr, "fail to get platform info");
+    aivNum = compileInfoPtr->aivNum;
+    aicoreParams_.blockDim = aivNum;
+    aicoreParams_.ubSize = compileInfoPtr->ubSize;
     moeInitRoutingCustomTilingData.set_coreNum(aivNum);
     OPS_LOG_I(context_->GetNodeName(), "---PlatformInfo--- aivNum is: %ld, ubSizePlatForm is: %ld ", aivNum, aicoreParams_.ubSize);
     return ge::GRAPH_SUCCESS;
@@ -914,7 +903,7 @@ void MoeInitRountingCustomTilingBase::Tinlig4VBSMultiCoreCompute(MoeCustomVBSCom
     needCoreNum = std::min(needCoreNum, aivNum);
 
     if (needCoreNum == 0) {
-        OPS_LOG_E(context_->GetNodeName(), "Variate needCoreNum cannot be 0.");
+        OPS_LOG_E(context_->GetNodeName(), "Variale needCoreNum cannot be 0.");
         return;
     }
     int64_t perCoreElements = (needCoreNum == 0) ? 0 : (totalLength_ / needCoreNum);
@@ -1274,5 +1263,5 @@ void MoeInitRountingCustomTilingBase::Tiling4GatherOutCompute()
         lastCorePerLoopIndicesElements, lastCoreLastLoopIndicesElements);
 }
 
-REGISTER_TILING_TEMPLATE("MoeInitRoutingCustom", MoeInitRountingCustomTilingBase, 10000); // Fallback template for non-Ascend950 SoC.
+REGISTER_TILING_TEMPLATE("MoeInitRoutingCustom", MoeInitRountingCustomTilingBase, 10000); // If not 910_95, fallback to this.
 } // namespace optiling

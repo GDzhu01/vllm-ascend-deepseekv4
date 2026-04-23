@@ -182,6 +182,7 @@ function(OpsTest_AddOpApiShared)
                 -Wl,--no-whole-archive
                 PRIVATE $<$<BOOL:${BUILD_WITH_INSTALLED_DEPENDENCY_CANN_PKG}>:$<BUILD_INTERFACE:opapi_math>>
                 nnopbase
+                -Wl,-Bsymbolic
                 profapi
                 ge_common_base
                 ascend_dump

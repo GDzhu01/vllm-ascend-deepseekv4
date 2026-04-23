@@ -316,6 +316,7 @@ class cmake_build_ext(build_ext):
             "910b": "ascend910b1",
             "910c": "ascend910_9392",
             "310p": "ascend310p1",
+            "ascend950": "ascend950pr_9579",
         }
         CANN_SOC_VERSION = soc_version_map.get(envs.SOC_VERSION, envs.SOC_VERSION)
         cmake_args += [f"-DSOC_VERSION={CANN_SOC_VERSION}"]
