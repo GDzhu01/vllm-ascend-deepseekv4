@@ -41,6 +41,7 @@ enum class SyncType {
     INNER_CORE_SYNC,
     CROSS_CORE_SYNC_FORWARD,
     CROSS_CORE_SYNC_BOTH,
+    CROSS_CORE_SYNC_BACKWARD,
 };
 
 constexpr uint32_t INVALID_CROSS_CORE_EVENT_ID = 16;
@@ -58,6 +59,8 @@ struct BufferInfo{
             return HardEvent::MTE1_M;
         } else if constexpr (Type == BufferType::L0C) {
             return HardEvent::M_FIX;
+        } else if constexpr (Type == BufferType::GM) {
+            return HardEvent::MTE2_S;
         }
     }
 
@@ -70,6 +73,8 @@ struct BufferInfo{
             return HardEvent::M_MTE1;
         } else if constexpr (Type == BufferType::L0C) {
             return HardEvent::FIX_M;
+        } else if constexpr (Type == BufferType::GM) {
+            return HardEvent::S_MTE2;
         }
     }
 
@@ -113,6 +118,9 @@ public:
         if constexpr (syncType == SyncType::CROSS_CORE_SYNC_FORWARD) {
             id0_ = MAKE_ID;
             id1_ = INVALID_CROSS_CORE_EVENT_ID;
+        } else if constexpr (syncType == SyncType::CROSS_CORE_SYNC_BACKWARD) {
+            id0_ = INVALID_CROSS_CORE_EVENT_ID;
+            id1_ = MAKE_ID;
         } else if constexpr (syncType == SyncType::CROSS_CORE_SYNC_BOTH) {
             id0_ = MAKE_ID;
             id1_ = MAKE_ID;
@@ -169,7 +177,15 @@ public:
     }
 
     __aicore__ inline void WaitCrossCore() {
-        if constexpr (bufferType == BufferType::UB || bufferType == BufferType::GM) {
+        if constexpr (bufferType == BufferType::GM && syncType == SyncType::CROSS_CORE_SYNC_BACKWARD) {
+            // AIC属于消费者，AIV属于生产者，且一个AIC对应两个AIV
+            if ASCEND_IS_AIC {
+                CrossCoreWaitFlag<CROSS_CORE_SYNC_MODE, PIPE_MTE2>(id1_);
+                CrossCoreWaitFlag<CROSS_CORE_SYNC_MODE, PIPE_MTE2>(id1_ + AIV0_AIV1_OFFSET);
+            } else {
+                CrossCoreWaitFlag<CROSS_CORE_SYNC_MODE, PIPE_MTE2>(id0_);
+            }
+        } else if constexpr (bufferType == BufferType::UB || bufferType == BufferType::GM) {
             // AIC属于生产者，AIV属于消费者，且一个AIC对应两个AIV
             if ASCEND_IS_AIC {
                 CrossCoreWaitFlag<CROSS_CORE_SYNC_MODE, PIPE_FIX>(id1_);
@@ -191,7 +207,15 @@ public:
     }
 
     __aicore__ inline void SetCrossCore() {
-        if constexpr (bufferType == BufferType::UB || bufferType == BufferType::GM) {
+        if constexpr (bufferType == BufferType::GM && syncType == SyncType::CROSS_CORE_SYNC_BACKWARD) {
+            // AIC属于消费者，AIV属于生产者，且一个AIC对应两个AIV
+            if ASCEND_IS_AIC {
+                CrossCoreSetFlag<CROSS_CORE_SYNC_MODE, PIPE_FIX>(id0_);
+                CrossCoreSetFlag<CROSS_CORE_SYNC_MODE, PIPE_FIX>(id0_ + AIV0_AIV1_OFFSET);
+            } else {
+                CrossCoreSetFlag<CROSS_CORE_SYNC_MODE, PIPE_MTE3>(id1_);
+            }
+        } else if constexpr (bufferType == BufferType::UB || bufferType == BufferType::GM) {
             // AIC属于生产者，AIV属于消费者，且一个AIC对应两个AIV
             if ASCEND_IS_AIC {
                 CrossCoreSetFlag<CROSS_CORE_SYNC_MODE, PIPE_FIX>(id0_);

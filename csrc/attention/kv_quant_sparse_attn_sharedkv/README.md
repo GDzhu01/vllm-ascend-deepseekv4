@@ -60,9 +60,9 @@
 -   该接口当前支持三种计算场景：场景一，仅传入ori\_kv时为Sliding Window Attention计算；场景二，传入ori\_kv及cmp\_kv时为Sliding Window Attention + Compressed Attention计算；场景三，传入ori\_kv、cmp\_kv及cmp\_sparse\_indices时为Sliding Window Attention + Sparse Compressed Attention计算。
 -   参数q中的D仅支持512。ori\_kv、cmp\_kv的D值仅支持640，按kv\_rope、kv\_nope及nope\_quant\_scale顺序拼接，尾部pad 128B对齐至640。其中kv\_rope数据类型为`bfloat16`，rope\_head\_dim为64；kv\_nope数据类型为`float8_e4m3fn`，nope\_head\_dim为448；nope\_quant\_scale数据类型为`float8_e8m0fnu`，nope\_quant\_scale\_dim = nope\_head\_dim \/ tile\_size = 7，整体封装为`float8_e4m3fn`。
 -   参数ori\_kv、cmp\_kv的数据类型必须保持一致。
--   参数q中的N1仅支持64，ori\_kv、cmp\_kv中的KV\_N仅支持1。
+-   参数q中的N1当前支持64/128，ori\_kv、cmp\_kv中的KV\_N仅支持1。
 -   参数ori\_kv和cmp\_kv中的block\_size1和block\_size2需为16的倍数，最大支持1024；block\_num1及block_num2为PageAttention时block总数。
--   参数ori\_sparse\_indices与cmp\_sparse\_indices中的K1与K2为一次离散选取的block数，需要保证每行有效值均在前半部分，无效值均在后半部分，K1及K2仅支持512。
+-   参数ori\_sparse\_indices与cmp\_sparse\_indices中的K1与K2为一次离散选取的block数，需要保证每行有效值均在前半部分，无效值均在后半部分，K1及K2仅支持512/1024。
 -   参数cu\_seqlens\_q、cu\_seqlens\_ori\_kv及cu\_seqlens\_cmp\_kv维度为B + 1，要求其值为当前Batch与前序Batch有效token数的累加值，后一个元素的值必须大于等于前一个元素的值。
 -   参数seqused\_q及seqused\_kv维度为B，要求其值表示每个Batch中的有效token数。
 -   参数ori\_block\_table的shape为2维，其中第一维长度为B，第二维长度不小于所有Batch中最大的S2对应的block数量，即S2\_max / block\_size1向上取整。

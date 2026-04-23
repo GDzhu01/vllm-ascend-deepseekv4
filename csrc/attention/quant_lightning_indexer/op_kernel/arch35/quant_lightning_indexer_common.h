@@ -117,6 +117,8 @@ struct ConstInfo {
     bool attenMaskFlag = false;
     uint32_t cmpRatio = 1;
     bool batchSupperFlag = false;      // Qactual_se长度是否为B+1
+    uint32_t keyStride0 = 0;
+    uint32_t keyDequantScaleStride0 = 0;
 
     uint32_t actualLenQDims = 0U;  // query的actualSeqLength 的维度
     uint32_t actualLenDims = 0U;   // KV 的actualSeqLength 的维度

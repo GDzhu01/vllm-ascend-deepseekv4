@@ -49,6 +49,7 @@
 - <term>Ascend 950PR/Ascend 950DT</term>：query、key不支持INT8；weights、query_dequant_scale和key_dequant_scale不支持FLOAT16。
 - <term>Atlas A3 训练系列产品/Atlas A3 推理系列产品</term>、<term>Atlas A2 训练系列产品/Atlas A2 推理系列产品</term>：query、key不支持FLOAT8_e4m3fn；weights、query_dequant_scale和key_dequant_scale不支持FLOAT32。
 
+
 ## 约束说明
 -   该接口支持图模式。
 -   该接口要求$W \odot Scale_Q$的结果在`float16`(Atlas A3)/`float32`(Ascend 950PR/Ascend 950DT)的表示范围内。
@@ -231,6 +232,7 @@
 
 
     config = CompilerConfig()
+    config.mode = "reduce-overhead"
     npu_backend = torchair.get_npu_backend(compiler_config=config)
     torch._dynamo.reset()
     npu_mode = torch.compile(QLINetwork().npu(), fullgraph=True, backend=npu_backend, dynamic=False)

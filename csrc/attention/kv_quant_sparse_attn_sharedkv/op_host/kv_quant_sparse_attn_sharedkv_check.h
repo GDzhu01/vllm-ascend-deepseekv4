@@ -127,6 +127,8 @@ constexpr uint32_t ATTR_ORI_WIN_LEFT_INDEX = 7;
 constexpr uint32_t ATTR_ORI_WIN_RIGHT_INDEX = 8;
 constexpr uint32_t ATTR_LAYOUT_Q_INDEX = 9;
 constexpr uint32_t ATTR_LAYOUT_KV_INDEX = 10;
+constexpr uint32_t ATTR_ORIKV_STRIDE_INDEX = 11;
+constexpr uint32_t ATTR_CMPKV_STRIDE_INDEX = 12;
 
 // Dim Index
 constexpr uint32_t DIM_IDX_ONE = 1;
@@ -227,6 +229,8 @@ struct KvQuantSASParaInfo {
     const int64_t *tileSize = nullptr;
     const int64_t *ropeHeadDim = nullptr;
     const float *softmaxScale = nullptr;
+    const int64_t *oriKvStride = nullptr;
+    const int64_t *cmpKvStride = nullptr;
     const int64_t *cmpRatio = nullptr;
     const uint32_t *oriMaskMode = nullptr;
     const uint32_t *cmpMaskMode = nullptr;
@@ -268,6 +272,8 @@ public:
     uint32_t dSizeV = 0;
     uint32_t dSizeVInput = 0;
     float softmaxScale = 0;
+    int64_t oriKvStride = 0;
+    int64_t cmpKvStride = 0;
     int64_t cmpRatio = 0;
     uint64_t oriMaskMode = 0;
     uint64_t cmpMaskMode = 0;

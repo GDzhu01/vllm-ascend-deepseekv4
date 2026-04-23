@@ -17,7 +17,6 @@ include(FindPackageHandleStandardArgs)
 
 if(BUILD_WITH_INSTALLED_DEPENDENCY_CANN_PKG)
   set(AICPU_INC_DIRS
-    ${ASCEND_DIR}/${SYSTEM_PREFIX}/include/aicpu
     ${ASCEND_DIR}/${SYSTEM_PREFIX}/include/experiment
     ${ASCEND_DIR}/${SYSTEM_PREFIX}/include/experiment/cce
     ${ASCEND_DIR}/${SYSTEM_PREFIX}/include/experiment/msprof

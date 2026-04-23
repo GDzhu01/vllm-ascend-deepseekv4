@@ -101,6 +101,9 @@ function(add_opapi_modules)
       $<BUILD_INTERFACE:adump_headers>
       $<BUILD_INTERFACE:dlog_headers>)
   endif()
+  if(NOT BUILD_OPEN_PROJECT)
+    add_dependencies(${OPHOST_NAME}_opapi_obj opbuild_gen_inner)
+  endif()
 endfunction()
 
 # 添加gentask object

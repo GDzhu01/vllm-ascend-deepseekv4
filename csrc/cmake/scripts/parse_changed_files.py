@@ -137,12 +137,48 @@ class Parser:
     _UTExcludes: List[str] = []
     _ExamplesExcludes: List[str] = []
 
+    @staticmethod
+    def main() -> str:
+        # 参数注册
+        ps = argparse.ArgumentParser(description="Parse changed files", epilog="Best Regards!")
+        ps.add_argument("-c", "--classify", required=True, nargs=1, type=Path, help="tests/test_config.yaml")
+        ps.add_argument("-f", "--file", required=True, nargs=1, type=Path, help="changed files desc file.")
+        # 子命令行
+        sub_ps = ps.add_subparsers(help="Sub-Command")
+        p_ut = sub_ps.add_parser('get_related_ut', help="Get related ut.")
+        p_ut.set_defaults(func=Parser.get_related_ut)
+        p_ut_mc2 = sub_ps.add_parser('get_related_ut_mc2', help="Get related ut mc2.")
+        p_ut_mc2.set_defaults(func=Parser.get_related_ut_mc2)
+        p_ut_exclude_mc2 = sub_ps.add_parser('get_related_ut_exclude_mc2', help="Get related ut exclude mc2.")
+        p_ut_exclude_mc2.set_defaults(func=Parser.get_related_ut_exclude_mc2)
+        p_examples = sub_ps.add_parser('get_related_examples', help="Get related examples.")
+        p_examples.set_defaults(func=Parser.get_related_examples)
+        # 处理
+        args = ps.parse_args()
+        logging.debug(args)
+        if not Parser.parse_classify_file(file=Path(args.classify[0])):
+            return ""
+        if not Parser.parse_changed_file(file=Path(args.file[0])):
+            return ""
+        Parser.print_details()
+        rst = args.func()
+        return rst
+
     @classmethod
-    def print_details(cls):
-        for m in cls._Modules:
-            m.print_details()
-        for p in cls._ChangedPaths:
-            logging.debug(p)
+    def file_filter(cls, file_path: Path) -> bool:
+        """过滤不需要处理的文件"""
+        path_str = str(file_path)
+        # 排除文档文件
+        exclude_extensions = ['.md', '.json', '.ini']
+        for ext in exclude_extensions:
+            if path_str.endswith(ext):
+                return False
+        # 排除文档目录
+        exclude_keywords = ['docs/']
+        for keyword in exclude_keywords:
+            if keyword in path_str:
+                return False
+        return True
 
     @classmethod
     def parse_classify_file(cls, file: Path) -> bool:
@@ -184,8 +220,19 @@ class Parser:
             if f.is_absolute():
                 logging.error("%s is absolute path.", f)
                 return False
+            # 添加文件过滤
+            if not cls.file_filter(f):
+                logging.info(f"Filter out non-source file: {f}")
+                continue
             cls._ChangedPaths.append(f)
         return True
+
+    @classmethod
+    def print_details(cls):
+        for m in cls._Modules:
+            m.print_details()
+        for p in cls._ChangedPaths:
+            logging.debug(p)
 
     @classmethod
     def get_related_ut(cls):
@@ -199,27 +246,7 @@ class Parser:
         if len(ops_test_option_lst) == 0:
             logging.info("Don't trigger any UT.")
             return ""
-        ops_test_ut_str: str = ""
-        if "all" in ops_test_option_lst:
-            ops_test_ut_str = "all"
-        else:
-            for opt in ops_test_option_lst:
-                if opt not in cls._UTExcludes:
-                    ops_test_ut_str += f"{opt};"
-        ops_test_ut_str = f"{ops_test_ut_str}"
-        logging.info(f"Trigger UT: {ops_test_ut_str}")
-        return ops_test_ut_str
-
-    @classmethod
-    def get_ops_test_option_lst(cls) -> List[str]:
-        ops_test_option_lst: List[str] = []
-        for p in cls._ChangedPaths:
-            for m in cls._Modules:
-                new_options = m.get_test_example_ops_test_options(f=p)
-                for opt in new_options:
-                    if opt not in ops_test_option_lst:
-                        ops_test_option_lst.append(opt)
-        return ops_test_option_lst
+        return cls.get_ops_test_ut_str(ops_test_option_lst)
 
     @classmethod
     def get_related_examples(cls) -> str:
@@ -237,6 +264,17 @@ class Parser:
         ops_test_examples_str = f"{ops_test_examples_str}"
         logging.info(f"Trigger examples: {ops_test_examples_str}")
         return ops_test_examples_str
+
+    @classmethod
+    def get_ops_test_option_lst(cls) -> List[str]:
+        ops_test_option_lst: List[str] = []
+        for p in cls._ChangedPaths:
+            for m in cls._Modules:
+                new_options = m.get_test_example_ops_test_options(f=p)
+                for opt in new_options:
+                    if opt not in ops_test_option_lst:
+                        ops_test_option_lst.append(opt)
+        return ops_test_option_lst
 
     @classmethod
     def _parse_classify_item(cls, name: str, desc: Optional[Dict[str, Any]] = None) -> bool:
@@ -258,30 +296,55 @@ class Parser:
             if not cls._parse_classify_item(name=name + '/' + k, desc=sub_desc):
                 return False
         return True
-
-    @staticmethod
-    def main() -> str:
-        # 参数注册
-        ps = argparse.ArgumentParser(description="Parse changed files", epilog="Best Regards!")
-        ps.add_argument("-c", "--classify", required=True, nargs=1, type=Path, help="tests/test_config.yaml")
-        ps.add_argument("-f", "--file", required=True, nargs=1, type=Path, help="changed files desc file.")
-        # 子命令行
-        sub_ps = ps.add_subparsers(help="Sub-Command")
-        p_ut = sub_ps.add_parser('get_related_ut', help="Get related ut.")
-        p_ut.set_defaults(func=Parser.get_related_ut)
-        p_examples = sub_ps.add_parser('get_related_examples', help="Get related examples.")
-        p_examples.set_defaults(func=Parser.get_related_examples)
-        # 处理
-        args = ps.parse_args()
-        logging.debug(args)
-        if not Parser.parse_classify_file(file=Path(args.classify[0])):
+    
+    @classmethod
+    def get_related_ut_mc2(cls):
+        def ops_test_list_append(ops, ops_test_option_lst):
+            if ops not in ops_test_option_lst:
+                ops_test_option_lst.append(ops)
+        ops_test_option_lst: List[str] = []
+        for p in cls._ChangedPaths:
+            if not ("mc2" in p.parts):
+                continue
+            for m in cls._Modules:
+                new_options = m.get_test_options(f=p)
+                for opt in new_options:
+                    ops_test_list_append(opt, ops_test_option_lst)
+        if len(ops_test_option_lst) == 0:
+            logging.info("Don't trigger any mc2 UT.")
             return ""
-        if not Parser.parse_changed_file(file=Path(args.file[0])):
+        return cls.get_ops_test_ut_str(ops_test_option_lst)
+    
+    @classmethod
+    def get_related_ut_exclude_mc2(cls):
+        def ops_test_list_append(ops, ops_test_option_lst):
+            if ops not in ops_test_option_lst:
+                ops_test_option_lst.append(ops)
+        ops_test_option_lst: List[str] = []
+        for p in cls._ChangedPaths:
+            if ("mc2" in p.parts):
+                continue
+            for m in cls._Modules:
+                new_options = m.get_test_options(f=p)
+                for opt in new_options:
+                    ops_test_list_append(opt, ops_test_option_lst)
+        if len(ops_test_option_lst) == 0:
+            logging.info("Don't trigger any UT exclude mc2.")
             return ""
-        Parser.print_details()
-        rst = args.func()
-        return rst
-
+        return cls.get_ops_test_ut_str(ops_test_option_lst)
+    
+    @classmethod
+    def get_ops_test_ut_str(cls, ops_test_option_lst: List[str]) -> str:
+        ops_test_ut_str: str = ""
+        if "all" in ops_test_option_lst:
+            ops_test_ut_str = "all"
+        else:
+            for opt in ops_test_option_lst:
+                if opt not in cls._UTExcludes:
+                    ops_test_ut_str += f"{opt};"
+        ops_test_ut_str = f"{ops_test_ut_str}"
+        logging.info(f"Trigger UT: {ops_test_ut_str}")
+        return ops_test_ut_str
 
 if __name__ == '__main__':
     logging.basicConfig(format='[%(asctime)s][%(filename)s:%(lineno)d] %(message)s', datefmt='%Y-%m-%d %H:%M:%S',

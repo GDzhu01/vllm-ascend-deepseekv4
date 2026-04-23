@@ -92,7 +92,9 @@ function(gen_aclnn_classify host_obj prefix ori_out_srcs ori_out_headers opbuild
     endif()
   else()
     set(${opbuild_out_srcs} ${ori_out_srcs} ${out_srcs} PARENT_SCOPE)
-    set(${opbuild_out_headers} ${ori_out_headers} ${out_headers} PARENT_SCOPE)
+    if ("${prefix}" STREQUAL "aclnn")
+      set(${opbuild_out_headers} ${ori_out_headers} ${out_headers} PARENT_SCOPE)
+    endif()
   endif()
 endfunction()
 
@@ -126,6 +128,30 @@ function(gen_aclnn_with_opdef)
     opbuild_out_srcs opbuild_out_headers)
   gen_aclnn_classify(${OPHOST_NAME}_opdef_aclnn_exclude_obj aclnnExc "${opbuild_out_srcs}" "${opbuild_out_headers}"
     opbuild_out_srcs opbuild_out_headers)
+
+  set(filtered_opbuild_out_headers)
+  foreach(header_file ${opbuild_out_headers})
+    set(skip_this_header FALSE)
+
+    get_filename_component(header_name ${header_file} NAME)
+    if(header_name MATCHES "aclnn_([^.]+)\\.h")
+      set(op_name ${CMAKE_MATCH_1})
+      string(TOUPPER ${op_name} op_name_upper)
+      string(REPLACE "-" "_" op_name_upper ${op_name_upper})
+
+      set(skip_var_name "${op_name_upper}_SKIP_HEADER")
+      if(DEFINED ${skip_var_name} AND ${skip_var_name})
+        message(STATUS "Skipping header packaging for operator: ${op_name}")
+        set(skip_this_header TRUE)
+      endif()
+    endif()
+
+    if(NOT skip_this_header)
+      list(APPEND filtered_opbuild_out_headers ${header_file})
+    endif()
+  endforeach()
+
+  set(opbuild_out_headers ${filtered_opbuild_out_headers})
 
   # 创建汇总头文件
   if(NOT ENABLE_BUILT_IN)
@@ -211,7 +237,6 @@ function(merge_graph_headers)
   set(oneValueArgs TARGET OUT_DIR)
   cmake_parse_arguments(MGPROTO "" "${oneValueArgs}" "" ${ARGN})
   get_target_property(proto_headers ${GRAPH_PLUGIN_NAME}_proto_headers INTERFACE_SOURCES)
-
   add_custom_command(OUTPUT ${MGPROTO_OUT_DIR}/ops_proto_transformer.h
     COMMAND ${ASCEND_PYTHON_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/util/merge_proto.py
     ${proto_headers}

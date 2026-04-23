@@ -29,12 +29,12 @@ public:
             .ParamType(OPTIONAL)
             .DataType({ge::DT_FLOAT8_E4M3FN})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("cmp_kv")
             .ParamType(OPTIONAL)
             .DataType({ge::DT_FLOAT8_E4M3FN})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("ori_sparse_indices")
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32})
@@ -109,6 +109,8 @@ public:
         this->Attr("ori_win_right").AttrType(OPTIONAL).Int(0);
         this->Attr("layout_q").AttrType(OPTIONAL).String("BSND");
         this->Attr("layout_kv").AttrType(OPTIONAL).String("PA_ND");
+        this->Attr("ori_kv_stride0").AttrType(OPTIONAL).Int(0);
+        this->Attr("cmp_kv_stride0").AttrType(OPTIONAL).Int(0);
         this->Attr("return_softmax_lse").AttrType(OPTIONAL).Bool(false);
 
         OpAICoreConfig aicore_config;

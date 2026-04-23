@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 #ifndef COMPRESSOR_VECTOR_COMM_H
 #define COMPRESSOR_VECTOR_COMM_H
 
-#include "../compressor_comm.h"
+#include "compressor_comm.h"
 namespace Compressor {
 
 
@@ -34,8 +34,6 @@ struct RmsNormParam {
     float epsilon;
     uint32_t row;
     uint32_t col;
-    float scale;
-    uint16_t isScaleEnable;
 };
 
 /**

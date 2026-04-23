@@ -97,7 +97,7 @@ def test_sas_quant_process_graph(test_data, device_id=0):
                                                         layout_kv = metadata_input['layout_kv'],
                                                         has_ori_kv = metadata_input['has_ori_kv'],
                                                         has_cmp_kv = metadata_input['has_cmp_kv'],
-                                                        device = "npu:0")
+                                                        )
 
     torch.npu.synchronize()
     metadata.npu()
@@ -184,7 +184,7 @@ def test_sas_quant_process_ci(test_data, device_id=0):
                                                         layout_kv = metadata_input['layout_kv'],
                                                         has_ori_kv = metadata_input['has_ori_kv'],
                                                         has_cmp_kv = metadata_input['has_cmp_kv'],
-                                                        device = "npu:0")
+                                                        )
     torch.npu.synchronize()
     metadata.npu()
 

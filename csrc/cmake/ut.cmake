@@ -402,10 +402,23 @@ if(UT_TEST_ALL OR OP_KERNEL_UT)
                 ${ASCEND_DIR}/include
         )
       target_compile_definitions(${opName}_${socVersion}_tiling_tmp PRIVATE LOG_CPP _GLIBCXX_USE_CXX11_ABI=0)
+      set(GERT_FILE "libgert.so")
+      set(SEARCH_GERT_PATHS
+          "${ASCEND_DIR}/x86_64-linux/lib64"
+          "${ASCEND_DIR}/aarch64-linux/lib64"
+      )
+      find_file(
+          GERT_PATH
+          ${GERT_FILE}
+          PATHS ${SEARCH_GERT_PATHS}
+          NO_DEFAULT_PATH
+          NO_CMAKE_FIND_ROOT_PATH
+      )
       target_link_libraries(
         ${opName}_${socVersion}_tiling_tmp
         PRIVATE -Wl,--no-as-needed -Wl,--as-needed -Wl,--whole-archive tiling_api
                 -Wl,--no-whole-archive gcov
+                -Wl,--no-whole-archive ${GERT_PATH}
                 $<$<BOOL:${dlog_FOUND}>:$<BUILD_INTERFACE:dlog_headers>>
         )
 

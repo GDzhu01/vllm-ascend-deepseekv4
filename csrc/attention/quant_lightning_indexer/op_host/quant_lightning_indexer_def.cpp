@@ -29,7 +29,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_INT8})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("weights")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
@@ -44,7 +44,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("actual_seq_lengths_query")
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32})
@@ -77,6 +77,8 @@ public:
         this->Attr("next_tokens").AttrType(OPTIONAL).Int(9223372036854775807); // 9223372036854775807: 默认值，int64的最大值
         this->Attr("cmp_ratio").AttrType(OPTIONAL).Int(1);          // 1: 压缩率
         this->Attr("return_values").AttrType(OPTIONAL).Bool(false); // 是否返回sparse_values
+        this->Attr("key_stride0").AttrType(OPTIONAL).Int(0);  
+ 	    this->Attr("key_dequant_scale_stride0").AttrType(OPTIONAL).Int(0);  
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)
@@ -97,7 +99,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT8_E4M3FN})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         aicore_config_95.Input("weights")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT})
@@ -112,7 +114,7 @@ public:
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT})
             .Format({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         aicore_config_95.Input("actual_seq_lengths_query")
             .ParamType(OPTIONAL)
             .DataType({ge::DT_INT32})

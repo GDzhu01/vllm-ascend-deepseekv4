@@ -252,6 +252,7 @@ if (BUILD_OPEN_PROJECT)
                 --enable_oom ${ENABLE_OOM}
                 --enable_tiling_sink ${ENABLE_TILING_SINK}
                 --enable_aicpu ${ENABLE_AICPU}
+                --enable_aicpu_kernel ${ENABLE_AICPU_KERNEL}
                 RESULT_VARIABLE result
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 OUTPUT_VARIABLE PREPARE_BUILD_OUTPUT_VARIABLE)
