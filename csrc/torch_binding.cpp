@@ -632,7 +632,55 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weigh
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(output, output_scale, output_offset);
 }
+std::tuple<at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_v2(
+    const at::Tensor & x,
+    const at::Tensor & x_scale,
+    const at::Tensor & group_list,
+    const at::TensorList & weight,
+    const at::TensorList & weight_scale,
+    const at::TensorList & weight_assist_matrix,
+    const c10::optional<at::Tensor> & bias,
+    const c10::optional<at::Tensor> & smooth_scale,
+    int64_t dequant_mode,
+    int64_t dequant_dtype,
+    int64_t quant_mode,
+    int64_t quant_dtype,
+    bool  transpose_weight,
+    int64_t group_list_type,
+    at::IntArrayRef tuning_config,
+    double swiglu_limit)
+{
 
+    auto x_size = x.sizes();
+    int n = weight[0].sizes()[1];
+    int m = x_size[0];
+    int k = x_size[1];
+
+    at::Tensor y = at::empty({m, n/2}, x.options().dtype(at::kChar));
+    at::Tensor y_scale = at::empty({m}, x.options().dtype(at::kFloat));
+    float swiglu_limit_f = static_cast<float>(swiglu_limit);
+    EXEC_NPU_CMD(
+        aclnnGroupedMatmulSwigluQuantV2,
+        x,
+        x_scale,
+        group_list,
+        weight,
+        weight_scale,
+        weight_assist_matrix,
+        bias,
+        smooth_scale,
+        dequant_mode,
+        dequant_dtype,
+        quant_mode,
+        quant_dtype,        
+        transpose_weight,
+        group_list_type,
+        tuning_config,
+        swiglu_limit_f,
+        y,
+        y_scale);
+    return std::tuple<at::Tensor, at::Tensor>(y, y_scale);
+}
 std::tuple<at::Tensor, at::Tensor> dispatch_gmm_combine_decode(
     const at::Tensor &x,
     const at::Tensor &expert_ids,
@@ -1364,4 +1412,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                            int row_idx_type=0) -> (Tensor, Tensor, Tensor, Tensor)"
     );
     ops.impl("npu_moe_init_routing_custom", torch::kPrivateUse1, &vllm_ascend::npu_moe_init_routing_custom);
+
+    ops.def(
+        "grouped_matmul_swiglu_quant_v2(Tensor x, Tensor x_scale, Tensor group_list, Tensor[] weight,  Tensor[] weight_scale, Tensor[] weight_assist_matrix,"
+        "                                                   Tensor? bias=None, Tensor? smooth_scale=None, int dequant_mode=1, int dequant_dtype=1, int quant_mode=1,"
+        "                                                 int quant_dtype=3, bool transpose_weight=False, int group_list_type=1, int[2] tuning_config=[],float swiglu_limit=-1000000.0) ->"
+        "                                                  (Tensor y, Tensor y_scale)"
+    );
+    ops.impl("grouped_matmul_swiglu_quant_v2", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_v2);
+
 }
