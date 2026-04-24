@@ -264,7 +264,7 @@ class NPUWorker(WorkerBase):
     @torch.inference_mode()
     def get_fix_memory(self) -> int:
         hf_config = self.vllm_config.model_config.hf_text_config
-        if hf_config.model_type != 'deepseek_xyz':
+        if hf_config.model_type != 'deepseek_v4':
             return 0
         max_num_reqs = self.scheduler_config.max_num_seqs
         head_dim = hf_config.head_dim

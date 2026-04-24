@@ -271,7 +271,7 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
         "language_model.lm_head.": "lm_head.",
         "language_model.model.": "model.language_model.",
     },
-    "deepseek_xyz": {
+    "deepseek_v4": {
         "layers.": "model.layers.",
         "embed.": "model.embed_tokens.",
         "head.": "lm_head.",
@@ -279,7 +279,7 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
 }
 
 QUANT_MODEL_SUBSTR_MAPPINGS = {
-    "deepseek_xyz": {
+    "deepseek_v4": {
         ".attn.": ".sefl_attn.",
         ".w1.": ".gate_proj.",
         ".w2.": ".down_proj.",
@@ -334,7 +334,7 @@ packed_modules_model_mapping = {
         ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
         "fused_qkv_a_proj": ["q_a_proj", "kv_a_proj_with_mqa"]
     },
-    "deepseek_xyz": {
+    "deepseek_v4": {
         "gate_up_proj": ["gate_proj", "up_proj"],
         "experts":
         ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"]

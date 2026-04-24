@@ -2,7 +2,7 @@
 
 ## Introduction
 
-DeepSeek-V4 is introducing several key upgrades over DeepSeek-V3.
+DeepSeek-V4 is introducing several key upgrades over DeepSeek-V3. (Currently, vllm-ascend temporarily only supports DeepSeek-V4-FLASH)
 
 - The Manifold-Constrained Hyper-Connections (mHC) to strengthen conventional residual connections;
 - A hybrid attention architecture, which greatly improves long-context efficiency through Compress-4-Attention and Compress-128-Attention. For the Mixture-of Experts (MoE) components, it still adopt the DeepSeekMoE architecture, with only minor adjustments.
@@ -12,7 +12,7 @@ This document will show the main verification steps of the model, including supp
 ## Environment Preparation
 
 ### Model Weight
-- `DeepSeek-V4-w8a8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/) ( Model weights are being refreshed. )
+- `DeepSeek-V4-FLASH-W8A8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/) ( Model weights are being refreshed. )
 
 It is recommended to download the model weight to the shared directory of multiple nodes, such as `/root/.cache/`
 
@@ -22,7 +22,7 @@ If you want to deploy multi-node environment, you need to verify multi-node comm
 
 ### Installation
 
-You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in image `v0.13.0rc3-pre`.
+You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in image `v0.13.0rc3`.
 
 :::::{tab-set}
 :sync-group: install
@@ -35,7 +35,7 @@ Start the docker image on your each node.
 ```{code-block} bash
    :substitutions:
 
-export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-pre
+export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3
 docker run --rm \
     --name vllm-ascend \
     --shm-size=1g \
@@ -70,7 +70,7 @@ Start the docker image on your each node.
 ```{code-block} bash
    :substitutions:
 
-export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-a3-pre
+export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-a3
 docker run --rm \
     --name vllm-ascend \
     --shm-size=1g \
@@ -368,7 +368,7 @@ Before you start, please
             --kv-transfer-config \
             '{"kv_connector": "MooncakeConnectorV1",
             "kv_role": "kv_producer",
-            "kv_port": "30100",
+            "kv_port": "30000",
             "engine_id": "0",
             "kv_connector_module_path": "vllm_ascend.distributed.mooncake_connector",
             "kv_connector_extra_config": {
@@ -533,28 +533,28 @@ Once the preparation is done, you can start the server with the following comman
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.1 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.1 --dp-rpc-port 12321 --vllm-start-port 7100
 ```
 
 2. Prefill node 1
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.2 --dp-rpc-port 12890 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.2 --dp-rpc-port 12321 --vllm-start-port 7100
 ```
 
 3. Decode node 0
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.3 --dp-rpc-port 12777 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.3 --dp-rpc-port 12321 --vllm-start-port 7100
 ```
 
 4. Decode node 1
 
 ```shell
 # change ip to your own
-python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address xx.xx.xx.3 --dp-rpc-port 12777 --vllm-start-port 9100
+python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address xx.xx.xx.3 --dp-rpc-port 12321 --vllm-start-port 7100
 ```
 
 Finally, Refer to [Prefill-Decode Disaggregation (Deepseek)](./pd_disaggregation_mooncake_multi_node.md) to deploy the P-D disaggregation proxy.
