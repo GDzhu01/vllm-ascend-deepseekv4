@@ -243,6 +243,7 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         # share embed_tokens with the target model if needed
         self._maybe_share_embeddings(target_language_model)
+        self._maybe_share_topk_indices(target_language_model)
         self._maybe_share_lm_head(model)
 
         if self.parallel_drafting and self.pass_hidden_states_to_model:
@@ -344,6 +345,18 @@ class SpecDecodeBaseProposer(EagleProposer):
                     self._run_merged_draft, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
                 )
 
+    def _maybe_share_topk_indices(self, target_language_model: nn.Module) -> None:
+        if hasattr(target_language_model.model, "topk_indices_buffer"):
+            if hasattr(self.model.model, "topk_indices_buffer"):
+                del self.model.model.topk_indices_buffer
+            self.model.model.topk_indices_buffer = (
+                target_language_model.model.topk_indices_buffer
+            )
+            logger.info(
+                "Detecting MTP model with topk_indices_buffer."
+                "Sharing target model topk_indices_buffer with the draft model."
+            )
+
     def get_model(self) -> nn.Module:
         # get raw model out of the aclgraph wrapper.
         if isinstance(self.model, ACLGraphWrapper):
@@ -423,7 +436,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 )
                 per_layer_attn_metadata = dict()
                 for layer_name in self.attn_layer_names:
-                    per_layer_attn_metadata[layer_name] = attn_metadata_eagle
+                    per_layer_attn_metadata[layer_name] = [attn_metadata_eagle]
                 multi_steps_attn_metadata.append(per_layer_attn_metadata)
 
         model_positions = self._get_positions(num_tokens)
@@ -599,11 +612,11 @@ class SpecDecodeBaseProposer(EagleProposer):
         per_layer_attn_metadata = dict()
         # The first step of speculative.
         for layer_name in self.attn_layer_names:
-            per_layer_attn_metadata[layer_name] = attn_metadata
+            per_layer_attn_metadata[layer_name] = [attn_metadata]
         multi_steps_attn_metadata = [per_layer_attn_metadata]
 
         # Copy the old attn_metadata and update
-        attn_metadata_i = per_layer_attn_metadata[self.attn_layer_names[0]]
+        attn_metadata_i = per_layer_attn_metadata[self.attn_layer_names[0]][0]
 
         # Clone the data so that when calculating the data at position 2 and position 3
         # in the merged graph, it does not affect position 1
@@ -675,7 +688,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                                 attn_group=attn_group,
                             )
                             for layer_name in self.attn_layer_names:
-                                per_layer_attn_metadata[layer_name] = attn_metadata
+                                per_layer_attn_metadata[layer_name] = [attn_metadata]
                         multi_steps_attn_metadata.append(per_layer_attn_metadata)
         else:
             # Copy the old attn_metadata and update
@@ -694,7 +707,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                             attn_group=attn_group,
                         )
                         for layer_name in self.attn_layer_names:
-                            per_layer_attn_metadata[layer_name] = attn_metadata
+                            per_layer_attn_metadata[layer_name] = [attn_metadata]
                     multi_steps_attn_metadata.append(per_layer_attn_metadata)
 
         token_indices_to_sample_len = token_indices_to_sample.shape[0]
