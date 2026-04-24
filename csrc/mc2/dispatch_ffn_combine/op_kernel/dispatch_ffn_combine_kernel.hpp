@@ -865,7 +865,7 @@ private:
             int64_t gmOffsetC = layoutC.GetOffset(offsetC);
             int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
             blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
-                gmPerTokenScale2[rowStartThisCore], params.epilogueCoreNum, params.swigluLimit);
+                gmPerTokenScale2[rowStartThisCore], resource, params.epilogueCoreNum, params.swigluLimit);
         }
         AscendC::SyncAll<true>();
         // Synchronization signal: SwiGLU notifies GMM2 [1]
@@ -884,7 +884,7 @@ private:
                 int64_t gmOffsetC = layoutC.GetOffset(offsetC);
                 int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
                 blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], 
-                    gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], coreNum, params.swigluLimit);
+                    gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], resource, coreNum, params.swigluLimit);
             }
             AscendC::SyncAll<true>();
             // Synchronization signal: SwiGLU notifies GMM2 [2]

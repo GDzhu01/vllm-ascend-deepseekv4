@@ -86,7 +86,7 @@ public:
     CATLASS_DEVICE
     BlockEpilogue(Arch::Resource<ArchTag> const &resource, int32_t n, Params const &params = Params{}) : params(params)
     {
-        size_t ubOffset = 0;
+        ubOffset = 0;
         int32_t eventVMTE2 = 0;
         int32_t eventMTE2V = 0;
         int32_t eventMTE3V = 0;
@@ -120,8 +120,8 @@ public:
             AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(eventUbDMTE3VList[i]);  
         }
         ubPerTokenScaleOutput = resource.ubBuf.template GetBufferByByte<float>(ubOffset);
-        ubOffset += 32;
-        sharedTmpBuffer = resource.ubBuf.template GetBufferByByte<uint8_t>(ubOffset);
+        // ubOffset += 32;
+        // sharedTmpBuffer = resource.ubBuf.template GetBufferByByte<uint8_t>(ubOffset);
     }
     CATLASS_DEVICE
     void Finalize()
@@ -149,6 +149,7 @@ public:
         AscendC::GlobalTensor<ElementPerTokenScale> const &gmPerTokenScale1,
         AscendC::GlobalTensor<ElementD> const &gmD,
         AscendC::GlobalTensor<ElementPerTokenScale> const &gmPerTokenScale2,
+        Arch::Resource<ArchTag> const &resource,
 
         uint32_t epilogueCoreNum = 40,
         float swigluLimit = 0.0f,
@@ -156,6 +157,9 @@ public:
     )
     {
         callback();
+
+
+
         uint32_t blockM = shapeC.row();
         uint32_t blockN = shapeC.column();
 
@@ -172,6 +176,10 @@ public:
 
         uint32_t perCoreData =  blockM / epilogueCoreNum;
         uint32_t remainderData = blockM % epilogueCoreNum;
+
+
+        uint32_t scaleBlock = (perCoreData * sizeof(ElementPerTokenScale) + 31) / 32 * 32;
+        sharedTmpBuffer = resource.ubBuf.template GetBufferByByte<uint8_t>(ubOffset + scaleBlock);
 
         uint32_t tasksForIdx  = epilogueCoreIdx < remainderData ? perCoreData + 1 : perCoreData;
         uint32_t loopStartIdx = epilogueCoreIdx * perCoreData + (epilogueCoreIdx < remainderData? epilogueCoreIdx : remainderData);
@@ -307,6 +315,7 @@ private:
     int32_t eventUbDVMTE3List[UB_STAGES];
 
     uint32_t ubListId{0};
+    size_t ubOffset;
 
     AscendC::LocalTensor<float> ubCFp32List[UB_STAGES];
     AscendC::LocalTensor<float> ubCFp32ChunkNList[UB_STAGES];
