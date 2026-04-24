@@ -578,18 +578,15 @@ std::tuple<at::Tensor> construct_compressor_output_tensor(const at::Tensor &x, c
 std::tuple<at::Tensor>
 compressor_meta(const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate, at::Tensor &state_cache,
                 const at::Tensor &ape, const at::Tensor &norm_weight, const at::Tensor &rope_sin,
-                const at::Tensor &rope_cos, const c10::optional<at::Tensor> &state_block_table,
-                const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
-                const c10::optional<at::Tensor> &start_pos, int64_t rope_head_dim, int64_t cmp_ratio, int64_t coff,
-                double norm_eps, int64_t rotary_mode, int64_t cache_mode)
+                const at::Tensor &rope_cos, int64_t rope_head_dim, int64_t cmp_ratio,
+                const c10::optional<at::Tensor> &state_block_table, const c10::optional<at::Tensor> &cu_seqlens,
+                const c10::optional<at::Tensor> &seqused, const c10::optional<at::Tensor> &start_pos,
+                int64_t coff, double norm_eps, int64_t rotary_mode, int64_t cache_mode)
 {
-    constexpr int DIM_1 = 1;
-    constexpr int DIM_2 = 2;
-    constexpr int DIM_3 = 3;
-    constexpr int VALUE_0 = 0;
-    constexpr int CONTINUOUS = 1;
-    constexpr int CYCLE = 2;
-
+    // construct the output tensor
+    auto x_dim = x.dim();
+    auto norm_weight_dim = norm_weight.dim();
+    auto rope_sin_dim = rope_sin.dim();
     std::tuple<at::Tensor> output = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio, coff);
 
     return output;
@@ -745,7 +742,7 @@ at::Tensor npu_quant_lightning_indexer_metadata_meta(
     int64_t num_heads_q, int64_t num_heads_k, int64_t head_dim, int64_t query_quant_mode, int64_t key_quant_mode, 
     const c10::optional<at::Tensor> &actual_seq_lengths_query, const c10::optional<at::Tensor> &actual_seq_lengths_key, int64_t batch_size, 
     int64_t max_seqlen_q, int64_t max_seqlen_k, const c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, 
-    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio)
+    int64_t sparse_mode, int64_t pre_tokens, int64_t next_tokens, int64_t cmp_ratio, const c10::string_view device)
 {
     constexpr int64_t OUTPUT_SIZE = 1024;
     at::Tensor output;
@@ -753,6 +750,14 @@ at::Tensor npu_quant_lightning_indexer_metadata_meta(
         output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_query.value().device()));
     } else if (actual_seq_lengths_key.has_value()) {
         output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(actual_seq_lengths_key.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
     }
 
     return output;
@@ -998,11 +1003,10 @@ std::tuple<at::Tensor, at::Tensor> npu_kv_quant_sparse_attn_sharedkv_meta(const 
     const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table,
     const c10::optional<at::Tensor> &cu_seqlens_q, const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
     const c10::optional<at::Tensor> &cu_seqlens_cmp_kv, const c10::optional<at::Tensor> &seqused_q, 
-    const c10::optional<at::Tensor> &seqused_kv, const c10::optional<at::Tensor> &ori_topk_length, const c10::optional<at::Tensor> &cmp_topk_length,
-    const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
+    const c10::optional<at::Tensor> &seqused_kv, const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
     int64_t tile_size, int64_t rope_head_dim, double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, 
     int64_t cmp_mask_mode, int64_t ori_win_left, int64_t ori_win_right, c10::string_view layout_q,
-    c10::string_view layout_kv, int64_t topk_value_mode, bool return_softmax_lse)
+    c10::string_view layout_kv, bool return_softmax_lse)
 {
     std::string layout_q_str = std::string(layout_q);
     std::tuple<at::Tensor, at::Tensor> output = construct_temp_output_tensor(q, layout_q_str, return_softmax_lse);
@@ -1020,8 +1024,6 @@ at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_meta(
     const c10::optional<at::Tensor> &cu_seqlens_cmp_kv,
     const c10::optional<at::Tensor> &seqused_q,
     const c10::optional<at::Tensor> &seqused_kv,
-    const c10::optional<at::Tensor> &ori_topk_length,
-    const c10::optional<at::Tensor> &cmp_topk_length,
     int64_t batch_size,
     int64_t max_seqlen_q,
     int64_t max_seqlen_kv,
@@ -1037,7 +1039,8 @@ at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_meta(
     c10::string_view layout_q,
     c10::string_view layout_kv,
     bool has_ori_kv,
-    bool has_cmp_kv)
+    bool has_cmp_kv,
+    const c10::string_view device)
 {
     constexpr int64_t OUTPUT_SIZE = 1024;
     at::Tensor output;
@@ -1051,10 +1054,14 @@ at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_meta(
         output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_q.value().device()));
     } else if (seqused_kv.has_value()) {
         output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(seqused_kv.value().device()));
-    } else if (ori_topk_length.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(ori_topk_length.value().device()));
-    } else if (cmp_topk_length.has_value()) {
-        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(cmp_topk_length.value().device()));
+    } else {
+        auto deviceOri = at::Device(std::string(device));
+        std::string device_str = "meta";
+        if (deviceOri.has_index()) {
+            device_str += ":";
+            device_str += std::to_string(deviceOri.index());
+        }
+        output = torch::empty({OUTPUT_SIZE}, torch::dtype(torch::kInt32).device(at::Device(device_str)));
     }
     return output;
 }
