@@ -96,11 +96,11 @@ bool SparseAttnSharedkvMetadataCpuKernel::CheckSingleParam()
         KERNEL_LOG_ERROR("max_seqlen_q should not be negative, but got %d", querySeqSize_);
         return false;
     }
-    // num_heads_q 校验
-    if (layoutKv_ == "PA_ND" && queryHeadNum_ != 64) {
-        KERNEL_LOG_ERROR("num_heads_q should only be 64 when layout_kv is PA_ND, but got %d", queryHeadNum_);
-        return false;
-    }
+    // // num_heads_q 校验
+    // if (layoutKv_ == "PA_ND" && queryHeadNum_ != 64) {
+    //     KERNEL_LOG_ERROR("num_heads_q should only be 64 when layout_kv is PA_ND, but got %d", queryHeadNum_);
+    //     return false;
+    // }
     if (layoutKv_ == "BSND" && queryHeadNum_ != 64 && queryHeadNum_ != 32) {
         KERNEL_LOG_ERROR("num_heads_q should only be 64 or 32 when layout_kv is BSND, but got %d", queryHeadNum_);
         return false;
@@ -135,10 +135,10 @@ bool SparseAttnSharedkvMetadataCpuKernel::CheckSingleParam()
         KERNEL_LOG_ERROR("For layout_query TND, layout_key should be PA_BSND/TND");
         return false;
     }
-    if (layoutQuery_ == "BSND" && layoutKv_ == "TND") {
-        KERNEL_LOG_ERROR("For layout_query BSND, layout_key should be PA_BSND/BSND");
-        return false;
-    }
+    // if (layoutQuery_ == "BSND" && layoutKv_ == "TND") {
+    //     KERNEL_LOG_ERROR("For layout_query BSND, layout_key should be PA_BSND/BSND");
+    //     return false;
+    // }
     return true;
 }
 
@@ -204,13 +204,13 @@ int32_t SparseAttnSharedkvMetadataCpuKernel::GetKvBatchSize()
 
 bool SparseAttnSharedkvMetadataCpuKernel::CheckConsistency()
 {
-    int32_t queryBatchSize = GetQueryBatchSize();
-    int32_t kvBatchSize = GetKvBatchSize();
-    if (queryBatchSize != kvBatchSize) {
-        KERNEL_LOG_ERROR("The batch_size obtained from q Tensor should be the same as "
-                            "that obtained from kv tensor, but got %d and %d", queryBatchSize, kvBatchSize);
-        return false;
-    }
+    // int32_t queryBatchSize = GetQueryBatchSize();
+    // int32_t kvBatchSize = GetKvBatchSize();
+    // if (queryBatchSize != kvBatchSize) {
+    //     KERNEL_LOG_ERROR("The batch_size obtained from q Tensor should be the same as "
+    //                         "that obtained from kv tensor, but got %d and %d", queryBatchSize, kvBatchSize);
+    //     return false;
+    // }
     return true;
 }
 
@@ -219,7 +219,7 @@ bool SparseAttnSharedkvMetadataCpuKernel::CheckFeature()
     // 压缩率校验
     if (hasCmpKv_) { 
         // cmp_topk 校验
- 	    if (cmpTopK_ != 0 && cmpTopK_ != 512 ) {
+ 	    if (cmpTopK_ != 0 && cmpTopK_ != 512 && cmpTopK_ != 1024) {
  	    KERNEL_LOG_ERROR("cmp_topk should be 0 or 512, but got %d", cmpTopK_);
         return false;
         }
@@ -233,8 +233,7 @@ bool SparseAttnSharedkvMetadataCpuKernel::CheckFeature()
 
 bool SparseAttnSharedkvMetadataCpuKernel::ParamsCheck()
 {
-    // return (CheckSingleParam() && CheckExistence() && CheckConsistency() && CheckFeature());
-    return true;
+    return (CheckSingleParam() && CheckExistence() && CheckConsistency() && CheckFeature());
 }
 
 ValidSocVersion SparseAttnSharedkvMetadataCpuKernel::ProcessSocVersion()

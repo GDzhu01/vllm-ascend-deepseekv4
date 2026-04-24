@@ -1079,13 +1079,15 @@ ge::graphStatus SASTilingCheck::CheckSingleParaCmpSparseIndices() const
         }
         if (cmpSparseIndicesLayout_ == SASLayout::TND)
         {
-            OP_CHECK_IF((opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != TOPK_LIMIT),
-                        OP_LOGE(opName_, "K should be %u, but got: %lld ",TOPK_LIMIT,
+            OP_CHECK_IF(!(opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 512 || \
+                          opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 1024),
+                        OP_LOGE(opName_, "K should be 512 or 1024, but got: %lld ",
                         opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1)),
                         return ge::GRAPH_FAILED);
         } else{
-            OP_CHECK_IF((opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_FOUR - 1) != TOPK_LIMIT),
-                        OP_LOGE(opName_, "K should be %u, but got: %lld ",TOPK_LIMIT,
+            OP_CHECK_IF(!(opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 512 || \
+                          opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 1024),
+                        OP_LOGE(opName_, "K should be 512 or 1024, but got: %lld ",
                         opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_FOUR - 1)),
                         return ge::GRAPH_FAILED);
         }
@@ -1577,7 +1579,7 @@ ge::graphStatus SparseAttnSharedkvTiling::DoOpTiling(SASTilingInfo *tilingInfo)
     workspaceSize += PRELOAD_NUM * bmm2ResUbSize_ * MM2_RES_ELEM_SIZE * aicNum;
     workspaceSize += PRELOAD_NUM * bmm2ResUbSize_ * VEC2_RES_ELEM_SIZE * aicNum;
     if (tilingInfo->perfMode == SASTemplateMode::SCFA_TEMPLATE_MODE) {
-        workspaceSize += 4 * 512 * 512 * 2 * aicNum; // 4:bufNum 512:s2Size  512:D 2:sizeof(half)
+        workspaceSize += 4 * tilingInfo->sparseBlockCount * 512 * 2 * aicNum; // 4:bufNum 512:s2Size  512:D 2:sizeof(half)
         workspaceSize += 4 * 128 * 4 * (2 * aicNum); // 4:缓存有效mte2 size长度 128:份数 4:512B对齐长度 2:aiv数量
     }
     size_t *workSpaces = context_->GetWorkspaceSizes(1);

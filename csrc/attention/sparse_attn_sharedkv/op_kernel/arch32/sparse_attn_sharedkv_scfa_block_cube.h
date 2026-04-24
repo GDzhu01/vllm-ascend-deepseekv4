@@ -60,7 +60,7 @@ private:
     static constexpr uint32_t N_SPLIT_SIZE = 128;     // n方向切分
     static constexpr uint32_t K_L0_SPLIT_SIZE = 128;  // k方向L0切分
     static constexpr uint32_t K_L1_SPLIT_SIZE = 256;  // k方向L1切分
-    static constexpr uint32_t N_WORKSPACE_SIZE = 512; // n方向切分
+    static constexpr uint32_t N_WORKSPACE_SIZE = 1024; // n方向切分
     static constexpr uint32_t D_SPLIT_SIZE = 256; // d轴切分
 
 
@@ -703,7 +703,7 @@ __aicore__ inline void SASCubeBlock<SAST>::ComputeMm2(const RunInfo &info, const
                     nd2nzPara.srcNdMatrixStride = 0;
                     nd2nzPara.dstNzMatrixStride = 0;
                     DataCopy(bL1Tensor[(kL1 - kOffset) * 128 * N_SPLIT_SIZE],
-                             kvMergeGm_[info.cmpLoop % 4 * N_WORKSPACE_SIZE * 512 + kL1 * 128 * constInfo.headDim +
+                             kvMergeGm_[info.cmpLoop % 4 * N_WORKSPACE_SIZE * kSize + kL1 * 128 * constInfo.headDim +
                                         nL1 * N_SPLIT_SIZE],
                              nd2nzPara);
                 }

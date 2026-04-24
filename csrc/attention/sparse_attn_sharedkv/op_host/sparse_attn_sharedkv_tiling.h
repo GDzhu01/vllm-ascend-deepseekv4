@@ -125,7 +125,7 @@ constexpr uint32_t SPARSE_LIMIT = 2048;
 constexpr uint32_t SPARSE_MODE_LOWER = 3;
 constexpr uint32_t METADATA_LIMIT = 1024;
 constexpr uint32_t DIM_LIMIT = 512;
-constexpr uint32_t TOPK_LIMIT = 512;
+constexpr uint32_t TOPK_LIMIT = 1024;
 constexpr uint32_t BLOCK_SIZE_LIMIT = 1024;
 
 // -----------算子TilingData定义---------------
