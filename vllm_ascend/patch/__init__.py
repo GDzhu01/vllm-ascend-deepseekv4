@@ -191,7 +191,24 @@
 #    Future Plan:
 #       Remove this patch after the upcoming KV cache spec refactor.
 #
-# ** 9. File: platform/patch_minimax_usage_accounting.py**
+# ** 9. File: platform/patch_kv_cache_utils.py**
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#   1. `vllm.v1.core.kv_cache_utils.get_kv_cache_config_from_groups`
+#      `vllm.v1.core.kv_cache_utils.get_kv_cache_groups`
+#    Why:
+#       Ascend SVF/DSA models require revised grouping and tensor-sharing
+#       logic across page sizes and compress ratios.
+#    How:
+#       Monkey-patch only the public KV cache grouping and allocation entry
+#       points. The patch falls back to upstream vLLM unless the specs match
+#       the Ascend SVF/DSA MLA + SWA mixed-cache layout.
+#    Related PR (if no, explain why):
+#       No, this is an Ascend-specific behavior for current models.
+#    Future Plan:
+#       Remove this patch once upstream KV cache grouping generalizes these
+#       cases.
+#
+# ** 10. File: platform/patch_minimax_usage_accounting.py**
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   1. `vllm.entrypoints.openai.chat_completion.serving.OpenAIServingChat`
 #      `vllm.entrypoints.openai.engine.protocol.UsageInfo`
@@ -211,7 +228,7 @@
 #       Remove this patch once the upstream MiniMax usage-accounting fix is in
 #       the runtime vLLM version used by vllm-ascend.
 #
-# ** 10. File: platform/patch_glm_tool_call_parser.py**
+# ** 11. File: platform/patch_glm_tool_call_parser.py**
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   1. `vllm.entrypoints.openai.chat_completion.serving.OpenAIServingChat`
 #      `vllm.tool_parsers.glm4_moe_tool_parser.Glm4MoeModelToolParser`

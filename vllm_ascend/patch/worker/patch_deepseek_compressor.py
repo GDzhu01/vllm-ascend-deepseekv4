@@ -116,7 +116,17 @@ class AscendSVFSWACache(SVFSWACache):
         cache_config: CacheConfig,
         alignment: int = 0,
     ):
-        super().__init__(head_dim, window_size, dtype, prefix, cache_config)
+        torch.nn.Module.__init__(self)
+        self.kv_cache = torch.tensor([])
+        self.head_dim = head_dim
+        self.window_size = window_size
+        self.prefix = prefix
+        self.cache_config = cache_config
+        self.dtype = dtype
+        compilation_config = get_current_vllm_config().compilation_config
+        if prefix in compilation_config.static_forward_context:
+            raise ValueError(f"Duplicate layer name: {prefix}")
+        compilation_config.static_forward_context[prefix] = self
 
         self.block_size = get_deepseek_svf_block_size(
             cache_config.block_size if cache_config is not None else None
