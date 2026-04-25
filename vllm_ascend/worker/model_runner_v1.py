@@ -61,7 +61,6 @@ from vllm.v1.kv_cache_interface import (
     MambaSpec,
     MLAAttentionSpec,
     UniformTypeKVCacheSpecs,
-    SlidingWindowMLASpec,
 )
 from vllm.v1.outputs import (
     EMPTY_MODEL_RUNNER_OUTPUT,
@@ -94,7 +93,10 @@ from vllm.v1.worker.utils import AttentionGroup
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata, using_paged_attention
-from vllm_ascend.patch.platform.patch_kv_cache_interface import AscendMLAAttentionSpec
+from vllm_ascend.patch.platform.patch_kv_cache_interface import (
+    AscendMLAAttentionSpec,
+    SlidingWindowMLASpec,
+)
 
 # yapf conflicts with isort for this block
 # yapf: disable
