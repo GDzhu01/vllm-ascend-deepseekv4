@@ -21,6 +21,9 @@ from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 
 from vllm_ascend.attention.abstract import DSAAttentionImpl
+from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
+    get_deepseek_svf_block_size,
+)
 from vllm_ascend.patch.platform.patch_selector import get_attn_backend
 
 logger = init_logger(__name__)
@@ -171,8 +174,11 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             return None
         kv_cache_dtype = kv_cache_dtype_str_to_dtype(self.kv_cache_dtype,
                                                      vllm_config.model_config)
+        block_size = get_deepseek_svf_block_size(
+            vllm_config.cache_config.block_size
+        )
         return MLAAttentionSpec(
-            block_size=128,
+            block_size=block_size,
             num_kv_heads=1,
             head_size=self.head_size,
             dtype=kv_cache_dtype,

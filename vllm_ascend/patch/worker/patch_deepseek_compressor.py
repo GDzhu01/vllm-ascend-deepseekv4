@@ -10,6 +10,10 @@ from vllm.v1.kv_cache_interface import (
 from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
 from vllm.config.cache import CacheConfig
 from typing import TYPE_CHECKING
+from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
+    get_deepseek_svf_alignment,
+    get_deepseek_svf_block_size,
+)
 from vllm_ascend.patch.platform.patch_kv_cache_interface import AscendMLAAttentionSpec
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 
@@ -25,6 +29,8 @@ class AscendCompressorStateCache(CompressorStateCache):
         compress_ratio: int,
         block_size: int,
         prefix: str,
+        alignment: int = 0,
+        page_size_padded: int | None = None,
     ):
         torch.nn.Module.__init__(self)
         self.state_dim = state_dim
@@ -41,26 +47,20 @@ class AscendCompressorStateCache(CompressorStateCache):
         self.compress_ratio = compress_ratio
         coff = 1 + (compress_ratio == 4)
         self.sliding_window = coff * compress_ratio
-        # Block size is constrained by tensor sharing between compressor states
-        # and KV blocks. Since compressor states share the same physical tensor
-        # as KV blocks, they must use the same page size.
-        # The KV block shape [256//4, head_dim] = [64, 584] determines:
-        # - C4 compressor block shape [4, 2*512*2*4] -> block_size = 4
-        # - C128 compressor block shape [8, 512*2*4] -> block_size = 8
-
         self.block_size = block_size
+        self.alignment = alignment
+        self.page_size_padded = page_size_padded
 
 
     def get_kv_cache_spec(self, vllm_config) -> KVCacheSpec:
-        page_size_padded = 16640 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 131072
         return SlidingWindowMLASpec(  # only has one vector instead of K + V
             block_size=self.block_size,
             num_kv_heads=1,
             head_size=self.state_dim,
             dtype=self.dtype,
             sliding_window=self.sliding_window,
-            alignment=576,  # NOTE: FlashMLA requires 576B alignment
-            page_size_padded=page_size_padded
+            alignment=self.alignment,
+            page_size_padded=self.page_size_padded
         )
 
     def forward(self): ...
@@ -82,8 +82,11 @@ class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
 
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        block_size = get_deepseek_svf_block_size(
+            self.cache_config.block_size if self.cache_config is not None else None
+        )
         return AscendMLAAttentionSpec(  # Only has one vector instead of K + V
-            block_size=128,
+            block_size=block_size,
             num_kv_heads=1,
             head_size=self.head_dim,
             dtype=self.dtype,
@@ -111,18 +114,16 @@ class AscendSVFSWACache(SVFSWACache):
         dtype: torch.dtype,
         prefix: str,
         cache_config: CacheConfig,
+        alignment: int = 0,
     ):
         super().__init__(head_dim, window_size, dtype, prefix, cache_config)
 
-        # Block size is constrained by tensor sharing between SWA and C4A KV blocks.
-        # Since both block types share the same physical tensor, they must use the
-        # same page size. The C4A KV block shape [256//4, head_dim] = [64, head_dim]
-        # determines the SWA block size of 64 tokens per block.
-        # TODO(cmq): make SWA block size automatically determined and configurable.
-        self.block_size = 128
+        self.block_size = get_deepseek_svf_block_size(
+            cache_config.block_size if cache_config is not None else None
+        )
+        self.alignment = alignment
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        # TODO(cmq): alignment = 0 if A3 else 128
         return SlidingWindowMLASpec(
             block_size=self.block_size,
             num_kv_heads=1,
@@ -131,7 +132,7 @@ class AscendSVFSWACache(SVFSWACache):
             sliding_window=self.window_size,
             cache_dtype_str=self.cache_config.cache_dtype,
             model_version="svf",
-            alignment=0,  # NOTE: FlashMLA requires 576B alignment
+            alignment=self.alignment,
         )
 
     def forward(self): ...
