@@ -26,6 +26,28 @@ _ORIG_GET_KV_CACHE_CONFIG_FROM_GROUPS = (
 _ORIG_GET_KV_CACHE_GROUPS = _kv_cache_utils.get_kv_cache_groups
 
 
+def approximate_gcd(values: list[int], *, lower_bound: int | None = None) -> int:
+    """Pick a group size that minimizes total upward padding."""
+    if not values:
+        raise ValueError("values must be non-empty")
+    if any(x <= 0 for x in values):
+        raise ValueError(f"values must be positive, got: {values!r}")
+
+    min_d = max(1, lower_bound if lower_bound is not None else 1)
+    max_d = max(values)
+    if min_d > max_d:
+        return min_d
+
+    best_d = min_d
+    best_pad: int | None = None
+    for d in range(min_d, max_d + 1):
+        pad = sum((d - (x % d)) % d for x in values)
+        if best_pad is None or pad < best_pad or (pad == best_pad and d > best_d):
+            best_pad = pad
+            best_d = d
+    return best_d
+
+
 def _has_svf_mla_and_swa_specs(kv_cache_spec: dict[str, KVCacheSpec]) -> bool:
     has_mla = False
     has_swa = False
@@ -219,7 +241,7 @@ def _get_kv_cache_groups_uniform_groups(
     num_layer_tuples_per_group: list[int] = [
         g_spec.get_num_layer_tuples() for g_spec in grouped_specs
     ]
-    num_layer_tuples = _kv_cache_utils.approximate_gcd(
+    num_layer_tuples = approximate_gcd(
         num_layer_tuples_per_group,
         lower_bound=full_mla_specs[0].get_num_layer_tuples(),
     )
