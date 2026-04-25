@@ -79,7 +79,11 @@ class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
         cache_config: CacheConfig,
         compress_ratio: int = 1,
     ):
-        super().__init__(head_dim, dtype, prefix, cache_config, compress_ratio)
+        try:
+            super().__init__(head_dim, dtype, prefix, cache_config, compress_ratio)
+        except TypeError:
+            super().__init__(head_dim, dtype, prefix, cache_config)
+            self.compress_ratio = compress_ratio
 
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
