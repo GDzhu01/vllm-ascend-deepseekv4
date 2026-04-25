@@ -535,51 +535,22 @@ class Compressor(nn.Module):
         self.norm = RMSNorm(self.head_dim, config.norm_eps)
 
         state_dtype = torch.float32
-        target_block_size = get_deepseek_svf_block_size(
-            cache_config.block_size if cache_config is not None else None
-        )
-        kv_cache_dtype = kv_cache_dtype_str_to_dtype(
-            cache_config.cache_dtype if cache_config is not None else "auto",
-            self.vllm_config.model_config,
-        )
-        state_dim = (
-            2 * self.coff * self.head_dim
-            if compress_ratio == 4 else 2 * self.head_dim
-        )
-        mla_alignment = get_deepseek_svf_alignment(
-            head_dim=self.head_dim,
-            rope_head_dim=self.rope_head_dim,
-        )
-        state_block_size, state_page_size_padded = (
-            get_deepseek_v4_state_cache_layout(
-                target_block_size,
-                compress_ratio=compress_ratio,
-                state_dim=state_dim,
-                state_dtype=state_dtype,
-                kv_head_size=self.head_dim,
-                kv_dtype=kv_cache_dtype,
-                indexer_head_size=config.index_head_dim,
-            )
-        )
+        # TODO(zyj): change following codes if block_size is configurable & refactor the magic numbers
         if compress_ratio == 4:
             self.state_cache = CompressorStateCache(
-                state_dim=state_dim,  # kv_state + score_state
+                state_dim=2 * self.coff * self.head_dim,  # kv_state + score_state
                 dtype=state_dtype,
                 compress_ratio=compress_ratio,
                 prefix=f"{prefix}.state_cache",
-                block_size=state_block_size,
-                alignment=mla_alignment,
-                page_size_padded=state_page_size_padded,
+                block_size=2,
             )
         elif compress_ratio == 128:
             self.state_cache = CompressorStateCache(
-                state_dim=state_dim,  # kv_state + score_state
+                state_dim=2 * self.head_dim,  # kv_state + score_state
                 dtype=state_dtype,
                 compress_ratio=compress_ratio,
                 prefix=f"{prefix}.state_cache",
-                block_size=state_block_size,
-                alignment=mla_alignment,
-                page_size_padded=state_page_size_padded,
+                block_size=32
             )
         else:
             raise ValueError(f"Only support compress_ratio in [4, 128]. Got unsupported compress_ratio: {compress_ratio}")

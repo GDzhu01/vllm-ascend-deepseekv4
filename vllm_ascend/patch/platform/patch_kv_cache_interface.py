@@ -270,7 +270,7 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
 
         # ====================GPU=======================
         # if spec.alignment is not None:
-        #     # Apply model-specific MLA alignment padding.
+        #     # Apply 576-byte alignment padding for SVF 512.
         #     # KV cache tensor is allocated with padded page_size,
         #     # but kernels access with shape [num_blocks, real_page_size].
         #     actual_page_size = spec.real_page_size_bytes

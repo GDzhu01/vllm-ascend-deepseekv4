@@ -115,17 +115,12 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
 
         ascend_device_type = get_ascend_device_type()
         k_dtype = torch.fp8 if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
-        mla_alignment = get_deepseek_svf_alignment(
-            head_dim=self.head_dim,
-            rope_head_dim=self.rope_head_dim or 0,
-        )
         self.swa_cache_layer = SVFSWACache(
             head_dim=self.head_dim,
             window_size=self.window_size,
             dtype=k_dtype,
             prefix=f"{prefix}.swa_cache",
             cache_config=cache_config,
-            alignment=mla_alignment,
         )
 
         self.dsa_attn = DSAAttention(

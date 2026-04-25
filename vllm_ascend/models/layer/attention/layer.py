@@ -177,11 +177,8 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             return None
         kv_cache_dtype = kv_cache_dtype_str_to_dtype(self.kv_cache_dtype,
                                                      vllm_config.model_config)
-        block_size = get_deepseek_svf_block_size(
-            vllm_config.cache_config.block_size
-        )
         return MLAAttentionSpec(
-            block_size=block_size,
+            block_size=128,
             num_kv_heads=1,
             head_size=self.head_size,
             dtype=kv_cache_dtype,
