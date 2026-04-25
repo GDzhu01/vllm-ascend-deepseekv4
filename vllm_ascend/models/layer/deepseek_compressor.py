@@ -2,7 +2,9 @@ import torch
 from torch import nn
 
 from vllm.config import VllmConfig, get_current_vllm_config
+from vllm.config.cache import CacheConfig
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
 from vllm.v1.attention.backend import AttentionBackend
 from vllm.v1.kv_cache_interface import KVCacheSpec
 
@@ -10,7 +12,10 @@ from vllm_ascend.attention.dsa_v1 import AscendDSABackend
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
     get_deepseek_svf_block_size,
 )
-from vllm_ascend.patch.platform.patch_kv_cache_interface import SlidingWindowMLASpec
+from vllm_ascend.patch.platform.patch_kv_cache_interface import (
+    AscendMLAAttentionSpec,
+    SlidingWindowMLASpec,
+)
 
 
 class CompressorStateCache(nn.Module, AttentionLayerBase):
@@ -53,6 +58,43 @@ class CompressorStateCache(nn.Module, AttentionLayerBase):
             sliding_window=self.sliding_window,
             alignment=self.alignment,
             page_size_padded=self.page_size_padded,
+        )
+
+    def forward(self): ...
+
+    def get_attn_backend(self) -> type[AttentionBackend]:
+        return AscendDSABackend
+
+
+class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
+    def __init__(
+        self,
+        head_dim: int,
+        dtype: torch.dtype,
+        prefix: str,
+        cache_config: CacheConfig,
+        compress_ratio: int = 1,
+    ):
+        try:
+            super().__init__(head_dim, dtype, prefix, cache_config, compress_ratio)
+        except TypeError:
+            super().__init__(head_dim, dtype, prefix, cache_config)
+            self.compress_ratio = compress_ratio
+
+    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        block_size = get_deepseek_svf_block_size(
+            self.cache_config.block_size if self.cache_config is not None else None
+        )
+        return AscendMLAAttentionSpec(
+            block_size=block_size,
+            num_kv_heads=1,
+            head_size=self.head_dim,
+            dtype=self.dtype,
+            model_version="svf",
+            compress_ratio=self.compress_ratio,
+            cache_dtype_str=self.cache_config.cache_dtype,
+            scale_dim=1 if self.head_dim == 128 else 0,
+            scale_dtype=torch.float16,
         )
 
     def forward(self): ...

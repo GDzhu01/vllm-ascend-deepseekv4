@@ -22,7 +22,9 @@ from vllm.logger import logger
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.model_executor.model_loader import get_model
 from vllm.model_executor.models import supports_multimodal
-from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
+from vllm_ascend.models.layer.deepseek_compressor import (
+    AscendDeepseekV32IndexerCache as DeepseekV32IndexerCache,
+)
 from vllm.model_executor.models.llama_eagle3 import Eagle3LlamaForCausalLM
 from vllm.triton_utils import HAS_TRITON, triton
 from vllm.utils.math_utils import cdiv
