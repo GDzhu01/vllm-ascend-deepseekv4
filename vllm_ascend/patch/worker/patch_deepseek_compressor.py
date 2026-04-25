@@ -60,8 +60,8 @@ class AscendCompressorStateCache(CompressorStateCache):
             page_size_padded = 16896 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 81920
         else:
             page_size_padded = 16640 if self.state_dim == 2*1024 and self.compress_ratio == 4 else 131072
-        if get_ascend_device_type() in {AscendDeviceType.A5}:
-            self.dtype = torch.float8_e4m3fn
+        # if get_ascend_device_type() in {AscendDeviceType.A5}:
+        #     self.dtype = torch.float8_e4m3fn
 
         return SlidingWindowMLASpec(  # only has one vector instead of K + V
             block_size=self.block_size,
@@ -110,7 +110,7 @@ class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
             # TODO(zyj): refactor this magic number
             # page_size_padded=33280,
             scale_dim=1 if self.head_dim == 128 else 0,
-            scale_dtype=torch.float16,
+            scale_dtype=torch.float,
         )
 
     def forward(self): ...

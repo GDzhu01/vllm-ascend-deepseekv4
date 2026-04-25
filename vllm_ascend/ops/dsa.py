@@ -202,6 +202,7 @@ def dsa_forward(
     indexer_state_cache = None
     indexer_k_cache = None
     indexer_scale_cache = None
+    indexer_full_cache = None
 
     if self.compress_ratio > 1:
         state_cache = self.compressor.state_cache.kv_cache
@@ -209,7 +210,7 @@ def dsa_forward(
     if self.compress_ratio == 4:
         # TODO(qcs): refactor me
         indexer_state_cache = self.indexer.compressor.state_cache.kv_cache
-        indexer_k_cache, indexer_scale_cache = self.indexer.k_cache.kv_cache[0][0][0], self.indexer.k_cache.kv_cache[0][0][1]
+        indexer_k_cache, indexer_scale_cache, indexer_full_cache = self.indexer.k_cache.kv_cache[0][0][0], self.indexer.k_cache.kv_cache[0][0][1], self.indexer.k_cache.kv_cache[0][0][2]
 
     kv_cache = (
         compress_kv_cache,
@@ -218,6 +219,7 @@ def dsa_forward(
         indexer_state_cache,
         indexer_k_cache,
         indexer_scale_cache,
+        indexer_full_cache,
     )
 
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,
