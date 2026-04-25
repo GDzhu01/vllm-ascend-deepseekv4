@@ -189,41 +189,48 @@ def _get_kv_cache_groups_uniform_groups(
     assert len(grouped_specs) > 0 and all(
         isinstance(spec, UniformTypeKVCacheSpecs) for spec in grouped_specs
     )
-    # For now, we restrict the first grouped_spec to be UniformTypeKVCacheSpecs
-    # containing only MLAAttentionSpec.
-    full_mla_spec = grouped_specs[0]
-    full_mla_c128_spec = grouped_specs[1]
+    full_mla_specs: list[UniformTypeKVCacheSpecs] = []
+    swa_mla_specs: list[UniformTypeKVCacheSpecs] = []
+    for group in grouped_specs:
+        first_spec = next(iter(group.kv_cache_specs.values()))
+        if isinstance(first_spec, MLAAttentionSpec):
+            assert all(
+                isinstance(spec, MLAAttentionSpec)
+                for spec in group.kv_cache_specs.values()
+            )
+            full_mla_specs.append(group)
+        else:
+            assert isinstance(first_spec, SlidingWindowMLASpec)
+            assert all(
+                isinstance(spec, SlidingWindowMLASpec)
+                for spec in group.kv_cache_specs.values()
+            )
+            swa_mla_specs.append(group)
 
-    assert all(
-        isinstance(spec, MLAAttentionSpec)
-        for spec in full_mla_spec.kv_cache_specs.values()
-    )
-    full_mla_group = KVCacheGroupSpec(
-        layer_names=list(full_mla_spec.kv_cache_specs.keys()),
-        kv_cache_spec=full_mla_spec,
-    )
-    full_mla_c128_group = KVCacheGroupSpec(
-        layer_names=list(full_mla_c128_spec.kv_cache_specs.keys()),
-        kv_cache_spec=full_mla_c128_spec,
-    )
+    assert full_mla_specs and swa_mla_specs
+    full_mla_groups = [
+        KVCacheGroupSpec(
+            layer_names=list(full_mla_spec.kv_cache_specs.keys()),
+            kv_cache_spec=full_mla_spec,
+        )
+        for full_mla_spec in full_mla_specs
+    ]
 
     num_layer_tuples_per_group: list[int] = [
         g_spec.get_num_layer_tuples() for g_spec in grouped_specs
     ]
     num_layer_tuples = _kv_cache_utils.approximate_gcd(
-        num_layer_tuples_per_group, lower_bound=num_layer_tuples_per_group[0]
+        num_layer_tuples_per_group,
+        lower_bound=full_mla_specs[0].get_num_layer_tuples(),
     )
 
-    # TODO(cmq): this is not general enough
-    swa_mla_specs = grouped_specs[2:]
-
-    assert all(
-        isinstance(spec, SlidingWindowMLASpec)
-        for group in swa_mla_specs
-        for spec in group.kv_cache_specs.values()
+    all_page_sizes = sorted(
+        {
+            page_size
+            for full_mla_spec in full_mla_specs
+            for page_size in full_mla_spec.get_page_sizes()
+        }
     )
-
-    all_page_sizes = full_mla_spec.get_page_sizes()
     swa_mla_groups: list[KVCacheGroupSpec] = []
     for sm_spec in swa_mla_specs:
         sm_page_sizes = sm_spec.get_page_sizes()
@@ -262,7 +269,7 @@ def _get_kv_cache_groups_uniform_groups(
                 )
             )
 
-    return [full_mla_group, full_mla_c128_group, *swa_mla_groups]
+    return [*full_mla_groups, *swa_mla_groups]
 
 
 def get_kv_cache_groups(
