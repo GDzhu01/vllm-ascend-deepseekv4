@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from vllm.config import VllmConfig
 from vllm.utils.math_utils import cdiv
@@ -255,21 +255,18 @@ def _get_kv_cache_groups_uniform_groups(
     )
     swa_mla_groups: list[KVCacheGroupSpec] = []
     for sm_spec in swa_mla_specs:
-        sm_page_sizes = sm_spec.get_page_sizes()
         layers_per_size: dict[int, list[str]] = defaultdict(list)
-        assert max(sm_page_sizes) <= max(all_page_sizes)
 
-        # Unify page size by padding layers' page_size to the nearest larger page_size.
-        for sm_page_size in sm_page_sizes:
+        # Unify page size by padding each layer to the nearest larger full-MLA
+        # page size. Assign each layer exactly once; otherwise multiple SWA
+        # page sizes that map to the same candidate can duplicate layers.
+        for layer_name, layer_spec in sm_spec.kv_cache_specs.items():
+            sm_page_size = layer_spec.page_size_bytes
+            assert sm_page_size <= max(all_page_sizes)
             candidate = min(x for x in all_page_sizes if x >= sm_page_size)
             if sm_page_size < candidate:
-                for layer_name, layer_spec in sm_spec.kv_cache_specs.items():
-                    if layer_spec.page_size_bytes != sm_page_size:
-                        continue
-                    object.__setattr__(layer_spec, "page_size_padded", candidate)
-            for layer_name, layer_spec in sm_spec.kv_cache_specs.items():
-                if layer_spec.page_size_bytes == candidate:
-                    layers_per_size[candidate].append(layer_name)
+                object.__setattr__(layer_spec, "page_size_padded", candidate)
+            layers_per_size[candidate].append(layer_name)
         assert len(set(len(layers) for layers in layers_per_size.values())) == 1
         num_layers_per_size = len(next(iter(layers_per_size.values())))
 
@@ -294,6 +291,32 @@ def _get_kv_cache_groups_uniform_groups(
     return [*full_mla_groups, *swa_mla_groups]
 
 
+def _check_grouped_layer_names(
+    kv_cache_spec: dict[str, KVCacheSpec],
+    kv_cache_groups: list[KVCacheGroupSpec],
+) -> None:
+    expected_names = set(kv_cache_spec)
+    grouped_names: list[str] = [
+        layer_name
+        for group in kv_cache_groups
+        for layer_name in group.layer_names
+    ]
+    grouped_name_counts = Counter(grouped_names)
+    grouped_name_set = set(grouped_name_counts)
+    duplicated_names = sorted(
+        name for name, count in grouped_name_counts.items() if count > 1
+    )
+    missing_names = sorted(expected_names - grouped_name_set)
+    extra_names = sorted(grouped_name_set - expected_names)
+    if duplicated_names or missing_names or extra_names:
+        raise ValueError(
+            "Invalid Ascend SVF KV cache groups: "
+            f"duplicated={duplicated_names}, "
+            f"missing={missing_names}, "
+            f"extra={extra_names}"
+        )
+
+
 def get_kv_cache_groups(
     vllm_config: VllmConfig, kv_cache_spec: dict[str, KVCacheSpec]
 ) -> list[KVCacheGroupSpec]:
@@ -310,7 +333,9 @@ def get_kv_cache_groups(
         return _kv_cache_utils._get_kv_cache_groups_uniform_spec(kv_cache_spec)
     grouped_specs = group_and_unify_kv_cache_specs(kv_cache_spec)
     if grouped_specs:
-        return _get_kv_cache_groups_uniform_groups(grouped_specs)
+        kv_cache_groups = _get_kv_cache_groups_uniform_groups(grouped_specs)
+        _check_grouped_layer_names(kv_cache_spec, kv_cache_groups)
+        return kv_cache_groups
     return _ORIG_GET_KV_CACHE_GROUPS(vllm_config, kv_cache_spec)
 
 
