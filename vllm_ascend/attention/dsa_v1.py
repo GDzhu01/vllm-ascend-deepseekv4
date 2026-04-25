@@ -17,7 +17,6 @@ from vllm.v1.attention.backend import (AttentionCGSupport,
                                         AttentionMetadataBuilder)
 from vllm.v1.kv_cache_interface import AttentionSpec, MLAAttentionSpec
 from vllm.model_executor.models.utils import extract_layer_index
-from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.abstract import DSAAttentionImpl

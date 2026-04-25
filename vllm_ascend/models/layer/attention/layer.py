@@ -18,7 +18,7 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
-from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
+from vllm_ascend.models.layer.deepseek_compressor import SVFSWACache
 
 from vllm_ascend.attention.abstract import DSAAttentionImpl
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (

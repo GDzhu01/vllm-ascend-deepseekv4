@@ -1,21 +1,22 @@
 import torch
+import sys
 
 import vllm
 from vllm.config import get_current_vllm_config
-from vllm.model_executor.layers.deepseek_compressor import CompressorStateCache
 from vllm.v1.kv_cache_interface import (
     KVCacheSpec,
     SlidingWindowMLASpec,
 )
 from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
 from vllm.config.cache import CacheConfig
-from typing import TYPE_CHECKING
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
-    get_deepseek_svf_alignment,
     get_deepseek_svf_block_size,
 )
+from vllm_ascend.models.layer.deepseek_compressor import (
+    CompressorStateCache,
+    SVFSWACache,
+)
 from vllm_ascend.patch.platform.patch_kv_cache_interface import AscendMLAAttentionSpec
-from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 
 from vllm.config import VllmConfig
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend
@@ -150,7 +151,19 @@ class AscendSVFSWACache(SVFSWACache):
     def get_attn_backend(self):
         return AscendDSABackend
 
-vllm.model_executor.layers.deepseek_compressor.CompressorStateCache = AscendCompressorStateCache
 vllm.model_executor.models.deepseek_v2.DeepseekV32IndexerCache = AscendDeepseekV32IndexerCache
-vllm.v1.attention.backends.mla.sparse_swa.SVFSWACache = AscendSVFSWACache
+
+_deepseek_compressor_mod = sys.modules.get(
+    "vllm.model_executor.layers.deepseek_compressor"
+)
+if _deepseek_compressor_mod is not None:
+    _deepseek_compressor_mod.CompressorStateCache = AscendCompressorStateCache
+
+try:
+    import vllm.v1.attention.backends.mla.sparse_swa as _sparse_swa
+except ModuleNotFoundError:
+    _sparse_swa = None
+
+if _sparse_swa is not None:
+    _sparse_swa.SVFSWACache = AscendSVFSWACache
 

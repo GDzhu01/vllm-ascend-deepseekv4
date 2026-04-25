@@ -67,7 +67,7 @@ from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
 from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
-from vllm.model_executor.layers.deepseek_compressor import CompressorStateCache
+from vllm_ascend.models.layer.deepseek_compressor import CompressorStateCache
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
     get_deepseek_svf_alignment,
     get_deepseek_svf_block_size,

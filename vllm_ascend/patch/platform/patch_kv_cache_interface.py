@@ -1,19 +1,88 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from collections import Counter
 from dataclasses import dataclass
 
 import torch
 import vllm.v1.kv_cache_interface
 from typing_extensions import Self
+from vllm.config import VllmConfig
+from vllm.utils.math_utils import cdiv
 from vllm.utils.math_utils import round_up
 from vllm.utils.torch_utils import get_dtype_size
 from vllm.v1.kv_cache_interface import (
-    SlidingWindowMLASpec,
+    KVCacheSpec,
     MLAAttentionSpec,
+    SlidingWindowSpec,
+    UniformTypeKVCacheSpecs,
 )
 
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
+
+
+if hasattr(vllm.v1.kv_cache_interface, "SlidingWindowMLASpec"):
+    SlidingWindowMLASpec = vllm.v1.kv_cache_interface.SlidingWindowMLASpec
+else:
+
+    @dataclass(frozen=True, kw_only=True)
+    class SlidingWindowMLASpec(SlidingWindowSpec):
+        """Sliding window attention with MLA cache format for DeepSeek SVF."""
+
+        cache_dtype_str: str | None = None
+        alignment: int | None = None
+        compress_ratio: int = 1
+        model_version: str = "svf"
+
+        def __post_init__(self):
+            _init_mla_cache_fields(self)
+
+        @property
+        def storage_block_size(self) -> int:
+            return self.block_size // self.compress_ratio
+
+        @property
+        def real_page_size_bytes(self) -> int:
+            return (
+                self.storage_block_size
+                * self.num_kv_heads
+                * self.head_size
+                * get_dtype_size(self.dtype)
+            )
+
+        @classmethod
+        def merge(cls, specs: list[Self]) -> Self:
+            assert all(isinstance(spec, SlidingWindowMLASpec) for spec in specs), (
+                "All attention layers in the same KV cache group must be "
+                "SlidingWindowMLASpec."
+            )
+            cache_dtype_str_set = set(spec.cache_dtype_str for spec in specs)
+            compress_ratio_set = set(spec.compress_ratio for spec in specs)
+            model_version_set = set(spec.model_version for spec in specs)
+            sliding_window_set = set(spec.sliding_window for spec in specs)
+            assert (
+                len(cache_dtype_str_set) == 1
+                and len(compress_ratio_set) == 1
+                and len(model_version_set) == 1
+                and len(sliding_window_set) == 1
+            ), (
+                "All attention layers in the same KV cache group must use the "
+                "same quantization method, compress ratio, model version and "
+                "sliding window size."
+            )
+            return cls(
+                block_size=specs[0].block_size,
+                num_kv_heads=specs[0].num_kv_heads,
+                head_size=specs[0].head_size,
+                dtype=specs[0].dtype,
+                page_size_padded=specs[0].page_size_padded,
+                sliding_window=sliding_window_set.pop(),
+                cache_dtype_str=cache_dtype_str_set.pop(),
+                compress_ratio=compress_ratio_set.pop(),
+                model_version=model_version_set.pop(),
+            )
+
+    vllm.v1.kv_cache_interface.SlidingWindowMLASpec = SlidingWindowMLASpec
 
 
 @dataclass(frozen=True)
@@ -202,3 +271,54 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
 
 vllm.v1.kv_cache_interface.MLAAttentionSpec = AscendMLAAttentionSpec
 vllm.v1.kv_cache_interface._init_mla_cache_fields = _init_mla_cache_fields
+
+
+if not hasattr(UniformTypeKVCacheSpecs, "_vllm_ascend_orig_is_uniform_type"):
+    UniformTypeKVCacheSpecs._vllm_ascend_orig_is_uniform_type = (  # type: ignore[attr-defined]
+        UniformTypeKVCacheSpecs.is_uniform_type
+    )
+_ORIG_IS_UNIFORM_TYPE = (  # type: ignore[attr-defined]
+    UniformTypeKVCacheSpecs._vllm_ascend_orig_is_uniform_type
+)
+
+
+def _is_uniform_type_with_svf(
+    cls, kv_cache_specs: dict[str, KVCacheSpec]
+) -> bool:
+    one_spec = next(iter(kv_cache_specs.values()))
+    if isinstance(one_spec, SlidingWindowMLASpec):
+        return all(
+            isinstance(spec, SlidingWindowMLASpec)
+            and spec.sliding_window == one_spec.sliding_window
+            for spec in kv_cache_specs.values()
+        )
+    if isinstance(one_spec, AscendMLAAttentionSpec):
+        return all(
+            isinstance(spec, MLAAttentionSpec) for spec in kv_cache_specs.values()
+        )
+    return _ORIG_IS_UNIFORM_TYPE(kv_cache_specs)
+
+
+def _get_page_sizes(self: UniformTypeKVCacheSpecs) -> list[int]:
+    return list(set(spec.page_size_bytes for spec in self.kv_cache_specs.values()))
+
+
+def _get_num_layer_tuples(self: UniformTypeKVCacheSpecs) -> int:
+    return Counter(
+        spec.page_size_bytes for spec in self.kv_cache_specs.values()
+    ).most_common(1)[0][1]
+
+
+def _max_memory_usage_pages(
+    self: UniformTypeKVCacheSpecs, vllm_config: VllmConfig
+) -> int:
+    return max(
+        cdiv(spec.max_memory_usage_bytes(vllm_config), spec.page_size_bytes)
+        for spec in self.kv_cache_specs.values()
+    )
+
+
+UniformTypeKVCacheSpecs.is_uniform_type = classmethod(_is_uniform_type_with_svf)
+UniformTypeKVCacheSpecs.get_page_sizes = _get_page_sizes
+UniformTypeKVCacheSpecs.get_num_layer_tuples = _get_num_layer_tuples
+UniformTypeKVCacheSpecs.max_memory_usage_pages = _max_memory_usage_pages
