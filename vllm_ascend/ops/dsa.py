@@ -220,7 +220,7 @@ def dsa_forward(
         indexer_k_cache,
         indexer_scale_cache,
         indexer_full_cache,
-    )
+    )])
 
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,
                                kv_cache, attn_metadata, need_gather_q_kv,
