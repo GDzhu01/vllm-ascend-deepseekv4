@@ -9,9 +9,6 @@ from vllm.v1.attention.backend import AttentionBackend
 from vllm.v1.kv_cache_interface import KVCacheSpec
 
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend
-from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
-    get_deepseek_svf_block_size,
-)
 from vllm_ascend.patch.platform.patch_kv_cache_interface import (
     AscendMLAAttentionSpec,
     SlidingWindowMLASpec,
@@ -82,11 +79,8 @@ class AscendDeepseekV32IndexerCache(DeepseekV32IndexerCache):
             self.compress_ratio = compress_ratio
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        block_size = get_deepseek_svf_block_size(
-            self.cache_config.block_size if self.cache_config is not None else None
-        )
         return AscendMLAAttentionSpec(
-            block_size=block_size,
+            block_size=128,
             num_kv_heads=1,
             head_size=self.head_dim,
             dtype=self.dtype,
@@ -126,9 +120,7 @@ class SVFSWACache(nn.Module, AttentionLayerBase):
             raise ValueError(f"Duplicate layer name: {prefix}")
         compilation_config.static_forward_context[prefix] = self
 
-        self.block_size = get_deepseek_svf_block_size(
-            cache_config.block_size if cache_config is not None else None
-        )
+        self.block_size = 128
         self.alignment = alignment
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:

@@ -70,11 +70,6 @@ from vllm_ascend.models.layer.deepseek_compressor import (
     AscendDeepseekV32IndexerCache as DeepseekV32IndexerCache,
     CompressorStateCache,
 )
-from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
-    get_deepseek_svf_alignment,
-    get_deepseek_svf_block_size,
-    get_deepseek_v4_state_cache_layout,
-)
 from vllm_ascend.utils import (
     AscendDeviceType,
     get_ascend_device_type,

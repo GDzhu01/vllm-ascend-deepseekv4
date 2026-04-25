@@ -5,9 +5,6 @@ import vllm
 from vllm.config import get_current_vllm_config
 from vllm.v1.kv_cache_interface import KVCacheSpec
 from vllm.config.cache import CacheConfig
-from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
-    get_deepseek_svf_block_size,
-)
 from vllm_ascend.models.layer.deepseek_compressor import (
     AscendDeepseekV32IndexerCache,
     CompressorStateCache,

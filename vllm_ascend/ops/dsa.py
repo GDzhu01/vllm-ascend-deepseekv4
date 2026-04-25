@@ -31,9 +31,6 @@ from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.utils.torch_utils import direct_register_custom_op
 from vllm_ascend.models.layer.deepseek_compressor import SVFSWACache
-from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
-    get_deepseek_svf_alignment,
-)
 from vllm_ascend.utils import (
     AscendDeviceType,
     get_ascend_device_type,
