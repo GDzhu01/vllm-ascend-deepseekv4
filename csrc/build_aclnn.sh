@@ -97,6 +97,12 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
     sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
 
+    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine_w4_a8/op_kernel/utils/"
+    TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+    sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
+    sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
+
     # for dispatch_normal and combine_normal
     TARGET_DIR="$SCRIPT_DIR/mc2/moe_dispatch_normal/op_kernel/utils/"
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
@@ -111,6 +117,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "lightning_indexer_vllm"
         "sparse_flash_attention"
         "dispatch_ffn_combine"
+        "dispatch_ffn_combine_w4_a8"
         "dispatch_ffn_combine_bf16"
         "dispatch_gmm_combine_decode"
         "moe_combine_normal"

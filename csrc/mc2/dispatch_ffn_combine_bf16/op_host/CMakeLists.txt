@@ -11,22 +11,21 @@ if (EXISTS ${CMAKE_SOURCE_DIR}/third_party/catlass/include)
 endif()
 
 add_op_to_compiled_list()
+add_ops_compile_options(
+        OP_NAME DispatchFFNCombineBF16
+        OPTIONS --cce-auto-sync=on
+                -Wno-deprecated-declarations
+                -Werror
+                -DHCCL_COMM
+                -DCATLASS_ARCH=2201
+                ${_DISPATCH_FFN_INC_OPTS}
+)
 
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnnInner PRIVATE
         dispatch_ffn_combine_bf16_def.cpp
     )
 endif()
-
-add_ops_compile_options(
-    OP_NAME DispatchFFNCombineBF16
-    OPTIONS
-        --cce-auto-sync=on
-        -Wno-deprecated-declarations
-        -Werror
-        -DHCCL_COMM
-        ${_DISPATCH_FFN_INC_OPTS}
-)
 
 if (NOT BUILD_OPS_RTY_KERNEL)
     add_modules_sources(OPTYPE dispatch_ffn_combine_bf16 ACLNNTYPE aclnn_inner)

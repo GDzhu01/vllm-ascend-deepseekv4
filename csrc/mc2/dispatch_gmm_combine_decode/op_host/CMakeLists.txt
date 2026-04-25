@@ -6,22 +6,21 @@ else()
 endif()
 
 add_op_to_compiled_list()
+add_ops_compile_options(
+        OP_NAME DispatchGmmCombineDecode
+        OPTIONS --cce-auto-sync=off
+                -Wno-deprecated-declarations
+                -Werror
+                -DASCENDC_DUMP=0
+                -DCATLASS_ARCH=2201
+                ${_DISPATCH_GMM_INC_OPTS}
+)
 
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnnInner PRIVATE
         dispatch_gmm_combine_decode_def.cpp
     )
 endif()
-
-add_ops_compile_options(
-    OP_NAME DispatchGmmCombineDecode
-    OPTIONS
-        --cce-auto-sync=off
-        -Wno-deprecated-declarations
-        -Werror
-        -DASCENDC_DUMP=0
-        ${_DISPATCH_GMM_INC_OPTS}
-)
 
 if (NOT BUILD_OPS_RTY_KERNEL)
     add_modules_sources(OPTYPE dispatch_gmm_combine_decode ACLNNTYPE aclnn_inner)
