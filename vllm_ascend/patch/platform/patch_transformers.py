@@ -13,6 +13,7 @@ import vllm  # noqa: E402
 from vllm.transformers_utils.config import _CONFIG_REGISTRY  # noqa: E402
 from vllm.transformers_utils.configs import _CLASS_TO_MODULE, __all__  # noqa: E402
 from vllm.transformers_utils.config import _maybe_update_auto_config_kwargs, _maybe_remap_hf_config_attrs  # noqa: E402
+from vllm.transformers_utils import model_arch_config_convertor  # noqa: E402
 from pathlib import Path  # noqa: E402
 from vllm.transformers_utils.config_parser_base import ConfigParserBase  # noqa: E402
 from vllm.transformers_utils.utils import without_trust_remote_code  # noqa: E402
@@ -31,6 +32,7 @@ def is_deepseek_mla(self) -> bool:
         return False
     elif self.hf_text_config.model_type in (
         "AXK1",
+        "deepseek_svf",
         "deepseek_v2",
         "deepseek_v3",
         "deepseek_v32",
@@ -46,6 +48,8 @@ def is_deepseek_mla(self) -> bool:
         "pangu_ultra_moe_mtp",
         "bailing_hybrid",
     ):
+        if hasattr(self.hf_text_config, "compress_ratios"):
+            return getattr(self.hf_text_config, "head_dim", None) is not None
         return getattr(self.hf_text_config, "kv_lora_rank", None) is not None
     elif self.hf_text_config.model_type == "eagle":
         # if the model is an EAGLE module, check for the
@@ -54,6 +58,7 @@ def is_deepseek_mla(self) -> bool:
             self.hf_text_config.model.model_type
             in (
                 "AXK1",
+                "deepseek_v4",
                 "deepseek_v2",
                 "deepseek_v3",
                 "deepseek_v32",
@@ -62,6 +67,19 @@ def is_deepseek_mla(self) -> bool:
             and getattr(self.hf_text_config, "kv_lora_rank", None) is not None
         )
     return False
+
+_model_arch_convertor_cls = model_arch_config_convertor.ModelArchConfigConvertorBase
+if not hasattr(_model_arch_convertor_cls, "_vllm_ascend_orig_get_head_size"):
+    _model_arch_convertor_cls._vllm_ascend_orig_get_head_size = (
+        _model_arch_convertor_cls.get_head_size
+    )
+
+
+def get_head_size(self) -> int:
+    if self.is_deepseek_mla() and hasattr(self.hf_text_config, "compress_ratios"):
+        return self.hf_text_config.head_dim
+    return self._vllm_ascend_orig_get_head_size()
+
 
 def __getattr__(name: str):  # noqa: F811
     if "DeepseekV4Config" not in _CLASS_TO_MODULE:
@@ -160,7 +178,8 @@ class HFConfigParser(ConfigParserBase):
         config = _maybe_remap_hf_config_attrs(config)
         return config_dict, config
 
-vllm.transformers_utils.model_arch_config_convertor.ModelArchConfigConvertorBase.is_deepseek_mla = is_deepseek_mla
+_model_arch_convertor_cls.is_deepseek_mla = is_deepseek_mla
+_model_arch_convertor_cls.get_head_size = get_head_size
 vllm.transformers_utils.configs.__getattr__ = __getattr__
 vllm.transformers_utils.configs.__dir__ = __dir__
 vllm.transformers_utils.config.HFConfigParser = HFConfigParser
