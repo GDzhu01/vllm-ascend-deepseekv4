@@ -30,7 +30,7 @@ from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.model_executor.layers.mla import MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.utils.torch_utils import direct_register_custom_op
-from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
+from vllm_ascend.models.layer.deepseek_compressor import SVFSWACache
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
     get_deepseek_svf_alignment,
 )
