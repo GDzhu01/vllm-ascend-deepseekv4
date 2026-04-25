@@ -3,10 +3,7 @@ import sys
 
 import vllm
 from vllm.config import get_current_vllm_config
-from vllm.v1.kv_cache_interface import (
-    KVCacheSpec,
-    SlidingWindowMLASpec,
-)
+from vllm.v1.kv_cache_interface import KVCacheSpec
 from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
 from vllm.config.cache import CacheConfig
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
@@ -16,7 +13,10 @@ from vllm_ascend.models.layer.deepseek_compressor import (
     CompressorStateCache,
     SVFSWACache,
 )
-from vllm_ascend.patch.platform.patch_kv_cache_interface import AscendMLAAttentionSpec
+from vllm_ascend.patch.platform.patch_kv_cache_interface import (
+    AscendMLAAttentionSpec,
+    SlidingWindowMLASpec,
+)
 
 from vllm.config import VllmConfig
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend

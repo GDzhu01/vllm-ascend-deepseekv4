@@ -4,12 +4,13 @@ from torch import nn
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.v1.attention.backend import AttentionBackend
-from vllm.v1.kv_cache_interface import KVCacheSpec, SlidingWindowMLASpec
+from vllm.v1.kv_cache_interface import KVCacheSpec
 
 from vllm_ascend.attention.dsa_v1 import AscendDSABackend
 from vllm_ascend.models.deepseek_v4_kv_cache_utils import (
     get_deepseek_svf_block_size,
 )
+from vllm_ascend.patch.platform.patch_kv_cache_interface import SlidingWindowMLASpec
 
 
 class CompressorStateCache(nn.Module, AttentionLayerBase):
