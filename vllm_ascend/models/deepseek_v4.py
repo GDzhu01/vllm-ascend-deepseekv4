@@ -371,16 +371,18 @@ class DeepseekV4MoE(nn.Module):
             if not self.is_rocm_aiter_moe_enabled:
                 if self.shared_experts is not None:
                     assert shared_output is not None
-                    final_hidden_states = muls_add_triton(
-                        final_hidden_states, shared_output,
-                        self.routed_scaling_factor)
+                    final_hidden_states = final_hidden_states * self.routed_scaling_factor + shared_output
+                    # final_hidden_states = muls_add_triton(
+                    #     final_hidden_states, shared_output,
+                    #     self.routed_scaling_factor)
                 else:
                     final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = muls_add_triton(
-                shared_output, final_hidden_states,
-                1.0 / self.routed_scaling_factor)
+            final_hidden_states = shared_output * (1.0 / self.routed_scaling_factor) + final_hidden_states
+            # final_hidden_states = muls_add_triton(
+            #     shared_output, final_hidden_states,
+            #     1.0 / self.routed_scaling_factor)
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
