@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM projectx
 import sys
 from collections.abc import Sequence
+from math import gcd, lcm
 
 import vllm
 from vllm.v1.core.block_pool import BlockPool
@@ -22,7 +23,6 @@ from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttention
 
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
-from math import lcm
 
 
 class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
@@ -129,6 +129,25 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
             spec.block_size * getattr(spec, "compress_ratio", 1) for spec, _, _ in self.attention_groups
             ]
         self.lcm_block_size = lcm(*block_sizes)
+        self._eagle_attn_group_idx: int | None = None
+        if self.use_eagle:
+            self._eagle_attn_group_idx = self._find_eagle_attn_group_idx()
+
+    def _find_eagle_attn_group_idx(self) -> int:
+        """
+        Find the attention group containing EAGLE/MTP layers, so EAGLE block
+        dropping is applied only to that group.
+        """
+        eagle_names = set(self.eagle_attn_layer_names)
+        if not eagle_names:
+            return 0
+        for idx, (_, group_ids, _) in enumerate(self.attention_groups):
+            for group_id in group_ids:
+                if eagle_names.intersection(
+                    self.kv_cache_config.kv_cache_groups[group_id].layer_names
+                ):
+                    return idx
+        return 0
 
     def find_longest_cache_hit(
         self,
@@ -163,12 +182,16 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         num_groups = len(self.kv_cache_config.kv_cache_groups)
         hit_length = max_cache_hit_length
         hit_blocks_by_group: list[list[KVCacheBlock] | None] = [None] * num_groups
+        eagle_dropped = False
 
         while True:
             curr_hit_length = hit_length
 
-            for spec, group_ids, manager_cls in self.attention_groups:
+            for idx, (spec, group_ids, manager_cls) in enumerate(self.attention_groups):
                 is_full_attn = isinstance(spec, FullAttentionSpec)
+                group_use_eagle = (
+                    idx == self._eagle_attn_group_idx and not eagle_dropped
+                )
 
                 # Full attention: reuse cached blocks (downward-closed property)
                 cached_blocks = hit_blocks_by_group[group_ids[0]]
@@ -191,12 +214,18 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
                         kv_cache_group_ids=group_ids,
                         block_pool=self.block_pool,
                         kv_cache_spec=spec,
-                        use_eagle=self.use_eagle,
+                        use_eagle=group_use_eagle,
                         alignment_tokens=self.lcm_block_size,
                     )
                     # curr_hit_length need multipy compress_ratio to recover original len
                     compress_ratio = getattr(spec, "compress_ratio", 1)
-                    curr_hit_length = len(hit_blocks[0]) * spec.block_size * max(compress_ratio, 1)
+                    next_hit_length = len(hit_blocks[0]) * spec.block_size * max(compress_ratio, 1)
+                    shrunk = next_hit_length < curr_hit_length
+                    curr_hit_length = next_hit_length
+                    if group_use_eagle:
+                        eagle_dropped = True
+                    elif shrunk:
+                        eagle_dropped = False
                     for group_id, blocks in zip(group_ids, hit_blocks):
                         hit_blocks_by_group[group_id] = blocks
 
@@ -208,6 +237,53 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         return tuple(
             blocks if blocks is not None else [] for blocks in hit_blocks_by_group
         ), hit_length
+
+
+def _resolve_hash_block_size(
+    kv_cache_config: KVCacheConfig,
+    hash_block_size: int,
+    dcp_world_size: int,
+    pcp_world_size: int,
+) -> int:
+    kv_cache_groups = kv_cache_config.kv_cache_groups
+    if len(kv_cache_groups) <= 1:
+        return hash_block_size
+
+    group_block_sizes = [g.kv_cache_spec.block_size for g in kv_cache_groups]
+    if all(block_size % hash_block_size == 0 for block_size in group_block_sizes):
+        return hash_block_size
+
+    if dcp_world_size != 1 or pcp_world_size != 1:
+        raise ValueError(
+            "Hybrid KV cache groups with multiple block sizes do not support "
+            "context parallelism (dcp_world_size/pcp_world_size > 1)."
+        )
+
+    resolved = group_block_sizes[0]
+    for block_size in group_block_sizes[1:]:
+        resolved = gcd(resolved, block_size)
+    if resolved <= 0 or any(block_size % resolved != 0 for block_size in group_block_sizes):
+        raise ValueError(
+            f"Invalid hash_block_size={hash_block_size}; all KV cache group "
+            f"block sizes must be divisible by a common hash block size. "
+            f"Got group block sizes={group_block_sizes}."
+        )
+    return resolved
+
+
+def _infer_eagle_attn_layer_names(
+    kv_cache_config: KVCacheConfig,
+    use_eagle: bool,
+) -> list[str] | None:
+    if not use_eagle:
+        return None
+    eagle_names = [
+        name
+        for group in kv_cache_config.kv_cache_groups
+        for name in group.layer_names
+        if "mtp" in name
+    ]
+    return eagle_names or None
 
 
 def get_kv_cache_coordinator(
@@ -222,6 +298,17 @@ def get_kv_cache_coordinator(
     eagle_attn_layer_names: list[str] | None = None,
     metrics_collector: KVCacheMetricsCollector | None = None,
 ) -> KVCacheCoordinator:
+    hash_block_size = _resolve_hash_block_size(
+        kv_cache_config,
+        hash_block_size,
+        dcp_world_size,
+        pcp_world_size,
+    )
+    if eagle_attn_layer_names is None:
+        eagle_attn_layer_names = _infer_eagle_attn_layer_names(
+            kv_cache_config,
+            use_eagle,
+        )
     return AscendHybridKVCacheCoordinator(
         kv_cache_config,
         max_model_len,
