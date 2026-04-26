@@ -184,9 +184,14 @@ template <typename T0, typename U, typename T1>
             } else {
                 for (int32_t curValidIdx = 0; curValidIdx < validIdx; curValidIdx++) {
                     int32_t slot = indexLocal.GetValue(curValidIdx);
+                    int64_t gmOffset = static_cast<int64_t>(slot) * tilingData->kvCacheCol;
+                    if (tilingData->layout == 1) {
+                        int64_t rowStride = tilingData->blockStride > 0 ? tilingData->blockStride : tilingData->kvCacheCol;
+                        gmOffset = static_cast<int64_t>(slot) * rowStride;
+                    }
                     CopyOut(
                         kvCacheLocal[curValidIdx * RoundUp<T1>(tilingData->kvCacheCol)],
-                        kvCacheGm[slot * tilingData->kvCacheCol], 1, tilingData->kvCacheCol);
+                        kvCacheGm[gmOffset], 1, tilingData->kvCacheCol);
                 }
             }
             kvCacheQue.template FreeTensor(kvCacheLocal);

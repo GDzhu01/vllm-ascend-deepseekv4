@@ -246,6 +246,21 @@ ge::graphStatus KvCompressEpilogTiling::DoOpTiling()
         OPS_LOG_I(context_->GetNodeName(),
                   "layout=2: blockSize=%ld valuePerToken=%ld scalePerToken=%ld blockStride=%ld (auto=%ld, attr=%ld)",
                   blockSize_, valuePerToken, scalePerToken, blockStride, autoBlockStride, blockStrideAttr_);
+    } else {
+        int64_t autoRowStride = kvCacheCol_;
+        if (blockStrideAttr_ > 0) {
+            blockStride = blockStrideAttr_;
+            OPS_ERR_IF(blockStride < autoRowStride,
+                      OPS_LOG_E(context_, "block_stride (%ld) must be >= layout=1 row width (%ld)",
+                               blockStride, autoRowStride),
+                      return ge::GRAPH_FAILED);
+        } else {
+            blockStride = autoRowStride;
+        }
+
+        OPS_LOG_I(context_->GetNodeName(),
+                  "layout=1: kvCacheCol=%ld rowStride=%ld (auto=%ld, attr=%ld)",
+                  kvCacheCol_, blockStride, autoRowStride, blockStrideAttr_);
     }
 
     // UB estimation: pre-compute per-row sizes

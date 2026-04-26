@@ -1438,7 +1438,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 quant_group_size=64,
                 quant_mode=2,
                 round_scale_flag=True,
-                layout=0,
+                layout=1,
             )
         else:
             torch_npu.npu_scatter_nd_update_(
@@ -1485,7 +1485,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
                 rotary_mode=2,
-                cache_mode=2)
+                cache_mode=1)
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
@@ -1499,7 +1499,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     quant_group_size=64,
                     quant_mode=2,
                     round_scale_flag=True,
-                    layout=0,
+                    layout=1,
                 )
             else:
                 torch_npu.npu_scatter_nd_update_(
@@ -1736,7 +1736,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     quant_group_size=64,
                     quant_mode=2,
                     round_scale_flag=True,
-                    layout=0,
+                    layout=1,
                 )
             else:
                 torch_npu.npu_scatter_nd_update_(
@@ -1789,7 +1789,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
                 rotary_mode=2,
-                cache_mode=2)
+                cache_mode=1)
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 if len(compressor_attn_metadata.decode.slot_mapping):
@@ -1800,7 +1800,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                         quant_group_size=64,
                         quant_mode=2,
                         round_scale_flag=True,
-                        layout=0,
+                        layout=1,
                     )
             else:
                 torch_npu.npu_scatter_nd_update_(
@@ -2009,7 +2009,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff=coff,
             norm_eps=self.compressor_norm_eps,
             rotary_mode=2,
-            cache_mode=2)
+            cache_mode=1)
 
         if kv.numel() == 0:
             kv = None
