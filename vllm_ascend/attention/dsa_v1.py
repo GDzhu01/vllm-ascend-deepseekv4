@@ -1197,6 +1197,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.wq_b = kwargs['wq_b']
         self.wkv = kwargs['wkv']
         self.q_norm = kwargs['q_norm']
+        self.q_norm_without_weight = kwargs["q_norm_without_weight"]
         self.kv_norm = kwargs['kv_norm']
 
         self.indexer = kwargs.get('indexer', None)
@@ -1326,45 +1327,21 @@ class AscendDSAImpl(DSAAttentionImpl):
         num_tokens = o_proj_input.shape[0]
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            o_proj_input.unsqueeze(1),
-            cos,
-            -sin,
+            o_proj_input.unsqueeze(1), cos, -sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
         # o
-        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if get_ascend_device_type() in {AscendDeviceType.A5}:
-            o_proj_input, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o_proj_input, dst_type=torch.float8_e4m3fn)
-            o_proj_input = torch_npu.npu_transpose_quant_batchmatmul(
-                o_proj_input,
-                self.wo_a.weight,
-                dtype=torch.bfloat16,
-                bias=None,
-                group_sizes=(0, 0, 32),
-                x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu),
-                x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu),
-                perm_x1=(1,0,2),
-                perm_x2=(0,1,2),
-                perm_y=(1,0,2))
-            o_proj_input = o_proj_input.reshape(num_tokens, -1)
-        elif olora_tp_enable():
-            o_proj_input = self.wo_a(o_proj_input)
-        else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-            o_proj_input = torch_npu.npu_transpose_batchmatmul(
-                o_proj_input,
-                self.wo_a.weight,
-                bias=None,
-                scale=None,
-                perm_x1=(1, 0, 2),
-                perm_x2=(0, 1, 2),
-                perm_y=(1, 0, 2),
-                batch_split_factor=1)
-            o_proj_input = o_proj_input.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o_proj_input)
+        o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
+
+        o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o, dst_type=torch.float8_e4m3fn)
+        o = torch_npu.npu_transpose_quant_batchmatmul(o, self.wo_a.weight, dtype=torch.bfloat16, bias=None, group_sizes=(0, 0, 32), 
+                                                      x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu), x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu), 
+                                                      perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2))
+
+        o = o.reshape(num_tokens, -1)
+        output[...] = self.wo_b(o)
 
         return output_padded
 
@@ -1423,7 +1400,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q = triton_q_rms(q, self.eps)
+        q = self.q_norm_without_weight(q)
+        # q = triton_q_rms(q, self.eps)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
@@ -1451,7 +1429,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             torch.ops._C_ascend.kv_compress_epilog(
                 swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
                 x=kv.view(-1, kv.shape[-1]),
-                slot_mapping=swa_metadata.prefill.slot_mapping,
+                slot_mapping=swa_metadata.slot_mapping,
                 quant_group_size=64,
                 quant_mode=2,
                 round_scale_flag=True,
@@ -1510,7 +1488,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 torch.ops._C_ascend.kv_compress_epilog(
-                    kv_compress_cache=compress_kv_cache,
+                    kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
                     x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
                     slot_mapping=compressor_attn_metadata.prefill.slot_mapping,
                     quant_group_size=64,
@@ -1736,7 +1714,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
             qr_pertoken_scale = None
 
-        q = triton_q_rms(q, self.eps)
+        # q = triton_q_rms(q, self.eps)
+        q = self.q_norm_without_weight(q)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),

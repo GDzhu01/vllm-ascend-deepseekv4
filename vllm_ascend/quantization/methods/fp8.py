@@ -91,14 +91,14 @@ class AscendW4A8MXFPDSDynamicFusedMoEMethod(AscendW4A8MXFPDynamicFusedMoEMethod)
             num_experts,
             2 * intermediate_size_per_partition,
             hidden_sizes // self.group_size,
-            dtype=torch.int8
+            dtype=torch.float8_e8m0fnu
         )
 
         param_dict["w2_weight_scale"] = torch.empty(
             num_experts,
             hidden_sizes,
             intermediate_size_per_partition // self.group_size,
-            dtype=torch.int8
+            dtype=torch.float8_e8m0fnu
         )
         return param_dict
 
