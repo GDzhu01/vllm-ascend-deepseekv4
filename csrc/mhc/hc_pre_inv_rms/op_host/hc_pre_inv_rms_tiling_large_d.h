@@ -9,23 +9,24 @@
  */
 
 /* !
- * \file hc_pre_inv_rms_tiling_arch35.cpp
- * \brief
+ * \file hc_pre_inv_rms_tiling_large_d.cpp
+ * \brief tiling for large d (R=28672, d=7168)
  */
 #include <graph/utils/type_utils.h>
 #include "hc_pre_inv_rms_tiling.h"
 
 namespace optiling {
-namespace HcPreInvRmsRegbase{
+namespace HcPreInvRmsLargeD{
 
-const static int64_t DEFAULT_WORKSPACE_SIZE = 16777216; // 预留16M空间
+const static int64_t DEFAULT_WORKSPACE_SIZE = 16777216;
 const static int64_t X_INPUT_INDEX = 0;
 const static int64_t Y_OUTPUT_INDEX = 0;
 const static int64_t EPS_ATTR_INDEX = 0;
 const static size_t X_INPUT_BS_FUSED_DIMS = 3;
 const static size_t X_INPUT_DIMS = 4;
 const static int64_t UB_BLOCK_SIZE = 32;
-const static uint64_t FULL_LOAD_REGBASE_TILING_KEY = 2000;
+const static uint64_t FULL_LOAD_LARGE_D_TILING_KEY = 1001;
+const static int64_t R_LARGE_D = 28672;
 const static int64_t DIM_0 = 0;
 const static int64_t DIM_1 = 1;
 const static int64_t DIM_2 = 2;
@@ -37,41 +38,30 @@ static inline T CeilDiv(T num, T rnd)
     return (((rnd) == 0) ? 0 : (((num) + (rnd) - 1) / (rnd)));
 }
 
-
 template <typename T>
 static inline T CeilAlign(T num, T rnd)
 {
     return (((rnd) == 0) ? 0 : (((num) + (rnd) - 1) / (rnd)) * (rnd));
 }
 
-class HcPreInvRmsTilingRegbase {
+class HcPreInvRmsTilingLargeD {
 public:
-    explicit HcPreInvRmsTilingRegbase(gert::TilingContext *context) : context_(context)
+    explicit HcPreInvRmsTilingLargeD(gert::TilingContext *context) : context_(context)
     {
         Reset();
     }
-    ~HcPreInvRmsTilingRegbase()  = default;
+    ~HcPreInvRmsTilingLargeD()  = default;
 
     bool IsCapable()
     {
-        if (socVersion_ != platform_ascendc::SocVersion::ASCEND950) {
-            return false;
-        }
         return true;
     }
-    // 1、获取平台信息比如CoreNum、UB/L1/L0C资源大小
     ge::graphStatus GetPlatformInfo();
-    // 2、获取INPUT/OUTPUT/ATTR信息
     ge::graphStatus GetShapeAttrsInfo();
-    // 3、计算数据切分TilingData
     ge::graphStatus DoOpTiling();
-    // 4、计算高阶API的TilingData
     ge::graphStatus DoLibApiTiling();
-    // 5、计算TilingKey
     uint64_t GetTilingKey() const;
-    // 6、计算Workspace 大小
     ge::graphStatus GetWorkspaceSize();
-    // 7、保存Tiling数据
     ge::graphStatus PostTiling();
     void Reset();
 
@@ -99,17 +89,16 @@ private:
     uint64_t coreNum_ = 0;
     int64_t ubSize_ = 0;
     int64_t ubBlockSize_ = 0;
-    platform_ascendc::SocVersion socVersion_;
 };
 
-ge::graphStatus HcPreInvRmsTilingRegbase::CheckInputShape()
+ge::graphStatus HcPreInvRmsTilingLargeD::CheckInputShape()
 {
     size_t xDimNum = xShape_->GetDimNum();
     OPS_ERR_IF(xDimNum != X_INPUT_DIMS && xDimNum != X_INPUT_BS_FUSED_DIMS,
                 OPS_LOG_E(context_, "The dim number of x is: %zu, but it should be %zu or %zu(bs fused)."
                     , xDimNum, X_INPUT_DIMS, X_INPUT_BS_FUSED_DIMS),
                 return ge::GRAPH_FAILED);
-
+    
     if (xDimNum == X_INPUT_DIMS) {
         A_ = xShape_->GetDim(DIM_0) * xShape_->GetDim(DIM_1);
         R_ = xShape_->GetDim(DIM_2) * xShape_->GetDim(DIM_3);
@@ -118,33 +107,34 @@ ge::graphStatus HcPreInvRmsTilingRegbase::CheckInputShape()
         R_ = xShape_->GetDim(DIM_1) * xShape_->GetDim(DIM_2);
     }
     
+    OPS_ERR_IF(R_ != R_LARGE_D,
+                OPS_LOG_E(context_, "R is: %ld, but large_d tiling only supports R=%ld.", R_, R_LARGE_D),
+                return ge::GRAPH_FAILED);
+    
     invRmsTilingData_.set_A(A_);
     invRmsTilingData_.set_R(R_);
 
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::CheckAttr()
+ge::graphStatus HcPreInvRmsTilingLargeD::CheckAttr()
 {
     OPS_ERR_IF(eps_ <= 0, OPS_LOG_E(context_, "epsilon is: %ld, but it should not be less than 0.", eps_), return ge::GRAPH_FAILED);
     invRmsTilingData_.set_epsilon(eps_);
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::GetShapeAttrsInfo()
+ge::graphStatus HcPreInvRmsTilingLargeD::GetShapeAttrsInfo()
 {
     opName_ = context_->GetNodeName();
-    // 获取输入shape信息
     auto xShapePtr = context_->GetInputShape(X_INPUT_INDEX);
     OPS_LOG_E_IF_NULL(context_, xShapePtr, return ge::GRAPH_FAILED);
     xShape_ = &xShapePtr->GetStorageShape();
 
-    // 获取输出shape
     auto yShapePtr = context_->GetOutputShape(Y_OUTPUT_INDEX);
     OPS_LOG_E_IF_NULL(context_, yShapePtr, return ge::GRAPH_FAILED);
     yShape_ = &yShapePtr->GetStorageShape();
 
-    // 获取输入dtype
     auto xDesc = context_->GetInputDesc(X_INPUT_INDEX);
     OPS_LOG_E_IF_NULL(context_, xDesc, return ge::GRAPH_FAILED);
     auto xDtype = xDesc->GetDataType();
@@ -154,7 +144,6 @@ ge::graphStatus HcPreInvRmsTilingRegbase::GetShapeAttrsInfo()
              ge::TypeUtils::DataTypeToSerialString(xDtype).c_str()),
         return ge::GRAPH_FAILED);
 
-    // 获取输出dtype
     auto yDesc = context_->GetOutputDesc(Y_OUTPUT_INDEX);
     OPS_LOG_E_IF_NULL(context_, yDesc, return ge::GRAPH_FAILED);
     auto yDtype = yDesc->GetDataType();
@@ -163,7 +152,6 @@ ge::graphStatus HcPreInvRmsTilingRegbase::GetShapeAttrsInfo()
                      ge::TypeUtils::DataTypeToSerialString(yDtype).c_str()),
                 return ge::GRAPH_FAILED);
 
-    // 获取属性
     auto attrs = context_->GetAttrs();
     OPS_LOG_E_IF_NULL(context_, attrs, return ge::GRAPH_FAILED);
 
@@ -178,17 +166,15 @@ ge::graphStatus HcPreInvRmsTilingRegbase::GetShapeAttrsInfo()
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::GetPlatformInfo()
+ge::graphStatus HcPreInvRmsTilingLargeD::GetPlatformInfo()
 {
     auto platformInfo = context_->GetPlatformInfo();
     OPS_ERR_IF(platformInfo == nullptr, OPS_LOG_E(context_, "fail to get platform info"), return ge::GRAPH_FAILED);
     auto ascendcPlatform = platform_ascendc::PlatformAscendC(platformInfo);
     coreNum_ = ascendcPlatform.GetCoreNumAiv();
-    socVersion_ = ascendcPlatform.GetSocVersion();
     OPS_ERR_IF(
         coreNum_ <= 0, OPS_LOG_E(context_->GetNodeName(), "coreNum must be greater than 0."),
         return ge::GRAPH_FAILED);
-    // 获取UB大小
     uint64_t ubSizePlatForm;
     ascendcPlatform.GetCoreMemSize(platform_ascendc::CoreMemType::UB, ubSizePlatForm);
     ubSize_ = static_cast<int64_t>(ubSizePlatForm);
@@ -196,12 +182,12 @@ ge::graphStatus HcPreInvRmsTilingRegbase::GetPlatformInfo()
         ubSize_ <= 0, OPS_LOG_E(context_->GetNodeName(), "ubSize must be greater than 0."),
         return ge::GRAPH_FAILED);
 
-    ubBlockSize_ = UB_BLOCK_SIZE; // 32: ub block size
+    ubBlockSize_ = UB_BLOCK_SIZE;
 
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::CheckOutShape()
+ge::graphStatus HcPreInvRmsTilingLargeD::CheckOutShape()
 {
     OPS_ERR_IF((yShape_->GetDim(0) != xShape_->GetDim(0)),
                 OPS_LOG_E(context_, "y out dim[0] %ld not euqal x dim[0] %ld, please check.", yShape_->GetDim(0),
@@ -211,7 +197,7 @@ ge::graphStatus HcPreInvRmsTilingRegbase::CheckOutShape()
     return ge::GRAPH_SUCCESS;
 }
 
-void HcPreInvRmsTilingRegbase::SplitA()
+void HcPreInvRmsTilingLargeD::SplitA()
 {
     int64_t blockFactorA = CeilDiv(A_, static_cast<int64_t>(coreNum_));
     int64_t blockNumA = CeilDiv(A_, blockFactorA);
@@ -225,15 +211,12 @@ void HcPreInvRmsTilingRegbase::SplitA()
     }
 }
 
-void HcPreInvRmsTilingRegbase::CalUbFactorA()
+void HcPreInvRmsTilingLargeD::CalUbFactorA()
 {
-    // ubFactorA * R_AlignSize  * 2 + ubFactorA * outputDtypeSize_ + 32 = ubSize_
-    int64_t rAlignSize = CeilAlign(R_ * inputDtypeSize_, UB_BLOCK_SIZE);
-    int64_t ubFactorA = (ubSize_ - UB_BLOCK_SIZE) / (2 * rAlignSize + outputDtypeSize_);
-    invRmsTilingData_.set_ubFactorA(ubFactorA);
+    invRmsTilingData_.set_ubFactorA(1);
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::DoOpTiling()
+ge::graphStatus HcPreInvRmsTilingLargeD::DoOpTiling()
 {
     auto ret = GetPlatformInfo();
     if (ret != ge::GRAPH_SUCCESS) {
@@ -270,19 +253,18 @@ ge::graphStatus HcPreInvRmsTilingRegbase::DoOpTiling()
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::DoLibApiTiling()
+ge::graphStatus HcPreInvRmsTilingLargeD::DoLibApiTiling()
 {
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::GetWorkspaceSize()
+ge::graphStatus HcPreInvRmsTilingLargeD::GetWorkspaceSize()
 {
-    // 计算workspace大小
     workspaceSize_ = DEFAULT_WORKSPACE_SIZE;
     return ge::GRAPH_SUCCESS;
 }
 
-ge::graphStatus HcPreInvRmsTilingRegbase::PostTiling()
+ge::graphStatus HcPreInvRmsTilingLargeD::PostTiling()
 {
     context_->SetTilingKey(GetTilingKey());
     context_->SetBlockDim(invRmsTilingData_.get_blockNumA());
@@ -294,17 +276,16 @@ ge::graphStatus HcPreInvRmsTilingRegbase::PostTiling()
     return ge::GRAPH_SUCCESS;
 }
 
-uint64_t HcPreInvRmsTilingRegbase::GetTilingKey() const
+uint64_t HcPreInvRmsTilingLargeD::GetTilingKey() const
 {
-    // 全载场景
-    return FULL_LOAD_REGBASE_TILING_KEY;
+    return FULL_LOAD_LARGE_D_TILING_KEY;
 }
 
-void HcPreInvRmsTilingRegbase::Reset()
+void HcPreInvRmsTilingLargeD::Reset()
 {
     opName_ = nullptr;
     return;
 }
 
-} // namespace HcPreInvRmsRegbase
+} // namespace HcPreInvRmsLargeD
 } // namespace optiling

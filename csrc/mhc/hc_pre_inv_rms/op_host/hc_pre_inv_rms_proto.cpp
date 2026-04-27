@@ -1,17 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -27,6 +21,12 @@ using namespace ge;
 namespace ops {
 const int32_t INPUT_IDX_X = 0;
 const int32_t INDEX_OUTPUT_Y = 0;
+const static int64_t DIM_0 = 0;
+const static int64_t DIM_1 = 1;
+const static int64_t DIM_2 = 2;
+const static int64_t DIM_3 = 3;
+const static int64_t BS_INPUT_DIM_NUM = 4;
+const static int64_t TND_INPUT_DIM_NUM = 3;
 
 static ge::graphStatus InferShape4HcPreInvRms(gert::InferShapeContext* context)
 {
@@ -37,14 +37,16 @@ static ge::graphStatus InferShape4HcPreInvRms(gert::InferShapeContext* context)
     auto xDimNum = xShape->GetDimNum();
 
     auto yShape = context->GetOutputShape(INDEX_OUTPUT_Y);
+    // The first one or two dimensions of y match those of x, and the last dimension of y is 1.
+    // x: (b, s, hc, d) --> y: (b, s, 1)   or   x: (b * s, hc, d) --> y: (b * s, 1)
     yShape->SetDimNum(xDimNum);
-    if (xDimNum == 4) {
-        yShape->SetDim(0, xShape->GetDim(0));
-        yShape->SetDim(1, xShape->GetDim(1));
-        yShape->SetDim(2, 1);
-    } else if (xDimNum == 3) {
-        yShape->SetDim(0, xShape->GetDim(0));
-        yShape->SetDim(1, 1);
+    if (xDimNum == BS_INPUT_DIM_NUM) {
+        yShape->SetDim(DIM_0, xShape->GetDim(DIM_0));
+        yShape->SetDim(DIM_1, xShape->GetDim(DIM_1));
+        yShape->SetDim(DIM_2, 1);
+    } else if (xDimNum == TND_INPUT_DIM_NUM) {
+        yShape->SetDim(DIM_0, xShape->GetDim(DIM_0));
+        yShape->SetDim(DIM_1, 1);
     }
     
     OPS_LOG_I(context->GetNodeName(), "End to do InferShape4HcPreInvRms");

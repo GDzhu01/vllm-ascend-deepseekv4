@@ -9,31 +9,70 @@
  */
 
 /*!
- * \file hc_pre_inv_rms.h
- * \brief inv rms file
+ * \file hc_pre_inv_rms_full_load_large_d.h
+ * \brief inv rms for large d (R=28672, d=7168)
  */
-#ifndef ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_H_
-#define ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_H_
+#ifndef ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_LARGE_D_H_
+#define ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_LARGE_D_H_
 #include "kernel_operator.h"
 
-namespace HcPreInvRms {
+namespace HcPreInvRmsLargeD {
 using namespace AscendC;
-constexpr int32_t BUFFER_NUM = 2;
+constexpr int32_t BUFFER_NUM = 1;
 constexpr int32_t FLOAT_BTYPE_SIZE = 4;
 constexpr uint32_t PER_REPEAT_LEN_B32 = 64;
 constexpr uint32_t UB_BLOCK_SIZE = 32;
 constexpr int32_t B16_TYPE_BYTE_SIZE = 2;
 constexpr int32_t B32_TYPE_BYTE_SIZE = 4;
-constexpr int32_t ONE_COUNT = 1;
-constexpr int32_t FOUR_FOLD = 4;
-constexpr int32_t DST_REP_STRIDE = 1;
-constexpr int32_t SRC_BLK_STRIDE = 1;
-constexpr int32_t SRC_REP_STRIDE = 8;
+constexpr int32_t HALf_INTERVAL = 2;
+constexpr int32_t INDEX_TWO = 2;
+constexpr int32_t INDEX_FOUR = 4;
+constexpr int32_t INDEX_EIGHT = 8;
+constexpr int32_t INDEX_SIXTEEN = 16;
+
+__aicore__ inline int32_t FindPowerTwo(int32_t n)
+{
+    n |= n >> 1;
+    n |= n >> INDEX_TWO;
+    n |= n >> INDEX_FOUR;
+    n |= n >> INDEX_EIGHT;
+    n |= n >> INDEX_SIXTEEN;
+    return (n + 1) >> 1;
+}
+
+__aicore__ inline void ReduceSumHalfInterval(
+    const LocalTensor<float>& dst_local, const LocalTensor<float>& src_local, int32_t count)
+{
+    if (likely(count > PER_REPEAT_LEN_B32)) {
+        int32_t bodyCount = FindPowerTwo(count);
+        int32_t tailCount = count - bodyCount;
+        if (tailCount > 0) {
+            Add(src_local, src_local, src_local[bodyCount], tailCount);
+            PipeBarrier<PIPE_V>();
+        }
+        while (bodyCount > PER_REPEAT_LEN_B32) {
+            bodyCount = bodyCount / HALf_INTERVAL;
+            Add(src_local, src_local, src_local[bodyCount], bodyCount);
+            PipeBarrier<PIPE_V>();
+        }
+        AscendCUtils::SetMask<float>(PER_REPEAT_LEN_B32);
+    } else {
+        AscendCUtils::SetMask<float>(count);
+    }
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 220
+    if (g_coreType == AIV) {
+        WholeReduceSum<float, false>(dst_local, src_local, MASK_PLACEHOLDER, 1, 0, 1, 0);
+    }
+#else
+    WholeReduceSum<float, false>(dst_local, src_local, MASK_PLACEHOLDER, 1, 1, 1, DEFAULT_REPEAT_STRIDE);
+#endif
+    PipeBarrier<PIPE_V>();
+}
 
 template <typename T>
-class HcPreInvRmsFullLoad {
+class HcPreInvRmsFullLoadLargeD {
 public:
-    __aicore__ inline HcPreInvRmsFullLoad() {};
+    __aicore__ inline HcPreInvRmsFullLoadLargeD() {};
     __aicore__ inline void Init(GM_ADDR x, GM_ADDR y, GM_ADDR workspace, const HcPreInvRmsFullLoadTilingData* tiling, TPipe* pipe);
     __aicore__ inline void Process();
     __aicore__ inline void CopyIn(uint64_t idx, uint64_t curUbFactorA);
@@ -45,30 +84,30 @@ public:
 private:
     TPipe* pipe_;
     
-    TQue<QuePosition::VECIN, 1> inQueueX;
-    TQue<QuePosition::VECOUT, 1> outQueueY;
+    TQue<QuePosition::VECIN, BUFFER_NUM> inQueueX;
+    TQue<QuePosition::VECOUT, BUFFER_NUM> outQueueY;
     TBuf<TPosition::VECCALC> castBuf;
     TBuf<TPosition::VECCALC> reduceBuf;
 
     GlobalTensor<T> xGm;
     GlobalTensor<float> yGm;
 
-    int64_t A; // 输入数据 A 轴大小
-    int64_t R; // 输入数据 R 轴大小
-    int64_t blockNumA; // 使用的核数
-    int64_t blockFactorA; // 每个核处理的A个数
-    int64_t blockTailFactorA; // 尾核处理的A个数
-    int64_t ubFactorA; // 每次ub循环处理的A个数
+    int64_t A;
+    int64_t R;
+    int64_t blockNumA;
+    int64_t blockFactorA;
+    int64_t blockTailFactorA;
+    int64_t ubFactorA;
     int32_t blockIdx_;
-    float epsilon;  // 算子参数
-    uint32_t curBlockFactorA; // 当前核处理的A个数
+    float epsilon;
+    uint32_t curBlockFactorA;
     uint32_t rAlign;
     uint32_t rAlignB32;
     uint32_t reduceBufNum;
 };
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::Init(GM_ADDR x, GM_ADDR y, GM_ADDR workspace, const HcPreInvRmsFullLoadTilingData* tiling, TPipe* pipe)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::Init(GM_ADDR x, GM_ADDR y, GM_ADDR workspace, const HcPreInvRmsFullLoadTilingData* tiling, TPipe* pipe)
 {
     A = tiling->A;
     R = tiling->R;
@@ -94,7 +133,6 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::Init(GM_ADDR x, GM_ADDR y, GM_ADD
     }
     xGm.SetGlobalBuffer((__gm__ T*)x + blockIdx_ * blockFactorA * R, curBlockFactorA * R);
     yGm.SetGlobalBuffer((__gm__ float*)y + blockIdx_ * blockFactorA, curBlockFactorA);
-    // pipe alloc memory to queue, the unit is Bytes
     pipe_->InitBuffer(inQueueX, BUFFER_NUM, ubFactorA * rAlign * sizeof(T));
     pipe_->InitBuffer(outQueueY, BUFFER_NUM, ubFactorA * FLOAT_BTYPE_SIZE);
 
@@ -106,13 +144,13 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::Init(GM_ADDR x, GM_ADDR y, GM_ADD
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::Process()
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::Process()
 {
     if (blockIdx_ >= blockNumA) {
         return;
     }
-    uint64_t aUbLoopCount = (curBlockFactorA + ubFactorA - 1) / ubFactorA; // Ub循环次数
-    uint64_t tailUbFactorA = curBlockFactorA - (aUbLoopCount - 1) * ubFactorA; // 最后一次Ub循环的A轴大小
+    uint64_t aUbLoopCount = (curBlockFactorA + ubFactorA - 1) / ubFactorA;
+    uint64_t tailUbFactorA = curBlockFactorA - (aUbLoopCount - 1) * ubFactorA;
     uint64_t curUbFactorA = ubFactorA;
     for (uint64_t idx = 0; idx < aUbLoopCount; idx++) {
         if (idx == aUbLoopCount - 1) {
@@ -125,7 +163,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::Process()
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::CopyIn(uint64_t idx, uint64_t curUbFactorA)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::CopyIn(uint64_t idx, uint64_t curUbFactorA)
 {
     LocalTensor<T> xLocal = inQueueX.AllocTensor<T>();
 
@@ -139,7 +177,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::CopyIn(uint64_t idx, uint64_t cur
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::Compute(uint64_t curUbFactorA)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::Compute(uint64_t curUbFactorA)
 {
     if constexpr (sizeof(T) == B16_TYPE_BYTE_SIZE) {
         ComputeB16(curUbFactorA);
@@ -149,7 +187,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::Compute(uint64_t curUbFactorA)
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB16(uint64_t curUbFactorA)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::ComputeB16(uint64_t curUbFactorA)
 {
     LocalTensor<T> xLocal = inQueueX.DeQue<T>();
     LocalTensor<float> yLocal = outQueueY.AllocTensor<float>();
@@ -157,25 +195,12 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB16(uint64_t curUbFactorA)
     LocalTensor<float> castLocal = castBuf.Get<float>();
     LocalTensor<float> reduceLocal = reduceBuf.Get<float>();
 
-    int32_t perFoldElems = (rAlignB32 + FOUR_FOLD - 1) / FOUR_FOLD;  // 4096
-    int32_t perFoldRepTime = (perFoldElems + PER_REPEAT_LEN_B32 - 1) / PER_REPEAT_LEN_B32; // 64
-
     AscendC::Cast(castLocal, xLocal, AscendC::RoundMode::CAST_NONE, R);
     PipeBarrier<PIPE_V>();
     AscendC::Mul(castLocal, castLocal, castLocal, R);
 
     for (int idx = 0; idx < curUbFactorA; idx++) {
-        
-        for (int j = 0; j < FOUR_FOLD; j++) {
-            PipeBarrier<PIPE_V>();
-            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], castLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime, 
-                DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        }
-
-        PipeBarrier<PIPE_V>(); 
-        WholeReduceSum(reduceLocal, reduceLocal, PER_REPEAT_LEN_B32, FOUR_FOLD, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        PipeBarrier<PIPE_V>(); 
-        WholeReduceSum(yLocal[idx], reduceLocal, FOUR_FOLD, 1, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
+        ReduceSumHalfInterval(yLocal[idx], castLocal[idx * rAlignB32], R);
     }
 
     float meanCof = 1.0f / R;
@@ -195,28 +220,17 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB16(uint64_t curUbFactorA)
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB32(uint64_t curUbFactorA)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::ComputeB32(uint64_t curUbFactorA)
 {
     LocalTensor<T> xLocal = inQueueX.DeQue<T>();
     LocalTensor<float> yLocal = outQueueY.AllocTensor<float>();
-
-    int32_t perFoldElems = (rAlignB32 + FOUR_FOLD - 1) / FOUR_FOLD;  // 4096
-    int32_t perFoldRepTime = (perFoldElems + PER_REPEAT_LEN_B32 - 1) / PER_REPEAT_LEN_B32; // 64
 
     LocalTensor<float> reduceLocal = reduceBuf.Get<float>();
     PipeBarrier<PIPE_V>();
     AscendC::Mul(xLocal, xLocal, xLocal, R);
 
     for (int idx = 0; idx < curUbFactorA; idx++) {
-        for (int j = 0; j < FOUR_FOLD; j++) {
-            PipeBarrier<PIPE_V>();
-            WholeReduceSum(reduceLocal[idx * reduceBufNum + j * perFoldRepTime], xLocal[idx * rAlignB32 + j * perFoldElems], PER_REPEAT_LEN_B32, perFoldRepTime, 
-                DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        }
-        PipeBarrier<PIPE_V>(); 
-        WholeReduceSum(reduceLocal, reduceLocal, PER_REPEAT_LEN_B32, FOUR_FOLD, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
-        PipeBarrier<PIPE_V>(); 
-        WholeReduceSum(yLocal[idx], reduceLocal, FOUR_FOLD, 1, DST_REP_STRIDE, SRC_BLK_STRIDE, SRC_REP_STRIDE);
+        ReduceSumHalfInterval(yLocal[idx], xLocal[idx * rAlignB32], R);
     }
 
     float meanCof = 1.0f / R;
@@ -236,7 +250,7 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::ComputeB32(uint64_t curUbFactorA)
 }
 
 template <typename T>
-__aicore__ inline void HcPreInvRmsFullLoad<T>::CopyOut(uint64_t idx, uint64_t curUbFactorA)
+__aicore__ inline void HcPreInvRmsFullLoadLargeD<T>::CopyOut(uint64_t idx, uint64_t curUbFactorA)
 {
     LocalTensor<float> yLocal = outQueueY.DeQue<float>();
     AscendC::DataCopyExtParams copyParams{1, static_cast<uint32_t>(curUbFactorA * sizeof(float)), 0, 0, 0};
@@ -244,6 +258,5 @@ __aicore__ inline void HcPreInvRmsFullLoad<T>::CopyOut(uint64_t idx, uint64_t cu
     outQueueY.FreeTensor(yLocal);
 }
 
-} // namespace HcPreInvRms
-#endif // ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_H_
-
+} // namespace HcPreInvRmsLargeD
+#endif // ASCENDC_HC_PRE_INV_RMS_FULL_LOAD_LARGE_D_H_

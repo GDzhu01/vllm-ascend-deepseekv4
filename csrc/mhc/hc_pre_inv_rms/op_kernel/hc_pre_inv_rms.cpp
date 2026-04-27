@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
  * \brief hc_pre_inv_rms kernel file
  */
 #include "hc_pre_inv_rms_full_load.h"
+#include "hc_pre_inv_rms_full_load_large_d.h"
 #if defined(__DAV_C310__) 
   #include "hc_pre_inv_rms_full_load_regbase.h"
   using namespace HcPreInvRmsRegbase;
@@ -20,8 +21,10 @@
 #include "kernel_operator.h"
 using namespace AscendC;
 using namespace HcPreInvRms;
+using namespace HcPreInvRmsLargeD;
 
 #define FULL_LOAD_TILING_KEY 1000
+#define FULL_LOAD_LARGE_D_TILING_KEY 1001
 #define REGBASE_FULL_LOAD_TILING_KEY 2000
 
 extern "C" __global__ __aicore__ void hc_pre_inv_rms(GM_ADDR x, GM_ADDR y, GM_ADDR workspace, GM_ADDR tiling)
@@ -30,6 +33,10 @@ extern "C" __global__ __aicore__ void hc_pre_inv_rms(GM_ADDR x, GM_ADDR y, GM_AD
     GET_TILING_DATA(tilingData, tiling);
     if (TILING_KEY_IS(FULL_LOAD_TILING_KEY)) {
         HcPreInvRmsFullLoad<DTYPE_X> op;
+        op.Init(x, y, workspace, &tilingData, &pipe);
+        op.Process();
+    } else if (TILING_KEY_IS(FULL_LOAD_LARGE_D_TILING_KEY)) {
+        HcPreInvRmsFullLoadLargeD<DTYPE_X> op;
         op.Init(x, y, workspace, &tilingData, &pipe);
         op.Process();
     }

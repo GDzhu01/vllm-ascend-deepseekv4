@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -12,9 +12,10 @@
  * \file hc_pre_inv_rms_tiling.cpp
  * \brief
  */
+ #include <graph/utils/type_utils.h>
 #include "hc_pre_inv_rms_tiling.h"
 #include "hc_pre_inv_rms_tiling_arch35.h"
-#include <graph/utils/type_utils.h>
+#include "hc_pre_inv_rms_tiling_large_d.h"
 
 namespace optiling {
 const static int64_t DEFAULT_WORKSPACE_SIZE = 16777216; // 预留16M空间
@@ -25,6 +26,12 @@ const static size_t X_INPUT_BS_FUSED_DIMS = 3;
 const static size_t X_INPUT_DIMS = 4;
 const static int64_t UB_BLOCK_SIZE = 32;
 const static uint64_t TILING_KEY_FULL_LOAD = 1000;
+const static int64_t DIM_0 = 0;
+const static int64_t DIM_1 = 1;
+const static int64_t DIM_2 = 2;
+const static int64_t DIM_3 = 3;
+const static int64_t B16_TYPE_BYTE_SIZE = 2;
+const static int64_t B32_TYPE_BYTE_SIZE = 4;
 
 template <typename T>
 static inline T CeilDiv(T num, T rnd)
@@ -71,8 +78,8 @@ private:
     ge::graphStatus CheckInputShape();
     ge::graphStatus CheckAttr();
     ge::graphStatus CheckOutShape();
-    void SplitA(); // todo
-    void CalUbFactorA(); // todo
+    void SplitA();
+    void CalUbFactorA();
 
     const gert::Shape *xShape_ = nullptr;
     const gert::Shape *yShape_ = nullptr;
@@ -102,11 +109,11 @@ ge::graphStatus HcPreInvRmsTilingBase::CheckInputShape()
                 return ge::GRAPH_FAILED);
     
     if (xDimNum == X_INPUT_DIMS) {
-        A_ = xShape_->GetDim(0) * xShape_->GetDim(1);
-        R_ = xShape_->GetDim(2) * xShape_->GetDim(3);
+        A_ = xShape_->GetDim(DIM_0) * xShape_->GetDim(DIM_1);
+        R_ = xShape_->GetDim(DIM_2) * xShape_->GetDim(DIM_3);
     } else if (xDimNum == X_INPUT_BS_FUSED_DIMS) {
-        A_ = xShape_->GetDim(0);
-        R_ = xShape_->GetDim(1) * xShape_->GetDim(2);
+        A_ = xShape_->GetDim(DIM_0);
+        R_ = xShape_->GetDim(DIM_1) * xShape_->GetDim(DIM_2);
     }
     
     invRmsTilingData_.set_A(A_);
@@ -219,9 +226,9 @@ void HcPreInvRmsTilingBase::CalUbFactorA()
 {
     int64_t rAlignSize = CeilAlign(R_ * inputDtypeSize_, UB_BLOCK_SIZE);
     int64_t ubFactorA = 1;
-    if (inputDtypeSize_ == 2) {
+    if (inputDtypeSize_ == B16_TYPE_BYTE_SIZE) {
         ubFactorA = ubSize_ / (4 * rAlignSize + 2 * outputDtypeSize_ + R_ / 16);
-    } else if (inputDtypeSize_ == 4) {
+    } else if (inputDtypeSize_ == B32_TYPE_BYTE_SIZE) {
         ubFactorA = ubSize_ / (2 * rAlignSize + 2 * outputDtypeSize_ + R_ / 16);
     }
     invRmsTilingData_.set_ubFactorA(ubFactorA);
@@ -229,7 +236,6 @@ void HcPreInvRmsTilingBase::CalUbFactorA()
 
 ge::graphStatus HcPreInvRmsTilingBase::DoOpTiling()
 {
-
     auto ret = GetPlatformInfo();
     if (ret != ge::GRAPH_SUCCESS) {
         return ret;
@@ -291,7 +297,6 @@ ge::graphStatus HcPreInvRmsTilingBase::PostTiling()
 
 uint64_t HcPreInvRmsTilingBase::GetTilingKey() const
 {
-    // 全载场景
     return TILING_KEY_FULL_LOAD;
 }
 
@@ -316,6 +321,26 @@ ge::graphStatus TilingForHcPreInvRms(gert::TilingContext *context)
         OPS_LOG_I(context, "Using arch35 tiling for ASCEND950");
         HcPreInvRmsRegbase::HcPreInvRmsTilingRegbase hcPreInvRmsTilingRegbase(context);
         return hcPreInvRmsTilingRegbase.DoOpTiling();
+    }
+
+    auto xShapePtr = context->GetInputShape(0);
+    if (xShapePtr == nullptr) {
+        HcPreInvRmsTilingBase invRmsTilingBase(context);
+        return invRmsTilingBase.DoOpTiling();
+    }
+    auto &xShape = xShapePtr->GetStorageShape();
+    size_t xDimNum = xShape.GetDimNum();
+    int64_t R = 0;
+    if (xDimNum == X_INPUT_DIMS) {
+        R = xShape.GetDim(DIM_2) * xShape.GetDim(DIM_3);
+    } else if (xDimNum == X_INPUT_BS_FUSED_DIMS) {
+        R = xShape.GetDim(DIM_1) * xShape.GetDim(DIM_2);
+    }
+
+    if (R == 28672) {
+        OPS_LOG_I(context, "Using large_d tiling for R=28672");
+        HcPreInvRmsLargeD::HcPreInvRmsTilingLargeD invRmsTilingLargeD(context);
+        return invRmsTilingLargeD.DoOpTiling();
     }
 
     HcPreInvRmsTilingBase invRmsTilingBase(context);
