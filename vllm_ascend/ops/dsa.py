@@ -212,7 +212,7 @@ def dsa_forward(
     if self.compress_ratio == 4:
         # TODO(qcs): refactor me
         indexer_state_cache = self.indexer.compressor.state_cache.kv_cache
-        indexer_k_cache, indexer_scale_cache, indexer_full_cache = self.indexer.k_cache.kv_cache[0][0], self.indexer.k_cache.kv_cache[0][1], self.indexer.k_cache.kv_cache[0][2]
+        indexer_k_cache, indexer_scale_cache, indexer_full_cache = self.indexer.k_cache.kv_cache[0][0][0], self.indexer.k_cache.kv_cache[0][0][1], self.indexer.k_cache.kv_cache[0][0][2]
 
     kv_cache = tuple([
         unfold_kvcache(cache) for cache in (
