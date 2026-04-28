@@ -163,7 +163,8 @@ class AscendDSABackend(AttentionBackend):
 
     @staticmethod
     def get_supported_kernel_block_sizes() -> list[int]:
-        return [2, 32, 128]
+        kernel_block_sizes = [2, 16, 128] if get_ascend_device_type() == AscendDeviceType.A5 else [2, 32, 128]
+        return kernel_block_sizes
 
 
 @dataclass
