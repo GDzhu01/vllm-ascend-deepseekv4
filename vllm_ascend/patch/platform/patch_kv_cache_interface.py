@@ -129,8 +129,15 @@ class AscendMLAAttentionSpec(MLAAttentionSpec):
             "All attention layers in the same KV cache group must be MLAAttentionSpec."
         )
         cache_dtype_str_set = set(spec.cache_dtype_str for spec in specs)
-        assert len(cache_dtype_str_set) == 1, (
-            "All attention layers in the same KV cache group must use the same quantization method."
+        compress_ratio_set = set(spec.compress_ratio for spec in specs)
+        model_version_set = set(spec.model_version for spec in specs)
+        assert (
+            len(cache_dtype_str_set) == 1
+            and len(compress_ratio_set) == 1
+            and len(model_version_set) == 1
+        ), (
+            "All attention layers in the same KV cache group must use the same "
+            "quantization method, compress ratio and model version."
         )
         return cls(
             block_size=specs[0].block_size,
@@ -138,8 +145,11 @@ class AscendMLAAttentionSpec(MLAAttentionSpec):
             head_size=specs[0].head_size,
             sparse_head_dim=specs[0].sparse_head_dim,
             dtype=specs[0].dtype,
+            page_size_padded=specs[0].page_size_padded,
             cache_dtype_str=cache_dtype_str_set.pop(),
             cache_sparse_c8=specs[0].cache_sparse_c8,
+            compress_ratio=compress_ratio_set.pop(),
+            model_version=model_version_set.pop(),
         )
 
 
@@ -190,7 +200,7 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
         #         object.__setattr__(spec, "page_size_padded", padded_page_size)
 
         if get_ascend_device_type() == AscendDeviceType.A5:
-            # TODO(zyj): FIXME(qcs): this is a bug to just use real_page_size_bytes, 
+            # TODO(zyj): FIXME(qcs): this is a bug to just use real_page_size_bytes,
             # cause the page_size_padded will be overrided by this operation
             actual_page_size = spec.real_page_size_bytes
             padded_page_size = round_up(actual_page_size, 128)
