@@ -27,6 +27,7 @@ from vllm.distributed import get_ep_group
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX
 from vllm_ascend.distributed.parallel_state import get_mc2_group
+from vllm.forward_context import get_forward_context
 from vllm_ascend.ops.fused_moe.experts_selector import select_experts
 from vllm_ascend.ops.fused_moe.moe_runtime_args import build_fused_experts_input
 from vllm_ascend.utils import COMPRESSED_TENSORS_METHOD, maybe_trans_nz
@@ -354,6 +355,7 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
             "Number of global experts mismatch (excluding redundancy)"
         )
 
+        input_ids = get_forward_context().input_ids
         # NOTE: now npu_moe_gating_top_k can only support `group_count=256` pattern
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
@@ -367,6 +369,8 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids,
         )
 
         # this is a naive implementation for experts load balance so as

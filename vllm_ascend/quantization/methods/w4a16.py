@@ -24,6 +24,7 @@ from vllm.config import get_current_vllm_config
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+from vllm.forward_context import get_forward_context
 from vllm_ascend.ops.fused_moe.experts_selector import select_experts
 from vllm_ascend.ops.fused_moe.moe_runtime_args import build_fused_experts_input
 
@@ -205,6 +206,7 @@ class AscendW4A16FusedMoEMethod(AscendMoEScheme):
             "Number of global experts mismatch (excluding redundancy)"
         )
 
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -217,6 +219,8 @@ class AscendW4A16FusedMoEMethod(AscendMoEScheme):
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids,
         )
 
         topk_ids = topk_ids.to(torch.int32)

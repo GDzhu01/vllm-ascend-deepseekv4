@@ -601,8 +601,6 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         **kwargs,
     ):
         AscendFusedMoE.__init__(self, **kwargs)
-        use_hash = getattr(kwargs, "use_hash", None)
-        tid2eid = getattr(kwargs, 'tid2eid', None)
         self._routed_input_transform = routed_input_transform
         self._shared_experts = shared_experts
         self.use_overlapped = use_overlapped
@@ -616,10 +614,6 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
             logger.info_once("Sequence parallelism is enabled, shared experts are replicated for best performance.")
 
         self._gate = gate
-        if use_hash:
-            self.tid2eid = tid2eid
-        else:
-            self.tid2eid = None
         # Recreate the runner with the correct shared_experts parameter
         # The parent class created the runner before self._shared_experts was set
         self.runner = self._init_runner()

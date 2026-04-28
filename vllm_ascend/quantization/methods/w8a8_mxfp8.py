@@ -30,6 +30,7 @@ from vllm_ascend.device.mxfp_compat import (
     ensure_mxfp8_linear_available,
     ensure_mxfp8_moe_available,
 )
+from vllm.forward_context import get_forward_context
 from vllm_ascend.ops.fused_moe.experts_selector import select_experts
 from vllm_ascend.ops.fused_moe.moe_runtime_args import build_fused_experts_input
 
@@ -179,6 +180,7 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
     ) -> torch.Tensor:
         expected = global_num_experts - global_redundant_expert_num
         assert router_logits.shape[1] == expected, "Number of global experts mismatch (excluding redundancy)"
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -191,6 +193,8 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
+            tid2eid=self.tid2eid,
+            input_ids=input_ids,
         )
 
         # this is a naive implementation for experts load balance so as

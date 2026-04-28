@@ -28,6 +28,7 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX, MoECommType
 from vllm_ascend.distributed.parallel_state import get_mc2_group
 from vllm_ascend.flash_common3_context import get_flash_common3_context
+from vllm.forward_context import get_forward_context
 from vllm_ascend.ops.fused_moe.experts_selector import select_experts, zero_experts_compute
 from vllm_ascend.ops.fused_moe.moe_runtime_args import build_fused_experts_input
 from vllm_ascend.utils import ACL_FORMAT_FRACTAL_NZ, maybe_trans_nz
@@ -201,6 +202,7 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
             topk_weights = fc3_context.topk_weights
             topk_ids = fc3_context.topk_ids
         else:
+            input_ids = get_forward_context().input_ids
             topk_weights, topk_ids = select_experts(
                 hidden_states=x,
                 router_logits=router_logits,
@@ -215,6 +217,7 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
                 e_score_correction_bias=e_score_correction_bias,
                 global_num_experts=global_num_experts,
                 tid2eid=tid2eid,
+                input_ids=input_ids,
             )
         assert topk_ids is not None
         assert topk_weights is not None
