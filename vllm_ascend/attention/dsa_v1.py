@@ -1414,7 +1414,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             torch.ops._C_ascend.kv_compress_epilog(
                 swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
                 x=kv.view(-1, kv.shape[-1]),
-                slot_mapping=swa_metadata.slot_mapping[:kv.shape[0]],
+                slot_mapping=swa_metadata.prefill.slot_mapping,
                 quant_group_size=64,
                 quant_mode=2,
                 round_scale_flag=True,
