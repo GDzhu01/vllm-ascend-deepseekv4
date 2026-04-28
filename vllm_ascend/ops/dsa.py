@@ -244,8 +244,8 @@ direct_register_custom_op(
 )
 
 def filter_metadata(metadata, prefix):
-    # filter using prefix
-    return [v for k, v in metadata.items() if k.startswith(prefix)]
+    # filter using prefix, sort by key for deterministic order
+    return [v for k, v in sorted(metadata.items()) if k.startswith(prefix)]
 
 def unfold_kvcache(kvcache):
     while isinstance(kvcache, list) and len(kvcache) == 1:
