@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 # -----------------------------------------------------------------------------------------------------------
 # Copyright (c) 2025 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
@@ -11,29 +12,62 @@
 
 import os
 import stat
+from packaging import version
 
-REPLAY_BATCH = "batch"
-REPLAY_ITERATE = "iterate"
-CFG_IMPL_DIR = "impl_dir"
-CFG_OUT_DIR = "out_dir"
-AUTO_GEN_DIR = "auto_gen_dir"
+
+REPLAY_BATCH = 'batch'
+REPLAY_ITERATE = 'iterate'
+CFG_IMPL_DIR = 'impl_dir'
+CFG_OUT_DIR = 'out_dir'
+AUTO_GEN_DIR = 'auto_gen_dir'
 WFLAGS = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
 WMODES = stat.S_IWUSR | stat.S_IRUSR
-SOC_MAP_EXT = {
-    "ascend310p": "Ascend310P3",
-    "ascend310b": "Ascend310B1",
-    "ascend910": "Ascend910A",
-    "ascend910b": "Ascend910B1",
-    "ascend910_93": "Ascend910_9391",
-    "ascend610lite": "Ascend610Lite",
-    "ascend910_95": "Ascend910_9599",
-    "kirinx90": "KirinX90",
-}
-BIN_CMD = "opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
---output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic\n"
+SOC_MAP_EXT = {'ascend310p': 'Ascend310P3', 'ascend310b': 'Ascend310B1',
+               'ascend910': 'Ascend910A', 'ascend910b': 'Ascend910B1',
+               'ascend910_93': 'Ascend910_9391', 'ascend610lite': 'Ascend610Lite',
+               'ascend950': 'Ascend950PR_9599', 'kirinx90': 'KirinX90',
+               'kirin9030': 'Kirin9030'}
+
+CHECK_ASC_DEVKIT_VERSION = False
+
+
+def _parse_version_from_file(file):
+    for line in file:
+        if line.startswith('Version='):
+            return line.strip().split('=')[1]
+    return None
+
+
+def get_version_from_file(filename):
+    try:
+        with open(filename, 'r') as file:
+            return _parse_version_from_file(file)
+    except Exception as e:
+        return None
+
+        
+def check_asc_devkit_version(min_version="9.0.0"):
+    ascend_cann_path = os.environ.get('ASCEND_HOME_PATH')
+    if not ascend_cann_path:
+        return None
+    version_file = os.path.join(ascend_cann_path, 'share', 'info', 'asc-devkit', 'version.info')
+    current_version = get_version_from_file(version_file)
+    if not os.path.exists(version_file):
+        return None
+    if version.parse(current_version) >= version.parse(min_version):
+        return True
+    else:
+        return False
+CHECK_ASC_DEVKIT_VERSION = check_asc_devkit_version("9.0.0")
+if CHECK_ASC_DEVKIT_VERSION:
+    BIN_CMD = 'asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+    --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic\n'
+else:
+    BIN_CMD = 'opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+    --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic\n'
 SET_PLOG_LEVEL_ERROR = "export ASCEND_GLOBAL_LOG_LEVEL=3\n"
 SET_PLOG_STDOUT = "export ASCEND_SLOG_PRINT_TO_STDOUT=1\n"
-SRC_ENV = """
+SRC_ENV = '''
 while true; do
   case "$1" in
     --kernel-src=*)
@@ -48,23 +82,15 @@ while true; do
       ;;
   esac
 done
-"""
-CHK_CMD = """
+'''
+CHK_CMD = '''
 if ! test -f $2/{res_file} ; then
   echo "$2/{res_file} not generated!"
   exit 1
 fi
-"""
-ATTR_DEF_VAL = {
-    "str": "",
-    "int": 0,
-    "float": 0.0,
-    "bool": False,
-    "list_bool": [],
-    "list_int": [],
-    "list_float": [],
-    "list_list_int": [[]],
-}
+'''
+ATTR_DEF_VAL = {'str' : '', 'int': 0, 'float': 0.0, 'bool': False, 'list_bool': [],
+                'list_int': [], 'list_float': [], 'list_list_int': [[]]}
 
 
 def conv_soc_ver(ver: str):

@@ -17,6 +17,7 @@ unset(GTEST_MAIN_STATIC_LIBRARY CACHE)
 unset(GMOCK_STATIC_LIBRARY CACHE)
 unset(GMOCK_MAIN_STATIC_LIBRARY CACHE)
 
+set(GTEST_DOWNLOAD_PATH ${CANN_3RD_LIB_PATH}/pkg)
 set(GTEST_INSTALL_PATH ${CANN_3RD_LIB_PATH}/gtest)
 message("GTEST_INSTALL_PATH=${GTEST_INSTALL_PATH}")
 find_path(GTEST_INCLUDE
@@ -66,14 +67,30 @@ if(gtest_FOUND AND NOT FORCE_REBUILD_CANN_3RD)
     message("gtest found in ${GTEST_INSTALL_PATH}, and not force rebuild cann third_party")
 else()
     set(REQ_URL "https://gitcode.com/cann-src-third-party/googletest/releases/download/v1.14.0/googletest-1.14.0.tar.gz")
+    set(GTEST_ARCHIVE ${GTEST_DOWNLOAD_PATH}/googletest-1.14.0.tar.gz)
+    file(MAKE_DIRECTORY ${GTEST_DOWNLOAD_PATH})
+
+    # Search in CANN_3RD_LIB_PATH and move to pkg if found
+    if(EXISTS ${CANN_3RD_LIB_PATH}/googletest-1.14.0.tar.gz AND NOT EXISTS ${GTEST_ARCHIVE})
+        message("Found googletest archive in ${CANN_3RD_LIB_PATH}, moving to pkg")
+        file(RENAME ${CANN_3RD_LIB_PATH}/googletest-1.14.0.tar.gz ${GTEST_ARCHIVE})
+    endif()
+
+    if(EXISTS ${GTEST_ARCHIVE})
+        message("gtest not found in ${GTEST_INSTALL_PATH}, found archive at ${GTEST_ARCHIVE}")
+        set(GTEST_URL "file://${GTEST_ARCHIVE}")
+    else()
+        message("gtest not found in ${GTEST_INSTALL_PATH}, begin load from ${REQ_URL}")
+        set(GTEST_URL ${REQ_URL})
+    endif()
     set (gtest_CXXFLAGS "-D_GLIBCXX_USE_CXX11_ABI=0 -O2 -D_FORTIFY_SOURCE=2 -fPIC -fstack-protector-all -Wl,-z,relro,-z,now,-z,noexecstack")
     set (gtest_CFLAGS   "-D_GLIBCXX_USE_CXX11_ABI=0 -O2 -D_FORTIFY_SOURCE=2 -fPIC -fstack-protector-all -Wl,-z,relro,-z,now,-z,noexecstack")
 
     include(ExternalProject)
     ExternalProject_Add(third_party_gtest
-            URL ${REQ_URL}
+            URL ${GTEST_URL}
             TLS_VERIFY OFF
-            DOWNLOAD_DIR ${CANN_3RD_PKG_PATH}
+            DOWNLOAD_DIR ${GTEST_DOWNLOAD_PATH}
             CONFIGURE_COMMAND ${CMAKE_COMMAND}
             -DCMAKE_CXX_FLAGS=${gtest_CXXFLAGS}
             -DCMAKE_C_FLAGS=${gtest_CFLAGS}
@@ -87,29 +104,37 @@ else()
             )
 endif()
 
-set(GTEST_INCLUDE ${GTEST_INSTALL_PATH}/include)
+set(GTEST_INCLUDE ${GTEST_INSTALL_PATH}/include)	 
 
-add_library(gtest STATIC IMPORTED)
-add_dependencies(gtest third_party_gtest)
 
-add_library(gmock STATIC IMPORTED)
-add_dependencies(gmock third_party_gtest)
+add_library(gtest STATIC IMPORTED) 
+add_dependencies(gtest third_party_gtest) 
 
-add_library(gtest_main STATIC IMPORTED)
-add_dependencies(gtest_main third_party_gtest)
 
-if (NOT EXISTS ${GTEST_INSTALL_PATH}/include)
-  file(MAKE_DIRECTORY "${GTEST_INSTALL_PATH}/include")
-endif ()
+add_library(gmock STATIC IMPORTED) 
+add_dependencies(gmock third_party_gtest) 
 
-set_target_properties(gtest PROPERTIES
-        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgtest.a
-        INTERFACE_INCLUDE_DIRECTORIES ${GTEST_INSTALL_PATH}/include)
 
-set_target_properties(gmock PROPERTIES
-        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgmock.a
-        INTERFACE_INCLUDE_DIRECTORIES ${GTEST_INSTALL_PATH}/include)
+add_library(gtest_main STATIC IMPORTED) 
+add_dependencies(gtest_main third_party_gtest) 
 
-set_target_properties(gtest_main PROPERTIES
-        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgtest_main.a
+if (NOT EXISTS ${GTEST_INSTALL_PATH}/include)	 
+file(MAKE_DIRECTORY "${GTEST_INSTALL_PATH}/include")	 
+endif ()	 
+
+
+set_target_properties(gtest PROPERTIES	 
+        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgtest.a	 
+        INTERFACE_INCLUDE_DIRECTORIES ${GTEST_INSTALL_PATH}/include)	 
+
+
+
+
+set_target_properties(gmock PROPERTIES	 
+        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgmock.a	 
+        INTERFACE_INCLUDE_DIRECTORIES ${GTEST_INSTALL_PATH}/include) 
+
+
+set_target_properties(gtest_main PROPERTIES	 
+        IMPORTED_LOCATION ${GTEST_INSTALL_PATH}/lib/libgtest_main.a	 
         INTERFACE_INCLUDE_DIRECTORIES ${GTEST_INSTALL_PATH}/include)

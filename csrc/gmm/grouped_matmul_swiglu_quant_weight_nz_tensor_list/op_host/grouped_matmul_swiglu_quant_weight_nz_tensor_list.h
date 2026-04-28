@@ -18,7 +18,6 @@ const std::tuple<aclTensor*, aclTensor*> GroupedMatmulSwigluQuantWeightNzTensorL
                                                                   const aclTensorList *perChannelScale,
                                                                   const aclTensor *perTokenScale,
                                                                   const aclTensor *groupList,
-                                                                  float swigluLimit,
                                                                   aclOpExecutor *executor);
 }
 

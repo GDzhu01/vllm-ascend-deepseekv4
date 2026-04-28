@@ -163,7 +163,8 @@ class AscendDSABackend(AttentionBackend):
 
     @staticmethod
     def get_supported_kernel_block_sizes() -> list[int]:
-        return [2, 32, 128]
+        kernel_block_sizes = [2, 16, 128] if get_ascend_device_type() == AscendDeviceType.A5 else [2, 32, 128]
+        return kernel_block_sizes
 
 
 @dataclass
@@ -469,7 +470,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         # NOTE: Currently, MTP-fullgraph is incompatibility pcp
         slot_mapping = common_attn_metadata.slot_mapping[:
                                                               num_input_tokens]
-        self.slot_mapping[:num_input_tokens] = torch.stack([slot_mapping // self.block_size, slot_mapping % self.block_size], axis=-1)
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self.slot_mapping = slot_mapping
+        else:
+            self.slot_mapping[:num_input_tokens] = torch.stack([slot_mapping // self.block_size, slot_mapping % self.block_size], axis=-1)
 
         query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
         query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
@@ -617,82 +621,166 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             cu_c128_cmp_seqlen_list = None
 
         layer_name = f"c{self.compressor_ratio}"
-        if self.compressor_ratio <= 1:
-            if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
-                self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=prefill_query_start_loc,
-                    cu_seqlens_ori_kv=prefill_query_start_loc,
-                    cu_seqlens_cmp_kv=None,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[reqs_start:],
-                    max_seqlen_q=seq_lens_q.max(),
-                    max_seqlen_kv=self.seq_lens[reqs_start:].max(),
-                    batch_size=len(self.seq_lens[reqs_start:]),
-                    cmp_ratio=1,
-                    ori_mask_mode=4,  # 4:sliding window
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=False,
-                    device=str(self.seqused_q.device))
-            sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
-        elif self.compressor_ratio == 4:
-            if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
-                self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=prefill_query_start_loc,
-                    cu_seqlens_ori_kv=prefill_query_start_loc,
-                    cu_seqlens_cmp_kv=cu_c4_cmp_seqlen_list,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[reqs_start:],
-                    max_seqlen_q=seq_lens_q.max(),
-                    max_seqlen_kv=self.seq_lens[reqs_start:].max(),
-                    batch_size=len(self.seq_lens[reqs_start:]),
-                    cmp_topk=index_topk,
-                    # topk=index_topk,
-                    cmp_ratio=4,
-                    ori_mask_mode=4,
-                    cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=True,
-                    device=str(self.seqused_q.device))
-            sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            if self.compressor_ratio <= 1:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=None,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_ratio=1,
+                        ori_mask_mode=4,  # 4:sliding window
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=False,
+                        # device=str(self.seqused_q.device)
+                    )
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+            elif self.compressor_ratio == 4:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=cu_c4_cmp_seqlen_list,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_topk=index_topk,
+                        # topk=index_topk,
+                        cmp_ratio=4,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        # device=str(self.seqused_q.device)
+                    )
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+            else:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=cu_c128_cmp_seqlen_list,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_ratio=128,  #
+                        ori_mask_mode=4,  # 4:sliding window
+                        cmp_mask_mode=3,  # 3:causal
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        # device=str(self.seqused_q.device)
+                    )
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
         else:
-            if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
-                self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=prefill_query_start_loc,
-                    cu_seqlens_ori_kv=prefill_query_start_loc,
-                    cu_seqlens_cmp_kv=cu_c128_cmp_seqlen_list,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[reqs_start:],
-                    max_seqlen_q=seq_lens_q.max(),
-                    max_seqlen_kv=self.seq_lens[reqs_start:].max(),
-                    batch_size=len(self.seq_lens[reqs_start:]),
-                    cmp_ratio=128,  #
-                    ori_mask_mode=4,  # 4:sliding window
-                    cmp_mask_mode=3,  # 3:causal
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=True,
-                    device=str(self.seqused_q.device))
-            sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+            if self.compressor_ratio <= 1:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=None,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_ratio=1,
+                        ori_mask_mode=4,  # 4:sliding window
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=False,
+                        device=str(self.seqused_q.device))
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+            elif self.compressor_ratio == 4:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=cu_c4_cmp_seqlen_list,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_topk=index_topk,
+                        # topk=index_topk,
+                        cmp_ratio=4,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        device=str(self.seqused_q.device))
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
+            else:
+                if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=prefill_query_start_loc,
+                        cu_seqlens_ori_kv=prefill_query_start_loc,
+                        cu_seqlens_cmp_kv=cu_c128_cmp_seqlen_list,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[reqs_start:],
+                        max_seqlen_q=seq_lens_q.max(),
+                        max_seqlen_kv=self.seq_lens[reqs_start:].max(),
+                        batch_size=len(self.seq_lens[reqs_start:]),
+                        cmp_ratio=128,  #
+                        ori_mask_mode=4,  # 4:sliding window
+                        cmp_mask_mode=3,  # 3:causal
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        device=str(self.seqused_q.device))
+                sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
         qli_metadata = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=prefill_query_start_loc[1:].clone(),
             actual_seq_lengths_key=self.seq_lens[reqs_start:].clone(),
@@ -812,6 +900,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         compressed_tokens_start = _get_compressed_decode_token_start(
             decode_input_positions, self.compressor_ratio)
 
+        # TODO: add padding for slot mapping
         slot_mapping = self.slot_mapping[:compressed_tokens_start]
 
         max_seqlen_kv = torch.max(
@@ -834,83 +923,165 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         index_topk = 512
 
         assert self.decode_sas_metadata is not None
-        if self.compressor_ratio <= 1:
-            if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
-                self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=query_start_loc,
-                    cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                    cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[:self.num_decodes],
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_kv=max_seqlen_kv,
-                    batch_size=len(self.seq_lens[:self.num_decodes]),
-                    cmp_ratio=1,
-                    ori_mask_mode=4,
-                    cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=False,
-                    device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
-        elif self.compressor_ratio == 4:
-            if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
-                self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=query_start_loc,
-                    cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                    cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[:self.num_decodes],
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_kv=max_seqlen_kv,
-                    batch_size=len(self.seq_lens[:self.num_decodes]),
-                    cmp_topk=index_topk,
-                    # topk=index_topk,
-                    cmp_ratio=4,
-                    ori_mask_mode=4,
-                    cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=True,
-                    device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            if self.compressor_ratio <= 1:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_ratio=1,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=False,)
+                        # device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+            elif self.compressor_ratio == 4:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_topk=index_topk,
+                        # topk=index_topk,
+                        cmp_ratio=4,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,)
+                        # device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+            else:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv_metadata(
+                        kv_quant_mode = 1,
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_ratio=128,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,)
+                        # device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
         else:
-            if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
-                self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
-                    num_heads_q=n_local_heads,
-                    num_heads_kv=1,
-                    head_dim=self.model_config.get_head_size(),
-                    cu_seqlens_q=query_start_loc,
-                    cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                    cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
-                    seqused_q=self.seqused_q,
-                    seqused_kv=self.seq_lens[:self.num_decodes],
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_kv=max_seqlen_kv,
-                    batch_size=len(self.seq_lens[:self.num_decodes]),
-                    cmp_ratio=128,
-                    ori_mask_mode=4,
-                    cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
-                    ori_win_right=0,
-                    layout_q="TND",
-                    layout_kv="PA_ND",
-                    has_ori_kv=True,
-                    has_cmp_kv=True,
-                    device=str(self.seqused_q.device))
-            self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+            if self.compressor_ratio <= 1:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_ratio=1,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=False,
+                        device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+            elif self.compressor_ratio == 4:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_topk=index_topk,
+                        # topk=index_topk,
+                        cmp_ratio=4,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
+            else:
+                if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
+                    self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+                        num_heads_q=n_local_heads,
+                        num_heads_kv=1,
+                        head_dim=self.model_config.get_head_size(),
+                        cu_seqlens_q=query_start_loc,
+                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        seqused_q=self.seqused_q,
+                        seqused_kv=self.seq_lens[:self.num_decodes],
+                        max_seqlen_q=max_seqlen_q,
+                        max_seqlen_kv=max_seqlen_kv,
+                        batch_size=len(self.seq_lens[:self.num_decodes]),
+                        cmp_ratio=128,
+                        ori_mask_mode=4,
+                        cmp_mask_mode=3,
+                        ori_win_left=self.model_config.hf_config.window_size - 1,
+                        ori_win_right=0,
+                        layout_q="TND",
+                        layout_kv="PA_ND",
+                        has_ori_kv=True,
+                        has_cmp_kv=True,
+                        device=str(self.seqused_q.device))
+                self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
         assert self.decode_qli_metadata is not None
         self.decode_qli_metadata[:1024] = torch.ops._C_ascend.npu_quant_lightning_indexer_metadata(
             actual_seq_lengths_query=query_start_loc[1:].clone(),
@@ -1030,6 +1201,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.wq_b = kwargs['wq_b']
         self.wkv = kwargs['wkv']
         self.q_norm = kwargs['q_norm']
+        self.q_norm_without_weight = kwargs["q_norm_without_weight"]
         self.kv_norm = kwargs['kv_norm']
 
         self.indexer = kwargs.get('indexer', None)
@@ -1159,31 +1331,21 @@ class AscendDSAImpl(DSAAttentionImpl):
         num_tokens = o_proj_input.shape[0]
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            o_proj_input.unsqueeze(1),
-            cos,
-            -sin,
+            o_proj_input.unsqueeze(1), cos, -sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
         # o
-        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if olora_tp_enable():
-            o_proj_input = self.wo_a(o_proj_input)
-        else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-            o_proj_input = torch_npu.npu_transpose_batchmatmul(
-                o_proj_input,
-                self.wo_a.weight,
-                bias=None,
-                scale=None,
-                perm_x1=(1, 0, 2),
-                perm_x2=(0, 1, 2),
-                perm_y=(1, 0, 2),
-                batch_split_factor=1)
-            o_proj_input = o_proj_input.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o_proj_input)
+        o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
+
+        o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o, dst_type=torch.float8_e4m3fn)
+        o = torch_npu.npu_transpose_quant_batchmatmul(o, self.wo_a.weight, dtype=torch.bfloat16, bias=None, group_sizes=(0, 0, 32), 
+                                                      x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu), x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu), 
+                                                      perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2))
+
+        o = o.reshape(num_tokens, -1)
+        output[...] = self.wo_b(o)
 
         return output_padded
 
@@ -1196,19 +1358,19 @@ class AscendDSAImpl(DSAAttentionImpl):
     ):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
             # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.indexer_state_cache']
             (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
             # (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata)
             # (indexer_kv_scale_metadata, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, indexer_kv_state_metadata) 
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
             # ['attn', 'swa_cache', 'compressor.state_cache']
             (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (_, swa_kv_cache, _, _, _, _,) = kv_cache
+            (_, swa_kv_cache, _, _, _, _, _, ) = kv_cache
             # ['swa_cache']
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
@@ -1223,7 +1385,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q = triton_q_rms(q, self.eps)
+        q = self.q_norm_without_weight(q)
+        # q = triton_q_rms(q, self.eps)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
@@ -1247,10 +1410,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
 
         # swa exec kv
-        torch.ops._C_ascend.npu_scatter_nd_update_v2(
-            swa_kv_cache,
-            swa_metadata.prefill.slot_mapping, kv)
-
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            torch.ops._C_ascend.kv_compress_epilog(
+                swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
+                x=kv.view(-1, kv.shape[-1]),
+                slot_mapping=swa_metadata.slot_mapping[:kv.shape[0]],
+                quant_group_size=64,
+                quant_mode=2,
+                round_scale_flag=True,
+                layout=1,
+            )
+        else:
+            torch_npu.npu_scatter_nd_update_(
+                swa_kv_cache,
+                swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
         if self.compress_ratio > 1:
@@ -1298,76 +1471,159 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressed_kv = None
 
             # kv_compress_epilog
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                compress_kv_cache,
-                compressor_attn_metadata.prefill.slot_mapping,
-                compressed_kv)
+            if get_ascend_device_type() in {AscendDeviceType.A5}:
+                torch.ops._C_ascend.kv_compress_epilog(
+                    kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                    x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
+                    slot_mapping=compressor_attn_metadata.prefill.slot_mapping,
+                    quant_group_size=64,
+                    quant_mode=2,
+                    round_scale_flag=True,
+                    layout=1,
+                )
+            else:
+                torch_npu.npu_scatter_nd_update_(
+                    compress_kv_cache,
+                    compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
+                    compressed_kv)
 
         sliding_window_kv = kv if self.enable_kv_tnd else swa_kv_cache
 
-        if self.compress_ratio <= 1:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=sliding_window_kv,
-                ori_block_table=swa_metadata.prefill.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=compress_common_attn_metadata.prefill.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
-        elif self.compress_ratio == 4:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=sliding_window_kv,
-                cmp_kv=compressed_kv.unsqueeze(1)
-                if self.enable_kv_tnd else compress_kv_cache,
-                cmp_sparse_indices=compress_topk_idxs,
-                ori_block_table=swa_metadata.prefill.block_table,
-                cmp_block_table=compressor_attn_metadata.prefill.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
-                cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill.cu_c4_cmp_seqlen_list,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=compress_common_attn_metadata.prefill.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
+        if get_ascend_device_type() in {AscendDeviceType.A5}:         
+            if self.compress_ratio == 1:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compress_common_attn_metadata.prefill.sas_metadata,
+                    kv_quant_mode=1,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
+            elif self.compress_ratio == 4:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    cmp_kv=compressed_kv.unsqueeze(1)
+                    if self.enable_kv_tnd else compress_kv_cache,
+                    cmp_sparse_indices=compress_topk_idxs,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cmp_block_table=compressor_attn_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compress_common_attn_metadata.prefill.sas_metadata,
+                    kv_quant_mode=1,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
+            else:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    cmp_kv=compressed_kv.unsqueeze(1)
+                    if self.enable_kv_tnd else compress_kv_cache,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cmp_block_table=compressor_attn_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compress_common_attn_metadata.prefill.sas_metadata,
+                    kv_quant_mode=1,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
         else:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=sliding_window_kv,
-                cmp_kv=compressed_kv.unsqueeze(1)
-                if self.enable_kv_tnd else compress_kv_cache,
-                ori_block_table=swa_metadata.prefill.block_table,
-                cmp_block_table=compressor_attn_metadata.prefill.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                cu_seqlens_ori_kv=actual_seq_lengths_query,
-                cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill.
-                cu_c128_cmp_seqlen_list,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=compressor_attn_metadata.prefill.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
+            if self.compress_ratio <= 1:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    cu_seqlens_ori_kv=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compress_common_attn_metadata.prefill.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
+            elif self.compress_ratio == 4:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    cmp_kv=compressed_kv.unsqueeze(1)
+                    if self.enable_kv_tnd else compress_kv_cache,
+                    cmp_sparse_indices=compress_topk_idxs,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cmp_block_table=compressor_attn_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    cu_seqlens_ori_kv=actual_seq_lengths_query,
+                    cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill.cu_c4_cmp_seqlen_list,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compress_common_attn_metadata.prefill.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
+            else:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=sliding_window_kv,
+                    cmp_kv=compressed_kv.unsqueeze(1)
+                    if self.enable_kv_tnd else compress_kv_cache,
+                    ori_block_table=swa_metadata.prefill.block_table,
+                    cmp_block_table=compressor_attn_metadata.prefill.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    cu_seqlens_ori_kv=actual_seq_lengths_query,
+                    cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill.
+                    cu_c128_cmp_seqlen_list,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compressor_attn_metadata.prefill.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="TND" if self.enable_kv_tnd else "PA_ND")[0]
+
         return attn_output
 
     def _forward_decode(
@@ -1381,17 +1637,17 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_common_attn_metadata = None
 
         if self.compress_ratio == 4:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
             # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.state_cache']
             (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
             # ['attn', 'swa_cache', 'compressor.state_cache']
             (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (_, swa_kv_cache, _, _, _, _) = kv_cache
+            (_, swa_kv_cache, _, _, _, _, _) = kv_cache
             # ['swa_cache']
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
@@ -1421,7 +1677,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
             qr_pertoken_scale = None
 
-        q = triton_q_rms(q, self.eps)
+        # q = triton_q_rms(q, self.eps)
+        q = self.q_norm_without_weight(q)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
@@ -1452,9 +1709,20 @@ class AscendDSAImpl(DSAAttentionImpl):
             )
 
             # swa exec kv
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                swa_kv_cache,
-                swa_metadata.decode.slot_mapping, kv)
+            if get_ascend_device_type() in {AscendDeviceType.A5}:
+                torch.ops._C_ascend.kv_compress_epilog(
+                    swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
+                    x=kv.view(-1, kv.shape[-1]),
+                    slot_mapping=swa_metadata.decode.slot_mapping,
+                    quant_group_size=64,
+                    quant_mode=2,
+                    round_scale_flag=True,
+                    layout=1,
+                )
+            else:
+                torch_npu.npu_scatter_nd_update_(
+                    swa_kv_cache,
+                    swa_metadata.decode.slot_mapping.unsqueeze(-1), kv)
 
             wait_attention_cal_event = torch.npu.current_stream().record_event() \
                 if self.multistream_dsa_preprocess else None
@@ -1504,65 +1772,149 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode=2,
                 cache_mode=1)
             # kv_compress_epilog
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                compress_kv_cache,
-                compressor_attn_metadata.decode.slot_mapping,
-                compressed_kv)
-        if self.compress_ratio <= 1:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=swa_kv_cache,
-                ori_block_table=swa_metadata.decode.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=swa_metadata.decode.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="PA_ND")[0]
-        elif self.compress_ratio == 4:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=swa_kv_cache,
-                cmp_kv=compress_kv_cache,
-                cmp_sparse_indices=compress_topk_idxs,
-                ori_block_table=swa_metadata.decode.block_table,
-                cmp_block_table=compressor_attn_metadata.decode.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=compressor_attn_metadata.decode.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="PA_ND")[0]
+            if get_ascend_device_type() in {AscendDeviceType.A5}:
+                if len(compressor_attn_metadata.decode.slot_mapping):
+                    # TODO add padding to slot mapping
+                    min_shape = min(compressed_kv.shape[0], compressor_attn_metadata.decode.slot_mapping.shape[0])
+                    torch.ops._C_ascend.kv_compress_epilog(
+                        kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                        x=compressed_kv.reshape(-1, compressed_kv.shape[-1])[:min_shape, :],
+                        slot_mapping=compressor_attn_metadata.decode.slot_mapping[:min_shape],
+                        quant_group_size=64,
+                        quant_mode=2,
+                        round_scale_flag=True,
+                        layout=1,
+                    )
+            else:
+                torch_npu.npu_scatter_nd_update_(
+                    compress_kv_cache,
+                    compressor_attn_metadata.decode.slot_mapping.unsqueeze(-1),
+                    compressed_kv)
+
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            if self.compress_ratio == 1:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=swa_metadata.decode.sas_metadata,
+                    kv_quant_mode=1,
+                    cmp_ratio=self.compress_ratio,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    ori_mask_mode=4,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
+            elif self.compress_ratio == 4:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    cmp_kv=compress_kv_cache,
+                    cmp_sparse_indices=compress_topk_idxs,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cmp_block_table=compressor_attn_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compressor_attn_metadata.decode.sas_metadata,
+                    kv_quant_mode=1,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
+            else:
+                attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    cmp_kv=compress_kv_cache,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cmp_block_table=compressor_attn_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compressor_attn_metadata.decode.sas_metadata,
+                    kv_quant_mode=1,
+                    tile_size=64,
+                    rope_head_dim=64,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND"
+                )[0]
         else:
-            attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
-                q,
-                ori_kv=swa_kv_cache,
-                cmp_kv=compress_kv_cache,
-                ori_block_table=swa_metadata.decode.block_table,
-                cmp_block_table=compressor_attn_metadata.decode.block_table,
-                cu_seqlens_q=actual_seq_lengths_query,
-                seqused_kv=actual_seq_lengths_key,
-                sinks=self.attn_sink,
-                metadata=compressor_attn_metadata.decode.sas_metadata,
-                softmax_scale=self.softmax_scale,
-                cmp_ratio=self.compress_ratio,
-                ori_mask_mode=4,
-                cmp_mask_mode=3,
-                ori_win_left=self.window_size - 1,
-                ori_win_right=0,
-                layout_q="TND",
-                layout_kv="PA_ND")[0]
+            if self.compress_ratio <= 1:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=swa_metadata.decode.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND")[0]
+            elif self.compress_ratio == 4:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    cmp_kv=compress_kv_cache,
+                    cmp_sparse_indices=compress_topk_idxs,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cmp_block_table=compressor_attn_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compressor_attn_metadata.decode.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND")[0]
+            else:
+                attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
+                    q,
+                    ori_kv=swa_kv_cache,
+                    cmp_kv=compress_kv_cache,
+                    ori_block_table=swa_metadata.decode.block_table,
+                    cmp_block_table=compressor_attn_metadata.decode.block_table,
+                    cu_seqlens_q=actual_seq_lengths_query,
+                    seqused_kv=actual_seq_lengths_key,
+                    sinks=self.attn_sink,
+                    metadata=compressor_attn_metadata.decode.sas_metadata,
+                    softmax_scale=self.softmax_scale,
+                    cmp_ratio=self.compress_ratio,
+                    ori_mask_mode=4,
+                    cmp_mask_mode=3,
+                    ori_win_left=self.window_size - 1,
+                    ori_win_right=0,
+                    layout_q="TND",
+                    layout_kv="PA_ND")[0]
         return attn_output
 
     def indexer_select_qli(
@@ -1580,12 +1932,13 @@ class AscendDSAImpl(DSAAttentionImpl):
         with_prefill: bool = False,
         qr_pertoken_scale: torch.Tensor = None,
     ):
-        (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache) = kv_cache
+        (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache, indexer_full_cache) = kv_cache
         (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata) = attn_metadata
 
         if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
             isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
-            qr_pertoken_scale is not None:
+            qr_pertoken_scale is not None and \
+            get_ascend_device_type() not in {AscendDeviceType.A5}:
             q = torch_npu.npu_quant_matmul(
                 qr,
                 self.inderxer_wq_b.weight,
@@ -1654,7 +2007,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                                                           } else torch.int8
 
         q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
-        if kv is not None:
+        if kv is not None and get_ascend_device_type() not in {AscendDeviceType.A5}:
             kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
             kv_scale = kv_scale.unsqueeze(-1)
 
@@ -1667,33 +2020,41 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
-
-                # if torch.distributed.get_rank() == 0:
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compress_kv_cache=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv is_contiguous: {compress_kv_cache.is_contiguous()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv stride: {compress_kv_cache.stride()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressor_attn_metadata.decode.slot_mapping.unsqueeze(-1)=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressed_kv=}")
-
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_k_cache,
-                    indexer_kv_scale_metadata.prefill.slot_mapping,
-                    kv)
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_scale_cache,
-                    indexer_kv_scale_metadata.prefill.slot_mapping,
-                    kv_scale)
+                if soc_version in {AscendDeviceType.A5}:
+                    torch.ops._C_ascend.indexer_compress_epilog_v2(
+                        indexer_compress_cache=indexer_full_cache.view(torch.uint8),
+                        x=kv, 
+                        slot_mapping=indexer_kv_scale_metadata.prefill.slot_mapping, 
+                        layout=2,
+                    )
+                else:
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_k_cache,
+                        indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
+                        kv)
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_scale_cache,
+                        indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
+                        kv_scale)
         else:
             assert indexer_kv_scale_metadata.decode is not None
-            if kv is not None:
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_k_cache,
-                    indexer_kv_scale_metadata.decode.slot_mapping,
-                    kv)
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_scale_cache,
-                    indexer_kv_scale_metadata.decode.slot_mapping,
-                    kv_scale)
+            if len(indexer_kv_scale_metadata.decode.slot_mapping):
+                if soc_version in {AscendDeviceType.A5}:
+                    torch.ops._C_ascend.indexer_compress_epilog_v2(
+                        indexer_compress_cache=indexer_full_cache.view(torch.uint8),
+                        x=kv, 
+                        slot_mapping=indexer_kv_scale_metadata.decode.slot_mapping, 
+                        layout=2,
+                    )
+                else:
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_k_cache,
+                        indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
+                        kv)
+                    torch_npu.npu_scatter_nd_update_(
+                        indexer_scale_cache,
+                        indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
+                        kv_scale)
 
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
@@ -1711,9 +2072,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,
             key=indexer_k_cache,
-            weights=weights.to(torch.float16),
-            query_dequant_scale=q_scale,
-            key_dequant_scale=indexer_scale_cache.squeeze(-2),
+            weights=weights.to(torch.float16) \
+                if soc_version not in {AscendDeviceType.A5} else weights.float(),
+            query_dequant_scale=q_scale \
+                if soc_version not in {AscendDeviceType.A5} else q_scale.float(),
+            key_dequant_scale=indexer_scale_cache.squeeze(-2).to(torch.float16) \
+                if soc_version not in {AscendDeviceType.A5} else indexer_scale_cache.squeeze(-2).float(),
             actual_seq_lengths_query=qlens,
             actual_seq_lengths_key=kvlens,
             block_table=block_table,

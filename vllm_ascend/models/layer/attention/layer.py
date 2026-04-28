@@ -17,6 +17,10 @@ from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
+from vllm_ascend.utils import (
+    AscendDeviceType,
+    get_ascend_device_type,
+)
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 
@@ -171,10 +175,17 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             return None
         kv_cache_dtype = kv_cache_dtype_str_to_dtype(self.kv_cache_dtype,
                                                      vllm_config.model_config)
+
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            kv_cache_dtype = torch.float8_e4m3fn
+            vllm_config.cache_config.cache_dtype = "float8_e4m3fn"
+            
+        cached_head_size = (self.head_size + 128) \
+            if get_ascend_device_type() in {AscendDeviceType.A5} else self.head_size
         return MLAAttentionSpec(
             block_size=128,
             num_kv_heads=1,
-            head_size=self.head_size,
+            head_size=cached_head_size,
             dtype=kv_cache_dtype,
             model_version="svf",
             compress_ratio=self.compress_ratio,
