@@ -133,6 +133,20 @@ def pad_to_blocks(x: torch.Tensor,
     return out
 
 
+def _make_2d_slot_mapping(slot_mapping: torch.Tensor,
+                          block_size: int) -> torch.Tensor:
+    # Preserve padding slots as an invalid 2D coordinate instead of letting
+    # `-1 % block_size` become a valid offset in the last cache block.
+    valid_slots = slot_mapping >= 0
+    return torch.stack(
+        (
+            torch.where(valid_slots, slot_mapping // block_size, -1),
+            torch.where(valid_slots, slot_mapping % block_size, -1),
+        ),
+        dim=-1,
+    ).to(torch.int32)
+
+
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -473,7 +487,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         if get_ascend_device_type() in {AscendDeviceType.A5}:
             self.slot_mapping = slot_mapping
         else:
-            self.slot_mapping[:num_input_tokens] = torch.stack([slot_mapping // self.block_size, slot_mapping % self.block_size], axis=-1)
+            self.slot_mapping[:num_input_tokens] = _make_2d_slot_mapping(
+                slot_mapping, self.block_size)
 
         query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
         query_seq_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]

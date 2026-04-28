@@ -44,12 +44,10 @@ extern "C" __global__ __aicore__ void indexer_compress_epilog_v2(
         IndexerCompressEpilogV2::IndexerCompressEpilogV2MultiRow<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } else if (TILING_KEY_IS(SINGLE_ROW_TILING_KEY)) {
         IndexerCompressEpilogV2::IndexerCompressEpilogV2SingleRow<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } 
     AscendC::SetCtrlSpr<FLOAT_OVERFLOW_MODE_CTRL, FLOAT_OVERFLOW_MODE_CTRL>(oriOverflowMode);
 }
