@@ -900,8 +900,16 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         compressed_tokens_start = _get_compressed_decode_token_start(
             decode_input_positions, self.compressor_ratio)
 
-        # TODO: add padding for slot mapping
         slot_mapping = self.slot_mapping[:compressed_tokens_start]
+        target_shape = min(
+            self.num_decode_tokens,
+            self.num_decode_tokens // self.compressor_ratio + self.num_decodes)
+        pad_size = target_shape - slot_mapping.shape[0]
+        if pad_size > 0:
+            if slot_mapping.ndim == 1:
+                slot_mapping = F.pad(slot_mapping, (0, pad_size), value=-1)
+            else:
+                slot_mapping = F.pad(slot_mapping, (0, 0, 0, pad_size), value=-1)
 
         max_seqlen_kv = torch.max(
             common_attn_metadata.seq_lens_cpu[:self.num_decodes]).item()
@@ -1774,12 +1782,10 @@ class AscendDSAImpl(DSAAttentionImpl):
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 if len(compressor_attn_metadata.decode.slot_mapping):
-                    # TODO add padding to slot mapping
-                    min_shape = min(compressed_kv.shape[0], compressor_attn_metadata.decode.slot_mapping.shape[0])
                     torch.ops._C_ascend.kv_compress_epilog(
                         kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
-                        x=compressed_kv.reshape(-1, compressed_kv.shape[-1])[:min_shape, :],
-                        slot_mapping=compressor_attn_metadata.decode.slot_mapping[:min_shape],
+                        x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
+                        slot_mapping=compressor_attn_metadata.decode.slot_mapping,
                         quant_group_size=64,
                         quant_mode=2,
                         round_scale_flag=True,
