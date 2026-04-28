@@ -221,8 +221,15 @@ class DeepseekV2MLP(nn.Module):
 
     def forward(self, x):
         gate_up, _ = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
+        hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.npu_swiglu_group_quant(
+            gate_up,
+            topk_weight=None,
+            group_index=None,
+            dst_type=torch.float8_e4m3fn,
+            quant_mode=2,
+            clamp_value=10.0,
+        )
+        x, _ = self.down_proj((hidden_states, swiglu_out_scale))
         return x
 
 

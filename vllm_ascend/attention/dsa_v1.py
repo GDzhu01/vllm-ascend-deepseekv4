@@ -901,9 +901,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             decode_input_positions, self.compressor_ratio)
 
         slot_mapping = self.slot_mapping[:compressed_tokens_start]
+        tmp_compressor_ration = self.compressor_ratio if self.compressor_ratio != 0 else 1
         target_shape = min(
             self.num_decode_tokens,
-            self.num_decode_tokens // self.compressor_ratio + self.num_decodes)
+            self.num_decode_tokens // tmp_compressor_ration + self.num_decodes)
         pad_size = target_shape - slot_mapping.shape[0]
         if pad_size > 0:
             if slot_mapping.ndim == 1:

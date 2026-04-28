@@ -187,8 +187,14 @@ def quant_apply_mlp(
                     weight_dtype=torch_npu.float4_e2m1fn_x2,
                     output_dtype=torch.bfloat16
                 )[0]
-                hidden_states = torch_npu.npu_swiglu(hidden_states)
-                hidden_states, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(hidden_states, dst_type=torch.float8_e4m3fn, round_mode="rint")
+                hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.npu_swiglu_group_quant(
+                    hidden_states,
+                    topk_weight=None,
+                    group_index=None,
+                    dst_type=torch.float8_e4m3fn,
+                    quant_mode=2,
+                    clamp_value=10.0,
+                )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
         else:
@@ -316,8 +322,14 @@ def quant_apply_mlp(
                     weight_dtype=torch_npu.float4_e2m1fn_x2,
                     output_dtype=torch.bfloat16
                 )[0]
-                hidden_states = torch_npu.npu_swiglu(hidden_states)
-                hidden_states, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(hidden_states, dst_type=torch.float8_e4m3fn, round_mode="rint")
+                hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.npu_swiglu_group_quant(
+                    hidden_states,
+                    topk_weight=None,
+                    group_index=None,
+                    dst_type=torch.float8_e4m3fn,
+                    quant_mode=2,
+                    clamp_value=10.0,
+                )
             if quantized_hidden_states is not None:
                 dispose_tensor(quantized_hidden_states)
         else:
