@@ -27,8 +27,9 @@ from contextlib import nullcontext
 from enum import Enum
 from functools import lru_cache
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List
 
+import numpy as np
 import regex as re
 import torch
 import torch_npu  # noqa: F401
@@ -67,12 +68,50 @@ _DYNAMIC_EPLB_BUFFER_SIZE = 100
 _IS_MOE_MODEL = None
 _IS_DRAFTER_MOE_MODEL = None
 _IS_VL_MODEL = None
+
+
+def extract_dsv4_layer_index(config: Any, layer_name: str) -> int:
+    """Extract DSV4 index for config per-layer arrays.
+
+    Runtime module names keep their original MTP namespace, e.g. ``mtp.0``.
+    When indexing config-level arrays such as ``compress_ratios``, MTP layers
+    are addressed after the main model layers.
+    """
+    from vllm.model_executor.models.utils import extract_layer_index
+
+    layer_idx = extract_layer_index(layer_name)
+    if ".mtp." in f".{layer_name}." and layer_idx < config.num_hidden_layers:
+        return config.num_hidden_layers + layer_idx
+    return layer_idx
+
+
+def get_dsv4_spec_layer_idx_from_weight_name(config: Any,
+                                             weight_name: str) -> int | None:
+    """Return local MTP layer index for DSV4 checkpoint weight names."""
+    if weight_name.startswith("mtp."):
+        return int(weight_name.split(".")[1])
+    return None
+
+
+def get_dsv4_compress_ratio(config: Any, layer_idx: int) -> int:
+    """Return DSV4 compress ratio, treating unspecified MTP layers as dense."""
+    compress_ratios = getattr(config, "compress_ratios", None)
+    if compress_ratios is None or layer_idx >= len(compress_ratios):
+        return 0
+    return compress_ratios[layer_idx]
+
+
 _ENABLE_SP = None
 _HAS_LAYER_IDX = None
 _SUBSCRIBED_COMPUTE_STREAMS = set()
 _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
+_ATNN_CALCULATION_STREAM = None
+_CUSTOM_OP_VENDOR_DIR = "custom_transformer"
+_CUSTOM_OP_BASE_DIR = (
+    os.path.dirname(__file__) if os.path.isabs(__file__) else os.path.abspath(os.path.dirname(__file__))
+)
 
 
 def is_310p():
@@ -176,6 +215,26 @@ def _round_up(x: int, align: int):
     return (x + align - 1) // align * align
 
 
+def _prepend_env_path(env_name: str, path: str) -> None:
+    current_value = os.environ.get(env_name, "")
+    path_entries = [entry for entry in current_value.split(":") if entry]
+    if path not in path_entries:
+        path_entries.insert(0, path)
+        os.environ[env_name] = ":".join(path_entries)
+
+
+def bootstrap_custom_op_env(*, include_vendor_lib: bool = False) -> None:
+    vendor_path = os.path.join(_CUSTOM_OP_BASE_DIR, "_cann_ops_custom", "vendors", _CUSTOM_OP_VENDOR_DIR)
+    if not os.path.exists(vendor_path):
+        return
+    _prepend_env_path("ASCEND_CUSTOM_OPP_PATH", vendor_path)
+
+    if include_vendor_lib:
+        vendor_lib_path = os.path.join(vendor_path, "op_api", "lib")
+        if os.path.exists(vendor_lib_path):
+            _prepend_env_path("LD_LIBRARY_PATH", vendor_lib_path)
+
+
 def _custom_pad(x, pad_dims):
     # pad the input tensor to the shape of pad_dims
     # input: (13, 30), pad_dims: [0, 2, 0, 3]
@@ -276,6 +335,8 @@ def enable_custom_op():
         return _CUSTOM_OP_ENABLED
 
     try:
+        if not torch.compiler.is_compiling():
+            bootstrap_custom_op_env()
         # isort: off
         # register custom ops into torch_library here
         import vllm_ascend.vllm_ascend_C  # type: ignore  # noqa: F401
@@ -285,9 +346,22 @@ def enable_custom_op():
 
         # isort: on
         _CUSTOM_OP_ENABLED = True
-    except ImportError:
-        _CUSTOM_OP_ENABLED = False
-        logger.warning("Warning: Failed to register custom ops, all custom ops will be disabled")
+    except ImportError as e:
+        # Prefer the extension's rpath for vendor op_api loading. Only fall back
+        # to mutating LD_LIBRARY_PATH when the import proves it is still needed.
+        if (not torch.compiler.is_compiling()) and "libcust_opapi.so" in str(e):
+            try:
+                bootstrap_custom_op_env(include_vendor_lib=True)
+                import vllm_ascend.meta_registration  # type: ignore  # noqa: F401
+                import vllm_ascend.vllm_ascend_C  # type: ignore  # noqa: F401
+
+                _CUSTOM_OP_ENABLED = True
+            except ImportError:
+                _CUSTOM_OP_ENABLED = False
+                logger.warning("Warning: Failed to register custom ops, all custom ops will be disabled")
+        else:
+            _CUSTOM_OP_ENABLED = False
+            logger.warning("Warning: Failed to register custom ops, all custom ops will be disabled")
     return _CUSTOM_OP_ENABLED
 
 
@@ -375,6 +449,11 @@ def cp_chunkedprefill_comm_stream() -> torch.npu.Stream:
         _CP_CHUNKEDPREFILL_COMM_STREAM = torch_npu.npu.Stream()
     return _CP_CHUNKEDPREFILL_COMM_STREAM
 
+def attention_calculation_stream() -> torch.npu.Stream:
+    global _ATNN_CALCULATION_STREAM
+    if _ATNN_CALCULATION_STREAM is None:
+        _ATNN_CALCULATION_STREAM = torch_npu.npu.Stream()
+    return _ATNN_CALCULATION_STREAM
 
 def adapt_patch(is_global_patch: bool = False):
     if is_global_patch:
@@ -756,6 +835,9 @@ def embedding_tp_enable() -> bool:
 def oproj_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.oproj_tensor_parallel_size > 0
 
+def olora_tp_enable() -> bool:
+    return get_ascend_config(
+    ).finegrained_tp_config.olora_tensor_parallel_size > 1
 
 def mlp_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.mlp_tensor_parallel_size > 0
@@ -1157,6 +1239,10 @@ def refresh_block_size(vllm_config):
     if cache_config.block_size is None:
         cache_config.block_size = 128
 
+    if model_config.hf_config.model_type == "deepseek_v4":
+        # TODO(qcs): generalize the block_size
+        cache_config.block_size = 128
+
     if not scheduler_config or not model_config:
         return
 
@@ -1168,7 +1254,7 @@ def refresh_block_size(vllm_config):
     if cache_config.block_size != 128:
         if cache_config.enable_prefix_caching or scheduler_config.enable_chunked_prefill:
             logger.info("Block size is set to 128 if prefix cache or chunked prefill is enabled.")
-            cache_config.block_size = 128
+            cache_config.block_size = 32
 
 
 def dispose_layer(layer: Any):
@@ -1335,3 +1421,70 @@ def parse_layer_idx(prefix: str) -> int | None:
     """Extract the layer index from a module prefix string like 'model.layers.0.self_attn'."""
     match = re.search(r"layers\.(\d+)", prefix)
     return int(match.group(1)) if match else None
+
+def get_compressed_pos_and_indices( 
+        num_computed_tokens: np.ndarray,
+        num_scheduled_tokens: np.ndarray,
+        arrange_np: np.ndarray,
+        use_compress: bool,
+        kv_cache_groups
+ ) -> tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
+    """
+    Batch generate compressed position ids for multi-requests on DSv4.
+    Calculate compressed position ids independently for each single request.
+ 
+    Args:
+        num_computed_tokens: Historical processed token counts of multiple requests, shape=[num_reqs,]
+        num_scheduled_tokens: New scheduled token counts of multiple requests in current step, shape=[num_reqs,]
+ 
+    Returns:
+        tuple(np.ndarray, np.ndarray):
+            1. Flattened compressed position id array for all requests
+            2. Length of compressed position ids for each individual request
+    """
+    if not use_compress:
+        return None, None, None
+    # Assert input validity
+    assert num_computed_tokens.shape == num_scheduled_tokens.shape, "num_computed_tokens and num_scheduled_tokens must have the same shape"
+    assert np.all(num_computed_tokens >= 0) and np.all(
+        num_scheduled_tokens >= 0), "Token count cannot be negative value"
+
+    positions_compressed_list = []
+    req_indices_compressed_list = []
+    num_scheduled_tokens_compressed_list = []
+    
+    from vllm.v1.kv_cache_interface import UniformTypeKVCacheSpecs
+    for kv_cache_group_id, kv_cache_group_spec in enumerate(kv_cache_groups):
+        # Calculate compressed length of historical & total tokens
+        if isinstance(kv_cache_group_spec.kv_cache_spec, UniformTypeKVCacheSpecs):
+            kv_cache_spec = next(iter(kv_cache_group_spec.kv_cache_spec.kv_cache_specs.values()))
+        else:
+            kv_cache_spec = kv_cache_group_spec.kv_cache_spec
+        compress_ratio = getattr(kv_cache_spec, "compress_ratio", 1)
+
+        # Note(qcs): some models use compress_ratio=0 as non-compression tag.
+        if compress_ratio > 1:
+            compressed_historical_len = num_computed_tokens // compress_ratio
+            compressed_total_len = (num_computed_tokens +
+                                    num_scheduled_tokens) // compress_ratio
+        else:
+            compressed_historical_len = num_computed_tokens
+            compressed_total_len = (num_computed_tokens + num_scheduled_tokens)
+ 
+        # The number of new compressed position ids for each request
+        num_new_compressed_pos = compressed_total_len - compressed_historical_len
+
+        # Core vectorized calculation (no for-loop)
+        pos_starts = compressed_historical_len
+        prefix_offsets = np.concatenate([[0],
+                                         np.cumsum(num_new_compressed_pos[:-1])
+                                         ])
+        compressed_pos_ids = np.arange(
+            np.sum(num_new_compressed_pos)) + np.repeat(
+                pos_starts - prefix_offsets, num_new_compressed_pos)
+
+        req_indices_compressed = np.repeat(arrange_np, num_new_compressed_pos)
+        req_indices_compressed_list.append(req_indices_compressed)
+        positions_compressed_list.append(compressed_pos_ids)
+        num_scheduled_tokens_compressed_list.append(num_new_compressed_pos)
+    return positions_compressed_list, req_indices_compressed_list, num_scheduled_tokens_compressed_list

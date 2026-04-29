@@ -73,6 +73,7 @@ class FusedExpertsResult:
     # communication method that supports shared experts in parallel with routed
     # experts.
     before_dispatch_evt: torch.npu.Event | None = None
+    before_gmm2_evt: torch.npu.Event | None = None
     before_combine_evt: torch.npu.Event | None = None
     # For dynamic_eplb
     group_list_type: int = 1
@@ -141,7 +142,7 @@ class MoECommMethod(ABC):
             use_fusion_ops=self.use_fusion_ops,
         )
 
-        mlp_output = self._apply_mlp(mlp_compute_input)
+        mlp_output, before_gmm2_evt = self._apply_mlp(mlp_compute_input)
 
         before_combine_evt = torch.npu.current_stream().record_event()
         routed_out = self.token_dispatcher.token_combine(
@@ -152,6 +153,7 @@ class MoECommMethod(ABC):
         return FusedExpertsResult(
             routed_out=routed_out,
             before_dispatch_evt=before_dispatch_evt,
+            before_gmm2_evt=before_gmm2_evt,
             before_combine_evt=before_combine_evt,
             group_list_type=token_dispatch_output.group_list_type,
             expert_tokens=token_dispatch_output.group_list,
@@ -208,7 +210,9 @@ class MC2CommImpl(MoECommMethod):
     This implementation uses the MC2 communication method, which is optimized for
     Communication and Computation parallelism on Ascend devices.
     """
-
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
+    
     def _get_token_dispatcher(self):
         return TokenDispatcherWithMC2()
 
@@ -225,6 +229,8 @@ class AlltoAllCommImpl(MoECommMethod):
     between data parallel ranks before and after the MLP computation. It should
     have better performance than AllGatherCommImpl when DP size > 1.
     """
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
 
     def _get_token_dispatcher(self):
         return TokenDispatcherWithAll2AllV(
@@ -246,7 +252,9 @@ class FusedMC2CommImpl(MoECommMethod):
     This implementation uses the MC2 communication method, which is optimized for
     Communication and Computation parallelism on Ascend devices.
     """
-
+    def pad_and_split_input_ids(self, input_ids):
+        return self.prepare_finalize.pad_and_split_input_ids(input_ids)
+    
     def __init__(self, moe_config):
         super().__init__(moe_config)
         if envs_ascend.VLLM_ASCEND_ENABLE_FUSED_MC2 == 1:
@@ -287,9 +295,12 @@ class FusedMC2CommImpl(MoECommMethod):
                 expert_idx=topk_ids,
                 scale1=fused_experts_input.weights.w1_scale,
                 scale2=fused_experts_input.weights.w2_scale,
+                bias1=fused_experts_input.weights.w1_scale_bias,
+                bias2=fused_experts_input.weights.w2_scale_bias,
                 probs=fused_experts_input.topk_weights.to(torch.float32),
                 group=self.token_dispatcher.moe_all_to_all_group_name,
                 max_output_size=65536,
+                swiglu_limit=fused_experts_input.swiglu_limit,
                 out=out,
                 expert_token_nums=self.expert_token_nums,
             )

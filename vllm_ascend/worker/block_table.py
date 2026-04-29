@@ -1,8 +1,11 @@
+from typing import Optional
+
 import numpy as np
 import torch
 from vllm.distributed import get_dcp_group, get_pcp_group
 from vllm.utils.math_utils import cdiv
 from vllm.v1.utils import CpuGpuBuffer
+from vllm.v1.kv_cache_interface import KVCacheGroupSpec
 from vllm.v1.worker.cp_utils import get_total_cp_world_size
 
 
@@ -18,10 +21,19 @@ class BlockTable:
         kernel_sizes: list[int] | None = None,
         cp_kv_cache_interleave_size: int = 1,
         num_speculative_tokens: int = 0,
+        kv_cache_group: KVCacheGroupSpec = None,
     ):
         self.max_num_reqs = max_num_reqs
-        self.max_num_blocks_per_req = max_num_blocks_per_req
+        compress_ratio = 1
+        if kv_cache_group is not None and \
+                hasattr(kv_cache_group, "kv_cache_spec") and \
+                hasattr(kv_cache_group.kv_cache_spec, "compress_ratio"):
+            compress_ratio = kv_cache_group.kv_cache_spec.compress_ratio
+        self.max_num_blocks_per_req = max(
+            cdiv(max_num_blocks_per_req, compress_ratio), 1)
         self.max_num_batched_tokens = max_num_batched_tokens
+        max_num_blocks_per_req = max(
+            cdiv(max_num_blocks_per_req, compress_ratio), 1)
         self.pin_memory = pin_memory
         self.device = device
         self.physical_block_size = block_size
@@ -168,22 +180,22 @@ class BlockTable:
             self.slot_mapping.np[: req_indices.shape[0]] = np.where(mask, slot_mapping, -1)
         else:
             assert self.kernel_sizes is not None
-            if self.block_size == self.kernel_sizes[0]:
-                # IMPORTANT: In hybrid mode, positions are in logical block space,
-                # but we need to map them to the correct logical block table indices
-                logical_block_idx = positions // self.block_size
+            assert self.block_size == self.kernel_sizes[0]
+            # IMPORTANT: In hybrid mode, positions are in logical block space,
+            # but we need to map them to the correct logical block table indices
+            logical_block_idx = positions // self.block_size
 
-                # Account for the expanded logical table
-                # (always needed with unified tensor)
-                # Each physical block is split into multiple logical blocks
-                # The logical table has been expanded to accommodate this
-                block_table_indices = (
-                    req_indices * self.max_num_blocks_per_req * self.blocks_per_phys_block + logical_block_idx
-                )
+            # Account for the expanded logical table
+            # (always needed with unified tensor)
+            # Each physical block is split into multiple logical blocks
+            # The logical table has been expanded to accommodate this
+            block_table_indices = (
+                req_indices * self.max_num_blocks_per_req * self.blocks_per_phys_block + logical_block_idx
+            )
 
-                block_numbers = self.block_table.np.ravel()[block_table_indices]
-                block_offsets = positions % self.block_size
-                np.add(block_numbers * self.block_size, block_offsets, out=self.slot_mapping.np[: req_indices.shape[0]])
+            block_numbers = self.block_table.np.ravel()[block_table_indices]
+            block_offsets = positions % self.block_size
+            np.add(block_numbers * self.block_size, block_offsets, out=self.slot_mapping.np[: req_indices.shape[0]])
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)
@@ -243,6 +255,7 @@ class MultiGroupBlockTable:
         max_num_blocks: list[int] | None = None,
         kernel_sizes: list[list[int]] | None = None,
         cp_kv_cache_interleave_size: int = 1,
+        kv_cache_groups: KVCacheGroupSpec = None,
     ) -> None:
         if kernel_sizes is None:
             kernel_sizes = [[0]] * len(block_sizes)
@@ -268,20 +281,37 @@ class MultiGroupBlockTable:
             )
 
         # Use zip to pair block_sizes with kernel_sizes one-to-one
-        self.block_tables = [
-            BlockTable(
-                block_size,
-                max_num_reqs,
-                max_num_blocks_per_req,
-                max_num_batched_tokens,
-                pin_memory,
-                device,
-                kernel_size_list,
-                cp_kv_cache_interleave_size,
-                num_speculative_tokens,
-            )
-            for block_size, kernel_size_list, max_num_blocks_per_req in zip(block_sizes, kernel_sizes, max_num_blocks)
-        ]
+        if kv_cache_groups is not None:
+            self.block_tables = [
+                BlockTable(
+                    block_size,
+                    max_num_reqs,
+                    max_num_blocks_per_req,
+                    max_num_batched_tokens,
+                    pin_memory,
+                    device,
+                    kernel_size_list,
+                    cp_kv_cache_interleave_size,
+                    num_speculative_tokens,
+                    kv_cache_group
+                )
+                for block_size, kernel_size_list, max_num_blocks_per_req, kv_cache_group in zip(block_sizes, kernel_sizes, max_num_blocks, kv_cache_groups)
+            ]
+        else:
+            self.block_tables = [
+                BlockTable(
+                    block_size,
+                    max_num_reqs,
+                    max_num_blocks_per_req,
+                    max_num_batched_tokens,
+                    pin_memory,
+                    device,
+                    kernel_size_list,
+                    cp_kv_cache_interleave_size,
+                    num_speculative_tokens,
+                )
+                for block_size, kernel_size_list, max_num_blocks_per_req in zip(block_sizes, kernel_sizes, max_num_blocks)
+            ]
 
     def append_row(self, block_ids: tuple[list[int], ...], row_idx: int) -> None:
         for i, block_table in enumerate(self.block_tables):
@@ -299,9 +329,20 @@ class MultiGroupBlockTable:
         for block_table in self.block_tables:
             block_table.swap_row(src, tgt)
 
-    def compute_slot_mapping(self, req_indices: np.ndarray, positions: np.ndarray) -> None:
-        for block_table in self.block_tables:
-            block_table.compute_slot_mapping(req_indices, positions)
+    def compute_slot_mapping(
+        self,
+        req_indices: np.ndarray,
+        positions: np.ndarray,
+        positions_compressed_list: Optional[list[np.ndarray]] = None,
+        req_indices_compressed_list: Optional[list[np.ndarray]] = None,
+    ) -> None:
+        for i, block_table in enumerate(self.block_tables):
+            if positions_compressed_list and req_indices_compressed_list:
+                block_table.compute_slot_mapping(
+                    req_indices_compressed_list[i],
+                    positions_compressed_list[i])
+            else:
+                block_table.compute_slot_mapping(req_indices, positions)
 
     def commit_block_table(self, num_reqs: int) -> None:
         for block_table in self.block_tables:
