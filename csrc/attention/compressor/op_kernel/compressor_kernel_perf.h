@@ -239,6 +239,8 @@ __aicore__ inline void CompressorKernelPerf<COMP>::InitTilingData() {
     constInfo.normEps = tilingData_->baseParams.normEps;
     constInfo.reciprocalD = tilingData_->baseParams.reciprocalD;
     constInfo.usedCoreNum = tilingData_->baseParams.usedCoreNum;
+    constInfo.kvStateStrideDim0 = tilingData_->baseParams.kvStateStrideDim0;
+    constInfo.scoreStateStrideDim0 = tilingData_->baseParams.scoreStateStrideDim0;
     
     constInfo.blockNum = tilingData_->pageAttentionParams.blockNum;
     constInfo.blockSize = tilingData_->pageAttentionParams.blockSize;

@@ -1504,10 +1504,12 @@ compressor(
     at::Tensor softmax_res = std::get<2>(output);
     at::Tensor norm_x = std::get<3>(output);
     at::Tensor norm_rstd = std::get<4>(output);
+    int64_t kv_state_stride_dim0 = kv_state.stride(0);
+    int64_t score_state_stride_dim0 = score_state.stride(0);
 
     EXEC_NPU_CMD(aclnnCompressor, x, wkv, wgate, kv_state, score_state, ape, norm_weight, rope_sin, rope_cos,
                     kv_block_table, score_block_table, cu_seqlens, seqused, start_pos, rope_head_dim, cmp_ratio, 
-                    coff, norm_eps, rotary_mode, enable_grad, cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
+                    coff, norm_eps, rotary_mode, enable_grad, kv_state_stride_dim0, score_state_stride_dim0, cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>( \
         cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd);

@@ -36,6 +36,8 @@ namespace optiling {
         float reciprocalD = 0;              // 1分之D
         uint32_t usedCoreNum = 0;           // 使用核数
         uint32_t nSize = 0;                 // 控制v2积攒的轮数
+        uint32_t kvStateStrideDim0 = 0;     // kv state stride
+        uint32_t scoreStateStrideDim0 = 0;  // score state stride
     };
 
     struct CompressorPageAttentionParams {

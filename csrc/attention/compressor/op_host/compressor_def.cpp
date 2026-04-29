@@ -17,6 +17,7 @@ public:
     static constexpr uint32_t CMP_RATIO_VALUE = 4;
     static constexpr uint32_t COFF_VALUE = 1;
     static constexpr uint32_t ROTARY_MODE_VALUE = 1;
+    static constexpr uint32_t STATE_CACHE_STRIDE_DIM0 = 0;
 
     explicit Compressor(const char *name) : OpDef(name)
     {
@@ -39,12 +40,12 @@ public:
             .ParamType(REQUIRED)
             .DataTypeList({ge::DT_FLOAT})
             .FormatList({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("score_state")
             .ParamType(REQUIRED)
             .DataTypeList({ge::DT_FLOAT})
             .FormatList({ge::FORMAT_ND})
-            .AutoContiguous();
+            .IgnoreContiguous();
         this->Input("ape")
             .ParamType(REQUIRED)
             .DataTypeList({ge::DT_FLOAT})
@@ -124,6 +125,8 @@ public:
         this->Attr("norm_eps").AttrType(OPTIONAL).Float(1e-6f);
         this->Attr("rotary_mode").AttrType(OPTIONAL).Int(ROTARY_MODE_VALUE);
         this->Attr("enable_grad").AttrType(OPTIONAL).Bool(false);
+        this->Attr("kv_state_stride_dim0").AttrType(OPTIONAL).Int(STATE_CACHE_STRIDE_DIM0);
+        this->Attr("score_state_stride_dim0").AttrType(OPTIONAL).Int(STATE_CACHE_STRIDE_DIM0);
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)

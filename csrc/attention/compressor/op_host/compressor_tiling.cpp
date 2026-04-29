@@ -192,6 +192,8 @@ ge::graphStatus CompressorTiling::ConvertContext(gert::TilingContext &context, C
     compressorContext.cmpRatio = attrs->GetAttrPointer<int>(CMP_RATIO_ATTR_INDEX);
     compressorContext.normEps = attrs->GetAttrPointer<float>(NORM_EPS_ATTR_INDEX);
     compressorContext.rotaryMode = attrs->GetAttrPointer<int>(ROTARY_MODE_ATTR_INDEX);
+    compressorContext.kvStateStrideDim0 = attrs->GetAttrPointer<int>(KV_STATE_STRIDE_DIM0_ATTR_INDEX);
+    compressorContext.scoreStateStrideDim0 = attrs->GetAttrPointer<int>(SCORE_STATE_STRIDE_DIM0_ATTR_INDEX);
 
     OP_CHECK_IF(context.GetWorkspaceSizes(1) == nullptr,
                OPS_REPORT_VECTOR_INNER_ERR(context.GetNodeName(), "workSpaceSize got from ge is nullptr"),
@@ -249,6 +251,8 @@ ge::graphStatus CompressorTiling::SetBaseInfo()
     baseParams_->cgSize = (baseParams_->seqSize + baseParams_->cmpRatio - 1) / baseParams_->cmpRatio; // number of token after compress
     coff = static_cast<uint8_t>(*context_->coff);
     baseParams_->nSize = 2; // 2:每个核处理两个基本块后做全核同步
+    baseParams_->kvStateStrideDim0 = static_cast<uint32_t>(*context_->kvStateStrideDim0);
+    baseParams_->scoreStateStrideDim0 = static_cast<uint32_t>(*context_->scoreStateStrideDim0);
 
     OP_LOGI(context_->opName, "[TILING] bSize:%u  tSize:%u cmpRatio:%u coff:%u", baseParams_->batchSize, baseParams_->tokenSize, baseParams_->cmpRatio, coff);
     
