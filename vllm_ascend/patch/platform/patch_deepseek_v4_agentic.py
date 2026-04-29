@@ -30,6 +30,13 @@ from typing import Any, Literal
 
 import regex as re
 from transformers import PreTrainedTokenizerFast
+from vllm.config import VllmConfig
+from vllm.entrypoints.chat_utils import (
+    ChatCompletionMessageParam,
+    ConversationMessage,
+    parse_chat_messages,
+    parse_chat_messages_async,
+)
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 from vllm.entrypoints.openai.engine.protocol import (
     DeltaFunctionCall,
@@ -41,6 +48,12 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.logger import init_logger
 from vllm.reasoning import ReasoningParserManager
+from vllm.renderers.base import BaseRenderer
+from vllm.renderers.inputs import DictPrompt
+from vllm.renderers.inputs.preprocess import parse_dec_only_prompt
+from vllm.renderers.params import ChatParams
+from vllm.renderers.registry import RENDERER_REGISTRY
+from vllm.tokenizers import cached_get_tokenizer
 from vllm.tokenizers.hf import HfTokenizer, get_cached_tokenizer
 from vllm.tokenizers.protocol import TokenizerLike
 from vllm.tokenizers.registry import TokenizerRegistry
@@ -708,6 +721,80 @@ class DeepseekV4Tokenizer(TokenizerLike):
         return get_cached_tokenizer(get_deepseek_v4_tokenizer(tokenizer))
 
 
+class DeepseekV4Renderer(BaseRenderer[HfTokenizer]):
+    @classmethod
+    def from_config(
+        cls,
+        config: VllmConfig,
+        tokenizer_kwargs: dict[str, Any],
+    ) -> DeepseekV4Renderer:
+        if config.model_config.skip_tokenizer_init:
+            tokenizer = None
+        else:
+            tokenizer = cached_get_tokenizer(
+                tokenizer_cls=DeepseekV4Tokenizer,
+                **tokenizer_kwargs,
+            )
+
+        return cls(config, tokenizer)
+
+    def render_messages(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        params: ChatParams,
+    ) -> tuple[list[ConversationMessage], DictPrompt]:
+        tokenizer = self.get_tokenizer()
+        conversation, mm_data, mm_uuids = parse_chat_messages(
+            messages,
+            self.model_config,
+            content_format="string",
+            media_io_kwargs=params.media_io_kwargs,
+            mm_processor_kwargs=params.mm_processor_kwargs,
+        )
+
+        prompt_raw = tokenizer.apply_chat_template(
+            conversation=conversation,
+            messages=messages,
+            **params.get_apply_chat_template_kwargs(),
+        )
+
+        prompt = parse_dec_only_prompt(prompt_raw)
+        if mm_data is not None:
+            prompt["multi_modal_data"] = mm_data
+        if mm_uuids is not None:
+            prompt["multi_modal_uuids"] = mm_uuids
+
+        return conversation, prompt
+
+    async def render_messages_async(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        params: ChatParams,
+    ) -> tuple[list[ConversationMessage], DictPrompt]:
+        tokenizer = self.get_tokenizer()
+        conversation, mm_data, mm_uuids = await parse_chat_messages_async(
+            messages,
+            self.model_config,
+            content_format="string",
+            media_io_kwargs=params.media_io_kwargs,
+            mm_processor_kwargs=params.mm_processor_kwargs,
+        )
+
+        prompt_raw = tokenizer.apply_chat_template(
+            conversation=conversation,
+            messages=messages,
+            **params.get_apply_chat_template_kwargs(),
+        )
+
+        prompt = parse_dec_only_prompt(prompt_raw)
+        if mm_data is not None:
+            prompt["multi_modal_data"] = mm_data
+        if mm_uuids is not None:
+            prompt["multi_modal_uuids"] = mm_uuids
+
+        return conversation, prompt
+
+
 def _partial_tag_overlap(text: str, tag: str) -> int:
     max_overlap = min(len(text), len(tag) - 1)
     for overlap in range(max_overlap, 0, -1):
@@ -1041,6 +1128,11 @@ TokenizerRegistry.register(
     "deepseek_v4",
     "vllm_ascend.patch.platform.patch_deepseek_v4_agentic",
     "DeepseekV4Tokenizer",
+)
+RENDERER_REGISTRY.register(
+    "deepseek_v4",
+    "vllm_ascend.patch.platform.patch_deepseek_v4_agentic",
+    "DeepseekV4Renderer",
 )
 ToolParserManager.register_lazy_module(
     "deepseek_v4",
