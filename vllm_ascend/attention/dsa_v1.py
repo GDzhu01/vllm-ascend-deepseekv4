@@ -1436,7 +1436,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # swa exec kv
         if get_ascend_device_type() in {AscendDeviceType.A5}:
             torch.ops._C_ascend.kv_compress_epilog(
-                swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
+                swa_kv_cache.view(-1, swa_kv_cache.shape[-1]),
                 x=kv.view(-1, kv.shape[-1]),
                 slot_mapping=swa_metadata.prefill.slot_mapping,
                 quant_group_size=64,
@@ -1497,7 +1497,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 torch.ops._C_ascend.kv_compress_epilog(
-                    kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                    kv_compress_cache=compress_kv_cache.view(-1, compress_kv_cache.shape[-1]),
                     x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
                     slot_mapping=compressor_attn_metadata.prefill.slot_mapping,
                     quant_group_size=64,
@@ -1735,7 +1735,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             # swa exec kv
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 torch.ops._C_ascend.kv_compress_epilog(
-                    swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
+                    swa_kv_cache.view(-1, swa_kv_cache.shape[-1]),
                     x=kv.view(-1, kv.shape[-1]),
                     slot_mapping=swa_metadata.decode.slot_mapping,
                     quant_group_size=64,
@@ -1799,7 +1799,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 if len(compressor_attn_metadata.decode.slot_mapping):
                     torch.ops._C_ascend.kv_compress_epilog(
-                        kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                        kv_compress_cache=compress_kv_cache.view(-1, compress_kv_cache.shape[-1]),
                         x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
                         slot_mapping=compressor_attn_metadata.decode.slot_mapping,
                         quant_group_size=64,

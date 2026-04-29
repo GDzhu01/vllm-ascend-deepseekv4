@@ -213,7 +213,7 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
             scoring_func=scoring_func,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
-            tid2eid=self.tid2eid,
+            tid2eid=tid2eid,
             input_ids=input_ids)
 
         # this is a naive implementation for experts load balance so as
