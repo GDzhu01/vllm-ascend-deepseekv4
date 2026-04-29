@@ -72,12 +72,18 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
         tp_rank: int | None = 0,
     ) -> torch.Tensor:
         # reshape x for Qwen VL models
-        original_shape = x.shape
-        if x.dim() > 2:
-            x = x.view(-1, x.shape[-1])
-        quantized_x, dynamic_scale = torch_npu.npu_dynamic_mx_quant(x, dst_type=torch.float8_e4m3fn)
-        pertoken_scale = dynamic_scale
-        output_dtype = x.dtype
+        original_shape = None
+        if isinstance(x, tuple):
+            assert len(x) == 2
+            output_dtype = torch.bfloat16
+            quantized_x, pertoken_scale = x
+        else:
+            output_dtype = x.dtype
+            original_shape = x.shape
+            if x.dim() > 2:
+                x = x.view(-1, x.shape[-1])
+            quantized_x, pertoken_scale = torch_npu.npu_dynamic_mx_quant(x, dst_type=torch.float8_e4m3fn)
+        
         if bias is not None and bias.dtype != torch.float32:
             bias = bias.to(torch.float32)
 
@@ -93,7 +99,7 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
             group_sizes=[1, 1, self.group_size],
         )
         # reshape output for Qwen VL models
-        if len(original_shape) > 2:
+        if original_shape is not None and len(original_shape) > 2:
             output = output.view(*original_shape[:-1], -1)
 
         return output

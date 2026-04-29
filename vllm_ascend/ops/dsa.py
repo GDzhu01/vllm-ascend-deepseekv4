@@ -45,6 +45,7 @@ class DSAModules:
 
     wq_a: torch.nn.Module
     q_norm: torch.nn.Module
+    q_norm_without_weight: torch.nn.Module
     wq_b: torch.nn.Module
     wkv: torch.nn.Module
     kv_norm: torch.nn.Module
@@ -98,6 +99,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
 
         self.wq_a = dsa_modules.wq_a
         self.q_norm = dsa_modules.q_norm
+        self.q_norm_without_weight = dsa_modules.q_norm_without_weight
         self.wq_b = dsa_modules.wq_b
         self.wkv = dsa_modules.wkv
         self.kv_norm = dsa_modules.kv_norm
@@ -111,7 +113,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.prefix = prefix
 
         ascend_device_type = get_ascend_device_type()
-        k_dtype = torch.fp8 if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
+        k_dtype = torch.float8_e4m3fn if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
         self.swa_cache_layer = SVFSWACache(
             head_dim=self.head_dim,
             window_size=self.window_size,
@@ -143,6 +145,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             wq_b=self.wq_b,
             wkv=self.wkv,
             q_norm=self.q_norm,
+            q_norm_without_weight=self.q_norm_without_weight,
             kv_norm=self.kv_norm,
             indexer=self.indexer,
             compressor=self.compressor,
@@ -201,6 +204,7 @@ def dsa_forward(
     indexer_state_cache = None
     indexer_k_cache = None
     indexer_scale_cache = None
+    indexer_full_cache = None
 
     if self.compress_ratio > 1:
         state_cache = self.compressor.state_cache.kv_cache
@@ -208,7 +212,7 @@ def dsa_forward(
     if self.compress_ratio == 4:
         # TODO(qcs): refactor me
         indexer_state_cache = self.indexer.compressor.state_cache.kv_cache
-        indexer_k_cache, indexer_scale_cache = self.indexer.k_cache.kv_cache[0][0], self.indexer.k_cache.kv_cache[0][1]
+        indexer_k_cache, indexer_scale_cache, indexer_full_cache = self.indexer.k_cache.kv_cache[0][0], self.indexer.k_cache.kv_cache[0][1], self.indexer.k_cache.kv_cache[0][2]
 
     kv_cache = tuple([
         unfold_kvcache(cache) for cache in (
@@ -218,6 +222,7 @@ def dsa_forward(
         indexer_state_cache,
         indexer_k_cache,
         indexer_scale_cache,
+        indexer_full_cache,
     )])
 
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,

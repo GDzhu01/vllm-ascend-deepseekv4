@@ -119,11 +119,22 @@ function(op_add_subdirectory OP_LIST OP_DIR_LIST)
         endif ()
 
         if (ENABLE_TEST)
+            if (NOT EXISTS "${OP_DIR}/tests/CMakeLists.txt")
+                continue()
+            endif()
+            
             file(READ "${OP_DIR}/tests/CMakeLists.txt" CML_CONTENT)
             if (CML_CONTENT MATCHES "OpsTest_Level2_AddOp")
                 set(UTEST_FRAMEWORK_OLD TRUE CACHE BOOL "UTEST_FRAMEWORK_OLD" FORCE)
             else()
                 set(UTEST_FRAMEWORK_NEW TRUE CACHE BOOL "UTEST_FRAMEWORK_NEW" FORCE)
+            endif()
+        endif()
+
+        if (NOT ENABLE_AICPU)
+            if(EXISTS "${OP_DIR}/op_kernel_aicpu" AND IS_DIRECTORY "${OP_DIR}/op_kernel_aicpu")
+                MESSAGE(STATUS "disable aicpu kernel ${OP_NAME}, skip it.")
+                continue()
             endif()
         endif()
 
@@ -154,7 +165,12 @@ function(op_add_depend_directory)
     foreach(op_name ${DEP_OP_LIST})
         if (DEFINED ${op_name}_depends)
             foreach(depend_info ${${op_name}_depends})
-                if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${depend_info}/op_host/CMakeLists.txt AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/${depend_info}/CMakeLists.txt)
+                if (ENABLE_EXPERIMENTAL)
+ 	                set(depend_info_update "experimental/${depend_info}")
+ 	            else()
+ 	                set(depend_info_update ${depend_info})
+ 	            endif()
+ 	            if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${depend_info_update}/op_host/CMakeLists.txt AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/${depend_info_update}/CMakeLists.txt)
                     continue()
                 endif ()
 
@@ -166,7 +182,7 @@ function(op_add_depend_directory)
                 endif ()
 
                 if (NOT ${_depend_op_name} IN_LIST DEP_OP_LIST)
-                    list(APPEND _OP_DEPEND_DIR_LIST ${CMAKE_CURRENT_SOURCE_DIR}/${depend_info})
+                    list(APPEND _OP_DEPEND_DIR_LIST ${CMAKE_CURRENT_SOURCE_DIR}/${depend_info_update})
                 endif ()
             endforeach()
         endif()
@@ -182,6 +198,7 @@ function(add_compile_cmd_target)
 
     if(ADD_OPS_COMPILE_OPTION_V2)
         set(OP_DEBUG_CONFIG_OPTION --opc-config-file ${ASCEND_CUSTOM_OPC_OPTIONS})
+        set(OP_TILING_KEY_OPTION --kernel_template_input ${KERNEL_TEMPLATE_INPUT})
     else()
         if(OP_DEBUG_CONFIG)
             set(OP_DEBUG_CONFIG_OPTION --op-debug-config ${OP_DEBUG_CONFIG})
@@ -201,18 +218,21 @@ function(add_compile_cmd_target)
             ${base_aclnn_binary_dir}/aic-${CMD_COMPUTE_UNIT}-ops-info.ini
             ${GEN_OUT_DIR}
             ${CMD_COMPUTE_UNIT}
+            ${BISHENG_FLAGS}
             ${OP_TILING_KEY_OPTION}
             ${OP_DEBUG_CONFIG_OPTION}
         COMMAND ${HI_PYTHON} ${ASCENDC_CMAKE_UTIL_DIR}/ascendc_bin_param_build.py
             ${base_aclnn_binary_dir}/inner/aic-${CMD_COMPUTE_UNIT}-ops-info.ini
             ${GEN_OUT_DIR}
             ${CMD_COMPUTE_UNIT}
+            ${BISHENG_FLAGS}
             ${OP_TILING_KEY_OPTION}
             ${OP_DEBUG_CONFIG_OPTION}
         COMMAND ${HI_PYTHON} ${ASCENDC_CMAKE_UTIL_DIR}/ascendc_bin_param_build.py
             ${base_aclnn_binary_dir}/exc/aic-${CMD_COMPUTE_UNIT}-ops-info.ini
             ${GEN_OUT_DIR}
             ${CMD_COMPUTE_UNIT}
+            ${BISHENG_FLAGS}
             ${OP_TILING_KEY_OPTION}
             ${OP_DEBUG_CONFIG_OPTION}
         COMMAND bash ${SED_SCRIPT} ${GEN_OUT_DIR}
@@ -362,7 +382,9 @@ function(add_ops_src_copy)
             set(OPS_UTILS_INC_KERNEL_DIR ${_ROOT_OPS_SRC_DIR}/ascendc/common)
             add_custom_command(OUTPUT ${OPS_UTILS_INC_KERNEL_DIR}
                     COMMAND mkdir -p ${OPS_UTILS_INC_KERNEL_DIR}/regbase
+                    COMMAND mkdir -p ${OPS_UTILS_INC_KERNEL_DIR}/cgmct
                     COMMAND cp -rf ${OPS_ADV_UTILS_KERNEL_INC}/*.* ${OPS_UTILS_INC_KERNEL_DIR}
+                    COMMAND cp -rf ${OPS_CGMCT}/* ${OPS_UTILS_INC_KERNEL_DIR}/cgmct
             )
 
             add_custom_target(${OPS_UTILS_INC_KERNEL_TARGET}
@@ -371,27 +393,36 @@ function(add_ops_src_copy)
         endif ()
     endif ()
 
-    # set(MC2_OPS_LIST "matmul_reduce_scatter;"
-    #     "grouped_mat_mul_allto_allv;"
-    #     "grouped_mat_mul_all_reduce;"
-    #     "batch_mat_mul_reduce_scatter_allto_all;"
-    #     "allto_allv_grouped_mat_mul;"
-    #     "allto_all_all_gather_batch_mat_mul;"
-    #     "distribute_barrier;"
-    #     "moe_distribute_combine_add_rms_norm;"
-    #     "moe_distribute_dispatch;"
-    #     "moe_distribute_combine;"
-    #     "moe_distribute_dispatch_v2;"
-    #     "moe_distribute_combine_v2;"
-    #     "moe_update_expert;"
-    #     "all_gather_matmul;"
-    #     "matmul_all_reduce;"
-    #     "matmul_all_reduce_add_rms_norm;"
-    #     "inplace_matmul_all_reduce_add_rms_norm;"
-    #     "attention_to_ffn;"
-    #     "ffn_to_attention;"
-    # ) # mc2算子列表
-    set(MC2_OPS_LIST ""
+    set(MC2_OPS_LIST "matmul_reduce_scatter;"
+        "matmul_reduce_scatter_v2;"
+        "grouped_mat_mul_allto_allv;"
+        "quant_grouped_mat_mul_allto_allv;"
+        "grouped_mat_mul_all_reduce;"
+        "batch_mat_mul_reduce_scatter_allto_all;"
+        "allto_allv_grouped_mat_mul;"
+        "allto_allv_quant_grouped_mat_mul;"
+        "allto_all_all_gather_batch_mat_mul;"
+        "distribute_barrier;"
+        "moe_distribute_combine_add_rms_norm;"
+        "moe_distribute_dispatch;"
+        "moe_distribute_combine;"
+        "moe_distribute_dispatch_v2;"
+        "moe_distribute_combine_v2;"
+        "moe_distribute_dispatch_v3;"
+        "moe_distribute_combine_v3;"
+        "moe_update_expert;"
+        "all_gather_matmul;"
+        "all_gather_matmul_v2;"
+        "matmul_all_reduce;"
+        "matmul_all_reduce_apt;"
+        "matmul_all_reduce_add_rms_norm;"
+        "inplace_matmul_all_reduce_add_rms_norm;"
+        "quant_all_reduce;"
+        "quant_reduce_scatter;"
+        "allto_all_matmul;"
+        "matmul_allto_all;"
+        "attention_to_ffn;"
+        "ffn_to_attention;"
     ) # mc2算子列表
 
     get_filename_component(FOLDER_NAME "${SRC_COPY_DST}" NAME_WE)
@@ -514,13 +545,18 @@ function(add_bin_compile_target)
 
             if (DEFINED ${op_file}_depends)
                 foreach(depend_info ${${op_file}_depends})
+                    if (ENABLE_EXPERIMENTAL)
+ 	                    set(depend_info_update "experimental/${depend_info}")
+ 	                else()
+ 	                    set(depend_info_update ${depend_info})
+ 	                endif()
                     get_filename_component(_depend_op_name "${depend_info}" NAME)
                     set(_depend_op_target ${_depend_op_name}_${BINARY_COMPUTE_UNIT}_src_copy)
                     add_ops_src_copy(
                             TARGET_NAME
                             ${_depend_op_target}
                             SRC
-                            ${CMAKE_SOURCE_DIR}/${depend_info}
+                            ${CMAKE_SOURCE_DIR}/${depend_info_update}
                             DST
                             ${SRC_OUT_DIR}/${_depend_op_name}
                             COMPUTE_UNIT
@@ -569,9 +605,17 @@ function(add_bin_compile_target)
         set(_group "1-0")
         if (DEFINED ASCEND_OP_NAME AND NOT "${ASCEND_OP_NAME}" STREQUAL "")
             if (NOT "${ASCEND_OP_NAME}" STREQUAL "all" AND NOT "${ASCEND_OP_NAME}" STREQUAL "ALL")
-                if (${op_file} IN_LIST ASCEND_OP_NAME)
-                    list(LENGTH ASCEND_OP_NAME _len)
+                string(REGEX MATCH "^(.*_apt)$" _match_apt ${op_file})
+                if(_match_apt)
+                    #如果以_apt结尾，使用去掉后缀的文件名进行查找
+                    string(REGEX REPLACE "_apt$" "" _op_file_strip_apt ${op_file})
+                    list(FIND ASCEND_OP_NAME ${_op_file_strip_apt} _index)
+                else()
                     list(FIND ASCEND_OP_NAME ${op_file} _index)
+                    set(_op_file_strip_apt ${op_file})
+                endif()
+                if (${op_file} IN_LIST ASCEND_OP_NAME OR ${_op_file_strip_apt} IN_LIST ASCEND_OP_NAME)
+                    list(LENGTH ASCEND_OP_NAME _len)
                     math(EXPR _next_index "${_index} + 1")
                     if (${_next_index} LESS ${_len})
                         list(GET ASCEND_OP_NAME ${_next_index} _group_str)
@@ -633,6 +677,7 @@ function(add_bin_compile_target)
                 add_dependencies(${OP_TARGET_NAME}_${op_index} optiling_compat generate_ops_info)
             endif ()
             add_dependencies(${OP_TARGET_NAME}_${op_index} ${OP_TARGET_NAME}_src_copy ${OP_TARGET_NAME}_py_copy ${OP_TARGET_NAME}_mkdir)
+            add_dependencies(${OP_TARGET_NAME}_${op_index} generate_compile_cmd)
             add_dependencies(${OP_TARGET_NAME} ${OP_TARGET_NAME}_${op_index})
         endif ()
     endforeach()
@@ -772,121 +817,24 @@ function(add_static_ops)
         )
     endif()
 endfunction()
-function(add_aicpu_kernel_modules)
-  if(NOT TARGET ${OPHOST_NAME}_aicpu_obj)
-    add_library(${OPHOST_NAME}_aicpu_obj OBJECT)
-    target_include_directories(${OPHOST_NAME}_aicpu_obj PRIVATE ${AICPU_INCLUDE})
-    target_compile_definitions(
-      ${OPHOST_NAME}_aicpu_obj PRIVATE _FORTIFY_SOURCE=2 google=ascend_private
-                                       $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
-      )
-    target_compile_options(
-      ${OPHOST_NAME}_aicpu_obj PRIVATE $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
-                                       -fvisibility=hidden ${AICPU_DEFINITIONS}
-      )
-    target_link_libraries(
-      ${OPHOST_NAME}_aicpu_obj
-      PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
-              $<BUILD_INTERFACE:dlog_headers>
-      )
+
+function(pack_tiling_sink)
+  ExternalProject_Get_Property(tiling_sink_task BINARY_DIR)
+
+  if(ENABLE_BUILT_IN)
+    set(TRANSFORMER_OPMASTER_SO ${BINARY_DIR}/libtiling_device_transformer.so)
+    set(INSTALL_DIR "ops_transformer/built-in/op_impl/ai_core/tbe/op_tiling_device/lib")
+  else()
+    set(TRANSFORMER_OPMASTER_SO ${BINARY_DIR}/libcust_opmaster.so)
+    set(INSTALL_DIR "packages/vendors/${VENDOR_NAME}_transformer/op_impl/ai_core/tbe/op_master_device/lib")
   endif()
-endfunction()
-
-function(add_aicpu_cust_kernel_modules op_name aicpu_sources aicpu_jsons)
-  set(target_name ${op_name}_obj)
-  if(NOT TARGET ${target_name})
-    add_library(${target_name} OBJECT)
-    target_include_directories(${target_name} PRIVATE ${AICPU_INCLUDE})
-    target_compile_definitions(
-      ${target_name} PRIVATE
-                    _FORTIFY_SOURCE=2 _GLIBCXX_USE_CXX11_ABI=1
-                    google=ascend_private
-                    $<$<BOOL:${ENABLE_TEST}>:ASCEND_AICPU_UT>
-      )
-    target_compile_options(
-      ${target_name} PRIVATE
-                    $<$<NOT:$<BOOL:${ENABLE_TEST}>>:-DDISABLE_COMPILE_V1> -Dgoogle=ascend_private
-                    -fvisibility=hidden ${AICPU_DEFINITIONS}
-      )
-    target_link_libraries(
-      ${target_name}
-      PRIVATE $<BUILD_INTERFACE:$<IF:$<BOOL:${ENABLE_TEST}>,intf_llt_pub_asan_cxx17,intf_pub_cxx17>>
-              $<BUILD_INTERFACE:dlog_headers>
-              -Wl,--no-whole-archive
-      )
-    if (NOT (UT_TEST_ALL OR OP_KERNEL_AICPU_UT))
-      set_property(TARGET ${target_name} PROPERTY 
-        CXX_COMPILER_LAUNCHER ${ASCEND_DIR}/toolkit/toolchain/hcc/bin/aarch64-target-linux-gnu-g++)
-    endif()    
-    target_sources(${target_name} PRIVATE ${aicpu_sources})
-    set_property(GLOBAL APPEND PROPERTY AICPU_JSON_FILES ${aicpu_jsons})
-    if (NOT ${target_name} IN_LIST AICPU_CUST_OBJ_TARGETS)
-      set(AICPU_CUST_OBJ_TARGETS ${AICPU_CUST_OBJ_TARGETS} ${target_name} CACHE INTERNAL "All aicpu cust obj targets")
+  install(CODE "
+    if(EXISTS \"${TRANSFORMER_OPMASTER_SO}\")
+      file(
+        INSTALL DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${INSTALL_DIR}\"
+        TYPE FILE FILES \"${TRANSFORMER_OPMASTER_SO}\")
     endif()
-  endif()
-endfunction()
-
-# 添加待编译算子
-function(add_need_compile_ops op_name)
-  if(NOT ASCEND_OP_NAME)
-    # 为空则不需要更新
-    return()
-  endif()
-
-  set(NEW_OP_NAMES ${ASCEND_OP_NAME} ${op_name})
-  list(REMOVE_DUPLICATES NEW_OP_NAMES)
-  set(ASCEND_OP_NAME
-      ${NEW_OP_NAMES}
-      CACHE STRING "Ascend op names to compile" FORCE
-    )
-endfunction()
-
-function(add_dependent_ops dependent_ops)
-  foreach(dep_op ${dependent_ops})
-    # 查询依赖算子所在目录
-    set(dep_op_path_list "")
-    if(ENABLE_EXPERIMENTAL)
-      foreach(ops_category ${OPS_CATEGORY_LIST})
-        file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/experimental/${ops_category}/${dep_op}")
-        list(APPEND dep_op_path_list ${dep_op_path})
-      endforeach()
-    endif()
-    set(outside_experimental FALSE)
-    # 如果非 experimental，或 experimental 下没找到，则去常规目录查找
-    if(NOT dep_op_path_list)
-      foreach(ops_category ${OPS_CATEGORY_LIST})
-        file(GLOB dep_op_path "${PROJECT_SOURCE_DIR}/${ops_category}/${dep_op}")
-        list(APPEND dep_op_path_list ${dep_op_path})
-      endforeach()
-      set(outside_experimental ${ENABLE_EXPERIMENTAL})
-    endif()
-    # 检查依赖存在
-    if(NOT dep_op_path_list)
-      message(FATAL_ERROR "dependent operator(${dep_op}) not exists")
-    endif()
-    list(LENGTH ${dep_op_path_list} find_dep_ops_count)
-    if(find_dep_ops_count GREATER 1)
-      message(FATAL_ERROR "dependent operator(${dep_op}) is not unique, the found operators:${dep_op_path_list}")
-    endif()
-
-    # ASCEND_OP_NAME 为空表示全部编译，则不需要特意添加目录；但指定experimental时未扫描常规算子，如果依赖常规算子，需要添加目录
-    # 已在待编译列表，则不需要加入
-    # 已在编译列表，则不需要重复加入
-
-    if((ASCEND_OP_NAME OR outside_experimental)
-        AND (NOT (dep_op IN_LIST ASCEND_OP_NAME))
-        AND (NOT (dep_op IN_LIST COMPILED_OPS))
-    )
-      # 加入依赖并去重
-      add_need_compile_ops("${dep_op}")
-      # 添加目录
-      get_filename_component(dep_op_path "${dep_op_path_list}" ABSOLUTE)
-      get_filename_component(dep_op_parent "${dep_op_path}" DIRECTORY)
-      get_filename_component(parent_path "${dep_op_parent}" NAME)
-      message(STATUS "add dependent operator: ${parent_path}/${dep_op}, path: ${dep_op_path}")
-      add_subdirectory("${dep_op_path}" "${CMAKE_BINARY_DIR}/dependent-ops/${parent_path}/${dep_op}")
-    endif()
-  endforeach()
+  ")
 endfunction()
 
 if (BUILD_OPEN_PROJECT)
@@ -897,3 +845,148 @@ if (BUILD_OPEN_PROJECT)
         include(${OPS_ADV_CMAKE_DIR}/func_examples.cmake)
     endif ()
 endif ()
+
+function(concat_op_names)
+    set(multiValueArgs OPTYPE ACLNNTYPE ACLNN_EXTRA_VERSION)
+    cmake_parse_arguments(ARG "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(${ARG_ACLNNTYPE} STREQUAL "aclnn")
+        set(ACLNN_PREFIX aclnn_${ARG_OPTYPE})
+        set(ACLNN_EXTRA_HEADER "")
+        set(ACLNN_EXTRA_SRC "")
+
+        list(LENGTH ARG_ACLNN_EXTRA_VERSION AclnnExtraVersionLen)
+        math(EXPR index "${AclnnExtraVersionLen} - 1")
+        if (index GREATER_EQUAL 0)
+            foreach(i RANGE ${index})
+                list(GET ARG_ACLNN_EXTRA_VERSION ${i} version)
+                list(APPEND ACLNN_EXTRA_HEADER ${ACLNN_PREFIX}_${version}.h)
+                list(APPEND ACLNN_EXTRA_SRC ${ACLNN_PREFIX}_${version}.cpp)
+            endforeach()
+        endif()
+
+        list(APPEND ACLNN_EXTRA_HEADERS ${ACLNN_EXTRA_HEADER})
+        list(REMOVE_DUPLICATES ACLNN_EXTRA_HEADERS)
+        list(APPEND ACLNN_EXTRA_SRCS ${ACLNN_EXTRA_SRC})
+        list(REMOVE_DUPLICATES ACLNN_EXTRA_SRCS)
+
+        set(ACLNN_EXTRA_HEADERS
+            ${ACLNN_EXTRA_HEADERS}
+            CACHE STRING "Aclnn Extra Headers" FORCE
+        )
+        set(ACLNN_EXTRA_SRCS
+            ${ACLNN_EXTRA_SRCS}
+            CACHE STRING "Aclnn Extra Sources" FORCE
+        )
+
+    elseif(${ARG_ACLNNTYPE} STREQUAL "aclnn_inner")
+        set(ACLNNINNER_PREFIX aclnnInner_${ARG_OPTYPE})
+        set(ACLNNINNER_EXTRA_HEADER "")
+        set(ACLNNINNER_EXTRA_SRC "")
+
+        list(LENGTH ARG_ACLNN_EXTRA_VERSION AclnnExtraVersionLen)
+        math(EXPR index "${AclnnExtraVersionLen} - 1")
+        if (index GREATER_EQUAL 0)
+            foreach(i RANGE ${index})
+                list(GET ARG_ACLNN_EXTRA_VERSION ${i} version)
+                list(APPEND ACLNNINNER_EXTRA_HEADER ${ACLNNINNER_PREFIX}_${version}.h)
+                list(APPEND ACLNNINNER_EXTRA_SRC ${ACLNNINNER_PREFIX}_${version}.cpp)
+            endforeach()
+        endif()
+
+        list(APPEND ACLNNINNER_EXTRA_HEADERS ${ACLNNINNER_EXTRA_HEADER})
+        list(REMOVE_DUPLICATES ACLNNINNER_EXTRA_HEADERS)
+        list(APPEND ACLNNINNER_EXTRA_SRCS ${ACLNNINNER_EXTRA_SRC})
+        list(REMOVE_DUPLICATES ACLNNINNER_EXTRA_SRCS)
+
+        set(ACLNNINNER_EXTRA_HEADERS
+            ${ACLNNINNER_EXTRA_HEADERS}
+            CACHE STRING "AclnnInner Extra Headers" FORCE
+        )
+        set(ACLNNINNER_EXTRA_SRCS
+            ${ACLNNINNER_EXTRA_SRCS}
+            CACHE STRING "AclnnInner Extra Sources" FORCE
+        )
+    endif()
+endfunction()
+
+macro(replace_cur_major_minor_ver)
+    string(REPLACE CUR_MAJOR_MINOR_VER "${CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_VERSION_MAJOR_MINOR}" depend "${depend}")
+endmacro()
+ 	 
+# 设置包和版本号
+function(set_package name)
+    cmake_parse_arguments(VERSION "" "VERSION" "" ${ARGN})
+    set(VERSION "${VERSION_VERSION}")
+    if(NOT name)
+        message(FATAL_ERROR "The name parameter is not set in set_package.")
+    endif()
+    if(NOT VERSION)
+        message(FATAL_ERROR "The VERSION parameter is not set in set_package(${name}).")
+    endif()
+    string(REGEX MATCH "^([0-9]+\\.[0-9]+)" VERSION_MAJOR_MINOR "${VERSION}")
+    list(APPEND CANN_VERSION_PACKAGES "${name}")
+    set(CANN_VERSION_PACKAGES "${CANN_VERSION_PACKAGES}" PARENT_SCOPE)
+    set(CANN_VERSION_CURRENT_PACKAGE "${name}" PARENT_SCOPE)
+    set(CANN_VERSION_${name}_VERSION "${VERSION}" PARENT_SCOPE)
+    set(CANN_VERSION_${name}_VERSION_MAJOR_MINOR "${VERSION_MAJOR_MINOR}" PARENT_SCOPE)
+    set(CANN_VERSION_${name}_BUILD_DEPS PARENT_SCOPE)
+    set(CANN_VERSION_${name}_RUN_DEPS PARENT_SCOPE)
+endfunction()
+ 	 
+# 设置构建依赖
+function(set_build_dependencies pkg_name depend)
+    if(NOT CANN_VERSION_CURRENT_PACKAGE)
+        message(FATAL_ERROR "The set_package must be invoked first.")
+    endif()
+    if(NOT pkg_name)
+        message(FATAL_ERROR "The pkg_name parameter is not set in set_build_dependencies.")
+    endif()
+    if(NOT depend)
+        message(FATAL_ERROR "The depend parameter is not set in set_build_dependencies.")
+    endif()
+    replace_cur_major_minor_ver()
+    list(APPEND CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_BUILD_DEPS "${pkg_name}" "${depend}")
+    set(CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_BUILD_DEPS "${CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_BUILD_DEPS}" PARENT_SCOPE)
+endfunction()
+ 	 
+# 设置运行依赖
+function(set_run_dependencies pkg_name depend)
+    if(NOT CANN_VERSION_CURRENT_PACKAGE)
+        message(FATAL_ERROR "The set_package must be invoked first.")
+    endif()
+    if(NOT pkg_name)
+        message(FATAL_ERROR "The pkg_name parameter is not set in set_run_dependencies.")
+    endif()
+    if(NOT depend)
+        message(FATAL_ERROR "The depend parameter is not set in set_run_dependencies.")
+    endif()
+    replace_cur_major_minor_ver()
+    list(APPEND CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_RUN_DEPS "${pkg_name}" "${depend}")
+    set(CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_RUN_DEPS "${CANN_VERSION_${CANN_VERSION_CURRENT_PACKAGE}_RUN_DEPS}" PARENT_SCOPE)
+endfunction()
+ 	 
+# 检查构建依赖
+function(check_pkg_build_deps pkg_name)
+    execute_process(
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_build_dependencies.py "${ASCEND_CANN_PACKAGE_PATH}" ${CANN_VERSION_${pkg_name}_BUILD_DEPS}
+        RESULT_VARIABLE result
+    )
+    if(result)
+        message(FATAL_ERROR "Check ${pkg_name} build dependencies failed!")
+    endif()
+endfunction()
+ 	 
+# 添加生成version.info的目标
+# 目标名格式为：version_${包名}_info
+function(add_version_info_targets)
+    foreach(pkg_name ${CANN_VERSION_PACKAGES})
+        add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/version.${pkg_name}.info
+            COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_version_info.py --output ${CMAKE_BINARY_DIR}/version.${pkg_name}.info
+                    "${CANN_VERSION_${pkg_name}_VERSION}" ${CANN_VERSION_${pkg_name}_RUN_DEPS}
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/version.cmake ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_version_info.py
+            VERBATIM
+        )
+        add_custom_target(version_${pkg_name}_info ALL DEPENDS ${CMAKE_BINARY_DIR}/version.${pkg_name}.info)
+    endforeach()
+endfunction()

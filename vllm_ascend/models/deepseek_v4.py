@@ -223,8 +223,15 @@ class DeepseekV2MLP(nn.Module):
 
     def forward(self, x):
         gate_up, _ = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
+        hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.npu_swiglu_group_quant(
+            gate_up,
+            topk_weight=None,
+            group_index=None,
+            dst_type=torch.float8_e4m3fn,
+            quant_mode=2,
+            clamp_value=10.0,
+        )
+        x, _ = self.down_proj((hidden_states, swiglu_out_scale))
         return x
 
 
@@ -371,16 +378,18 @@ class DeepseekV4MoE(nn.Module):
             if not self.is_rocm_aiter_moe_enabled:
                 if self.shared_experts is not None:
                     assert shared_output is not None
-                    final_hidden_states = muls_add_triton(
-                        final_hidden_states, shared_output,
-                        self.routed_scaling_factor)
+                    final_hidden_states = final_hidden_states * self.routed_scaling_factor + shared_output
+                    # final_hidden_states = muls_add_triton(
+                    #     final_hidden_states, shared_output,
+                    #     self.routed_scaling_factor)
                 else:
                     final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = muls_add_triton(
-                shared_output, final_hidden_states,
-                1.0 / self.routed_scaling_factor)
+            final_hidden_states = shared_output * (1.0 / self.routed_scaling_factor) + final_hidden_states
+            # final_hidden_states = muls_add_triton(
+            #     shared_output, final_hidden_states,
+            #     1.0 / self.routed_scaling_factor)
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
@@ -512,7 +521,7 @@ class Compressor(nn.Module):
             self.dim,
             self.coff * self.head_dim,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wkv",
             return_bias=False,
         )
@@ -520,7 +529,7 @@ class Compressor(nn.Module):
             self.dim,
             self.coff * self.head_dim,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.wgate",
             return_bias=False,
         )
@@ -542,7 +551,7 @@ class Compressor(nn.Module):
                 dtype=state_dtype,
                 compress_ratio=compress_ratio,
                 prefix=f"{prefix}.state_cache",
-                block_size=32
+                block_size=16
             )
         else:
             raise ValueError(f"Only support compress_ratio in [4, 128]. Got unsupported compress_ratio: {compress_ratio}")
@@ -636,6 +645,7 @@ class DeepseekV4Attention(nn.Module):
             return_bias=False,
         )
         self.q_norm = RMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
+        self.q_norm_without_weight = RMSNorm(self.head_dim, eps=config.rms_norm_eps, has_weight=False)
         self.wq_b = ColumnParallelLinear(
             self.q_lora_rank,
             self.n_heads * self.head_dim,
@@ -718,6 +728,7 @@ class DeepseekV4Attention(nn.Module):
         dsa_modules = DSAModules(
             wq_a=self.wq_a,
             q_norm=self.q_norm,
+            q_norm_without_weight = self.q_norm_without_weight,
             wq_b=self.wq_b,
             wkv=self.wkv,
             kv_norm=self.kv_norm,
@@ -1170,6 +1181,9 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 name = name.replace('.w2.', '.down_proj.')
             if '.w3.' in name:
                 name = name.replace('.w3.', '.up_proj.')
+
+            if ".scale" in name:
+                name = name.replace(".scale", ".weight_scale")
 
             if 'model.head.' in name and 'model.lm_head.' not in name:
                 name = name.replace('model.head.', 'lm_head.')

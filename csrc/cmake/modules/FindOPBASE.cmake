@@ -16,11 +16,9 @@ endif()
 include(FindPackageHandleStandardArgs)
 
 set(OPBASE_HEAD_SEARCH_PATHS
-  ${ASCEND_DIR}/${SYSTEM_PREFIX}/pkg_inc
+  ${OPBASE_SOURCE_PATH}/pkg_inc
   ${TOP_DIR}/ops-base/pkg_inc             # compile with ci
 )
-
-set(OPBASE_LIB_SEARCH_PATHS ${ASCEND_DIR}/${SYSTEM_PREFIX})
 
 find_path(OPBASE_INC_DIR
   NAMES op_common/op_host/util/opbase_export.h
@@ -29,30 +27,10 @@ find_path(OPBASE_INC_DIR
   NO_CMAKE_FIND_ROOT_PATH
 )
 
-find_library(OPBASE_LIB_DIR
-  NAME ops_base
-  PATHS ${OPBASE_LIB_SEARCH_PATHS}
-  PATH_SUFFIXES lib64
-  NO_CMAKE_SYSTEM_PATH
-  NO_CMAKE_FIND_ROOT_PATH
-)
-
 find_package_handle_standard_args(OPBASE
             REQUIRED_VARS OPBASE_INC_DIR)
 
 get_filename_component(OPBASE_INC_DIR ${OPBASE_INC_DIR} REALPATH)
-if(OPBASE_LIB_DIR)
-  get_filename_component(OPBASE_LIB_DIR ${OPBASE_LIB_DIR} REALPATH)
-  add_library(opsbase SHARED IMPORTED)
-  set_target_properties(opsbase PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES ${OPBASE_INC_DIR}
-    IMPORTED_LOCATION ${OPBASE_LIB_DIR}
-  )
-else()
-  if(BUILD_WITH_INSTALLED_DEPENDENCY_CANN_PKG)
-    message(STATUS "Cannot find library ops_base")
-  endif()
-endif()
 
 if(OPBASE_FOUND)
   if(NOT OPBASE_FIND_QUIETLY)
@@ -64,5 +42,6 @@ if(OPBASE_FOUND)
     ${OPBASE_INC_DIR}/op_common
     ${OPBASE_INC_DIR}/op_common/op_host
     ${OPBASE_INC_DIR}/op_common/atvoss
+    ${ASCEND_DIR}/${SYSTEM_PREFIX}/pkg_inc
   )
 endif()

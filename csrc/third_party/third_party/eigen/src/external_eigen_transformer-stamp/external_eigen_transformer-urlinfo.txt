@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/home/miniconda3/envs/mq_dsv4/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/m00663269/vllm-ascend-deepseekv4/csrc/third_party/third_party/eigen/src/external_eigen_transformer-stamp/download-external_eigen_transformer.cmake;COMMAND;/home/miniconda3/envs/mq_dsv4/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/m00663269/vllm-ascend-deepseekv4/csrc/third_party/third_party/eigen/src/external_eigen_transformer-stamp/verify-external_eigen_transformer.cmake;COMMAND;/home/miniconda3/envs/mq_dsv4/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/m00663269/vllm-ascend-deepseekv4/csrc/third_party/third_party/eigen/src/external_eigen_transformer-stamp/extract-external_eigen_transformer.cmake
+source_dir=/home/m00663269/vllm-ascend-deepseekv4/csrc/third_party/eigen
+work_dir=/home/m00663269/vllm-ascend-deepseekv4/csrc/third_party
+url(s)=https://gitcode.com/cann-src-third-party/eigen/releases/download/5.0.0-h0.trunk/eigen-5.0.0.tar.gz
+hash=
+      no_extract=
+

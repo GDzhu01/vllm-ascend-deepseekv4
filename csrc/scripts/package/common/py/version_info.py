@@ -11,12 +11,13 @@
 # -----------------------------------------------------------------------------------------------------------
 
 import os
+import re
+import sys
 import xml.etree.ElementTree as ET
 from functools import total_ordering
 from pathlib import Path
-from typing import NamedTuple
-
-import regex as re
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
+from .utils.comm_log import CommLog
 
 
 class VersionInfoError(Exception):
@@ -63,7 +64,7 @@ class Version:
     @classmethod
     def match(cls, input_str):
         """输入字符串是否匹配版本号模式。"""
-        m = re.match(r"[.a-zA-Z0-9]+$", input_str)
+        m = re.match(r'[.a-zA-Z0-9]+$', input_str)
         return bool(m)
 
     @classmethod
@@ -99,8 +100,8 @@ class Version:
         if not isinstance(other, self.__class__):
             return True
 
-        self_list = self.version.split(".")
-        other_list = other.version.split(".")
+        self_list = self.version.split('.')
+        other_list = other.version.split('.')
 
         self.try_convert_to_int_list(self_list)
         self.try_convert_to_int_list(other_list)
@@ -119,26 +120,26 @@ class Version:
 
 class Point(NamedTuple):
     """区间端点。"""
-
     type_: int  # 类型，0为闭区间，1为开区间
     value: Version
 
 
 class Interval(NamedTuple):
     """版本号区间。"""
-
     low: Point
     high: Point
 
     @classmethod
     def match(cls, input_str: str) -> bool:
         """输入字符串是否匹配区间模式。"""
-        if not input_str.startswith("(") and not input_str.startswith("["):
+        if not input_str.startswith('(') and not input_str.startswith('['):
             return False
-        if not input_str.endswith(")") and not input_str.endswith("]"):
+        if not input_str.endswith(')') and not input_str.endswith(']'):
             return False
         input_str = input_str[1:-1]
-        return input_str.count(",") <= 1
+        if input_str.count(',') > 1:
+            return False
+        return True
 
     @classmethod
     def parse(cls, input_str):
@@ -146,22 +147,22 @@ class Interval(NamedTuple):
         if not cls.match(input_str):
             raise IntervalFormatNotMatch()
 
-        if input_str[0] == "[":
+        if input_str[0] == '[':
             low_type = 0
-        elif input_str[0] == "(":
+        elif input_str[0] == '(':
             low_type = 1
         else:
-            raise AssertionError("should not go here.")
+            assert False, 'should not go here.'
 
-        if input_str[-1] == "]":
+        if input_str[-1] == ']':
             high_type = 0
-        elif input_str[-1] == ")":
+        elif input_str[-1] == ')':
             high_type = 1
         else:
-            raise AssertionError("should not go here.")
+            assert False, 'should not go here.'
 
         input_str = input_str[1:-1]
-        input_list = input_str.split(",")
+        input_list = input_str.split(',')
         low = input_list[0].strip()
         if len(input_list) > 1:
             high = input_list[1].strip()
@@ -186,18 +187,18 @@ class Interval(NamedTuple):
 
         if self.low:
             if self.low.type_ == 0:
-                operator = ">="
+                operator = '>='
             else:
-                operator = ">"
-            required_str = f"{operator}{self.low.value.version}"
+                operator = '>'
+            required_str = '{0}{1}'.format(operator, self.low.value.version)
             result.append(required_str)
 
         if self.high:
             if self.high.type_ == 0:
-                operator = "<="
+                operator = '<='
             else:
-                operator = "<"
-            required_str = f"{operator}{self.high.value.version}"
+                operator = '<'
+            required_str = '{0}{1}'.format(operator, self.high.value.version)
             result.append(required_str)
 
         return result
@@ -205,12 +206,11 @@ class Interval(NamedTuple):
 
 class Require(NamedTuple):
     """包需求。"""
-
     pkg_name: str
-    versions: list
+    versions: List
 
     @classmethod
-    def _sort_key(cls, item) -> tuple:
+    def _sort_key(cls, item) -> Tuple:
         """排序键。"""
         if isinstance(item, Interval):
             # 如果存在区间左值，则左值参与排序。
@@ -222,13 +222,13 @@ class Require(NamedTuple):
         return item, 0
 
     @classmethod
-    def _sort_versions(cls, versions: list) -> bool:
+    def _sort_versions(cls, versions: List) -> bool:
         """排序版本序列。"""
         versions.sort(key=cls._sort_key)
         return True
 
     @classmethod
-    def _to_required_list(cls, versions: list) -> list[str]:
+    def _to_required_list(cls, versions: List) -> List[str]:
         """转换为版本需求字符串列表。"""
         result = []
         for version in versions:
@@ -238,10 +238,10 @@ class Require(NamedTuple):
         return result
 
     @classmethod
-    def _to_required_str(cls, versions: list) -> str:
+    def _to_required_str(cls, versions: List) -> str:
         """转换为版本需求字符串。"""
         requires = cls._to_required_list(versions)
-        required_str = ", ".join(requires)
+        required_str = ', '.join(requires)
 
         return required_str
 
@@ -252,34 +252,32 @@ class Require(NamedTuple):
     def to_required_full_str(self) -> str:
         """转换为版本需求字符串。"""
         required_str = self._to_required_str(self.versions)
-        required_full_str = f'required_package_{self.pkg_name}_version="{required_str}"'
+        required_full_str = 'required_package_{0}_version="{1}"'.format(self.pkg_name, required_str)
         return required_full_str
 
 
 class ItemElement(NamedTuple):
     """item元素。"""
-
     name: str
     version: str
 
     @classmethod
     def parse(cls, item_ele: ET.Element, cur_ver: str):
         """解析item元素。"""
-        name = item_ele.attrib["name"]
-        version = item_ele.attrib["version"].replace("$(CUR_VER)", cur_ver)
+        name = item_ele.attrib['name']
+        version = item_ele.attrib['version'].replace("$(CUR_VER)", cur_ver)
         return cls(name=name, version=version)
 
     @classmethod
     def skip(cls, item_ele: ET.Element):
         """是否跳过item元素。"""
-        version = item_ele.attrib["version"]
-        return version.strip() == ""
+        version = item_ele.attrib['version']
+        return version.strip() == ''
 
 
 class CompatibleElement(NamedTuple):
     """compatible元素。"""
-
-    items: list
+    items: List
 
     @classmethod
     def parse(cls, compatible_ele: ET.Element, cur_ver: str):
@@ -295,21 +293,20 @@ class CompatibleElement(NamedTuple):
 
 def is_version_number(version: str) -> bool:
     """字符串是否为版本号。"""
-    has_slash = "/" in version
+    has_slash = '/' in version
     return not has_slash and len(version.split(".")) >= 3
 
 
 class VersionXml(NamedTuple):
     """版本配置。"""
-
     release_version: str
     version_dir: str
-    packages: dict
+    packages: Dict
 
     @classmethod
-    def match(cls, filepath: Path | str) -> bool:
+    def match(cls, filepath: Union[Path, str]) -> bool:
         """文件路径是否匹配版本信息文件。"""
-        return str(filepath).endswith(".xml")
+        return str(filepath).endswith('.xml')
 
     @classmethod
     def parse_version(cls, version_str: str):
@@ -334,7 +331,7 @@ class VersionXml(NamedTuple):
         """获取多版本目录。"""
         return self.version_dir
 
-    def collect_requires(self, package: str) -> list[Require]:
+    def collect_requires(self, package: str) -> List[Require]:
         """收集对应包的包需求列表。"""
         requires = {}
 
@@ -352,7 +349,7 @@ class VersionXml(NamedTuple):
             try:
                 version = self.parse_version(version_str)
             except ParseVersionFailed as ex:
-                msg = f"parse pkg {pkg_name} version {version_str} failed"
+                msg = f'parse pkg {pkg_name} version {version_str} failed'
                 raise CollectRequiresFailed(pkg_name, version_str, msg) from ex
 
             requires[pkg_name].versions.append(version)
@@ -365,7 +362,9 @@ class VersionXml(NamedTuple):
         return result
 
 
-def get_version_dir(version_xml: VersionXml | None, disable_multi_version: bool, version_dir: str | None) -> str | None:
+def get_version_dir(version_xml: Optional[VersionXml],
+                    disable_multi_version: bool,
+                    version_dir: Optional[str]) -> Optional[str]:
     """获取版本目录名。"""
     if disable_multi_version:
         return None
@@ -387,31 +386,29 @@ def is_multi_version(version_dir: str) -> bool:
 
 class VersionInfo(NamedTuple):
     """版本信息。"""
-
     install_version_info: bool
-    install_version_info_attrib: dict[str, str] | None
-    itf_versions: list[str]
+    install_version_info_attrib: Optional[Dict[str, str]]
+    itf_versions: List[str]
     version: str
-    version_xml: VersionXml | None
-    timestamp: str | None
+    version_xml: Optional[VersionXml]
+    timestamp: Optional[str]
 
 
 class VersionInfoFile(NamedTuple):
     """生成的版本配置。"""
-
     version: str
-    itf_version_info: str | None = None
-    requires: list[Require] | None = None
-    version_dir: str | None = None
-    timestamp: str | None = None
+    itf_version_info: Optional[str] = None
+    requires: Optional[List[Require]] = None
+    version_dir: Optional[str] = None
+    timestamp: Optional[str] = None
 
     def _get_content(self) -> str:
         """获取版本配置内容。"""
-        lines = [f"Version={self.version}"]
+        lines = ['Version={0}'.format(self.version)]
         if self.version_dir:
-            lines.append(f"version_dir={self.version_dir}")
+            lines.append('version_dir={0}'.format(self.version_dir))
         if self.timestamp:
-            lines.append(f"timestamp={self.timestamp}")
+            lines.append('timestamp={0}'.format(self.timestamp))
         if self.itf_version_info:
             lines.append(self.itf_version_info)
 
@@ -419,11 +416,11 @@ class VersionInfoFile(NamedTuple):
             requires_str = [require.to_required_full_str() for require in self.requires]
             lines.extend(requires_str)
 
-        lines.append("")
+        lines.append('')
 
-        return "\n".join(lines)
+        return '\n'.join(lines)
 
-    def save(self, target_path: Path | str):
+    def save(self, target_path: Union[Path, str]):
         """保存版本配置。"""
         content = self._get_content()
 
@@ -431,5 +428,5 @@ class VersionInfoFile(NamedTuple):
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
 
-        with open(target_path, "w") as file:
+        with open(target_path, 'w') as file:
             file.write(content)

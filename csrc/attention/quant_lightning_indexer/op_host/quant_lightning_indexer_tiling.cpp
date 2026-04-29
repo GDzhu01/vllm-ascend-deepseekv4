@@ -105,7 +105,7 @@ ge::graphStatus QLIInfoParser::GetNpuInfo()
     socVersion_ = ascendcPlatform.GetSocVersion();
     if ((socVersion_ != platform_ascendc::SocVersion::ASCEND910B) &&
         (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) &&
-        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_95)) {
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND950)) {
         OP_LOGE(opName_, "SOC Version[%d] is not support.", static_cast<int32_t>(socVersion_));
         return GRAPH_FAILED;
     }
@@ -171,8 +171,8 @@ ge::graphStatus QLIInfoParser::GetAttrParaInfo()
     opParamInfo_.nextTokens = attrs->GetAttrPointer<int64_t>(ATTR_NEXT_TOKENS_INDEX);
     opParamInfo_.cmpRatio = attrs->GetAttrPointer<int64_t>(ATTR_CMP_RATIO_INDEX);
     opParamInfo_.returnValues = attrs->GetAttrPointer<bool>(ATTR_RETURN_VALUES_INDEX);
-    opParamInfo_.stride = attrs->GetAttrPointer<int64_t>(ATTR_STRIDE_INDEX);
-    opParamInfo_.scaleStride = attrs->GetAttrPointer<int64_t>(ATTR_SCALE_STRIDE_INDEX);
+    opParamInfo_.keyStride0 = attrs->GetAttrPointer<int64_t>(ATTR_KEY_STRIDE0_INDEX);
+    opParamInfo_.keyDequantScaleStride0 = attrs->GetAttrPointer<int64_t>(ATTR_KEY_DEQUANT_SCALE_STRIDE0_INDEX);
 
     if (opParamInfo_.layOutQuery != nullptr) {
         OP_LOGI(context_->GetNodeName(), "layout_query is:%s", opParamInfo_.layOutQuery);
@@ -229,7 +229,7 @@ ge::graphStatus QLIInfoParser::CheckAttrParaInfo()
                     ((*opParamInfo_.cmpRatio & (*opParamInfo_.cmpRatio - 1)) != 0),
                 OP_LOGE(opName_, "input attr cmpRatio must > 0 and <= 128 and should be powers of 2, but now cmpRatio is %ld.",
                 *opParamInfo_.cmpRatio), return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         OP_CHECK_IF(!((*opParamInfo_.sparseCount > 0) && (*opParamInfo_.sparseCount <= SPARSE_LIMIT)),
                 OP_LOGE(opName_, "input attr sparse_count must > 0 and <= %d, but now sparse_count is %d",
                        SPARSE_LIMIT, *opParamInfo_.sparseCount),return ge::GRAPH_FAILED);
@@ -307,7 +307,7 @@ ge::graphStatus QLIInfoParser::GetAndCheckInOutDataType()
             inputQueryScaleType_ != ge::DT_FLOAT16,
             OP_LOGE(opName_, "The data types of the input query_dequant_scale and key_dequant_scale must be float16."),
             return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
         OP_CHECK_IF(inputQType_ != ge::DT_FLOAT8_E4M3FN,
                OP_LOGE(opName_, "The data types of the input query and key must be float8_e4m3."), return ge::GRAPH_FAILED);
         OP_CHECK_IF(
@@ -320,7 +320,7 @@ ge::graphStatus QLIInfoParser::GetAndCheckInOutDataType()
         (socVersion_ == platform_ascendc::SocVersion::ASCEND910_93)) {
         OP_CHECK_IF(weightsType_ != ge::DT_FLOAT16,
                 OP_LOGE(opName_, "The data types of the input weights must be float16."), return ge::GRAPH_FAILED);
-    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND910_95) {
+    } else if (socVersion_ == platform_ascendc::SocVersion::ASCEND950) {
             OP_CHECK_IF(weightsType_ != ge::DT_FLOAT,
                 OP_LOGE(opName_, "The data types of the input weights must be float."), return ge::GRAPH_FAILED);
     }
@@ -806,8 +806,8 @@ void QLIInfoParser::GenerateInfo(QLITilingInfo &QLIInfo)
     QLIInfo.nextTokens = *opParamInfo_.nextTokens;
     QLIInfo.cmpRatio = *opParamInfo_.cmpRatio;
     QLIInfo.returnValues = *opParamInfo_.returnValues;
-    QLIInfo.stride = *opParamInfo_.stride;
-    QLIInfo.scaleStride = *opParamInfo_.scaleStride;
+    QLIInfo.keyStride0 = *opParamInfo_.keyStride0;
+    QLIInfo.keyDequantScaleStride0 = *opParamInfo_.keyDequantScaleStride0;
 
     QLIInfo.inputQLayout = qLayout_;
     QLIInfo.inputKLayout = kLayout_;
@@ -894,10 +894,10 @@ ge::graphStatus QuantLightningIndexerTiling::DoTiling(QLITilingInfo *tilingInfo)
     tilingData_.set_sparseMode(tilingInfo->sparseMode);
     tilingData_.set_cmpRatio(tilingInfo->cmpRatio);
     tilingData_.set_returnValues(tilingInfo->returnValues);
+    tilingData_.set_keyStride0(tilingInfo->keyStride0);
+    tilingData_.set_keyDequantScaleStride0(tilingInfo->keyDequantScaleStride0);
     tilingData_.set_usedCoreNum(blockDim);
     tilingData_.set_batchSupperFlag(tilingInfo->batchSupperFlag);
-    tilingData_.set_stride(tilingInfo->stride);
-    tilingData_.set_scaleStride(tilingInfo->scaleStride);
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
 

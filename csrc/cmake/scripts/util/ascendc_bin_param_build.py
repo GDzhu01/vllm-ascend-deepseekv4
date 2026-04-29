@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 # -----------------------------------------------------------------------------------------------------------
 # Copyright (c) 2025 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
@@ -10,17 +11,17 @@
 # -----------------------------------------------------------------------------------------------------------
 
 import argparse
-import copy
-import hashlib
-import json
-import os
 import sys
+import os
+import json
+import hashlib
+import re
+import copy
 from collections import defaultdict
-from typing import NamedTuple
+from typing import Dict, List, Set, Tuple, NamedTuple
 
 import const_var
 import opdesc_parser
-import regex as re
 
 PYF_PATH = os.path.dirname(os.path.realpath(__file__))
 
@@ -35,10 +36,10 @@ class ParamInfo(NamedTuple):
 class BinParamBuilder(opdesc_parser.OpDesc):
     def __init__(self: any, op_type: str):
         super().__init__(op_type)
-        self.soc = ""
-        self.out_path = ""
+        self.soc = ''
+        self.out_path = ''
         self.tiling_keys = set()
-        self.op_debug_config = ""
+        self.op_debug_config = ''
         self.op_super_config = []
 
     def set_soc_version(self: any, soc: str):
@@ -47,7 +48,7 @@ class BinParamBuilder(opdesc_parser.OpDesc):
     def set_out_path(self: any, out_path: str):
         self.out_path = out_path
 
-    def set_tiling_key(self: any, tiling_key_info: set):
+    def set_tiling_key(self: any, tiling_key_info: Set):
         if tiling_key_info:
             self.tiling_keys.update(tiling_key_info)
 
@@ -62,53 +63,54 @@ class BinParamBuilder(opdesc_parser.OpDesc):
     def get_full_list(self: any):
         dtype_list = []
         for dtype_in in self.input_dtype:
-            dtype_list.append(dtype_in.split(","))
+            dtype_list.append(dtype_in.split(','))
         for dtype_out in self.output_dtype:
-            dtype_list.append(dtype_out.split(","))
+            dtype_list.append(dtype_out.split(','))
 
         format_list = []
         for fmt_in in self.input_fmt:
-            format_list.append(fmt_in.split(","))
+            format_list.append(fmt_in.split(','))
         for fmt_out in self.output_fmt:
-            format_list.append(fmt_out.split(","))
+            format_list.append(fmt_out.split(','))
 
         dtype_for_bin_list = [[] for _ in range(len(self.input_dtype) + len(self.output_dtype))]
         format_for_bin_list = copy.deepcopy(dtype_for_bin_list)
 
         for key, value in self.input_dtype_for_bin.items():
-            dtype_for_bin_list[key] = value.split(",")
+            dtype_for_bin_list[key] = value.split(',')
         for key, value in self.output_dtype_for_bin.items():
-            dtype_for_bin_list[key + len(self.input_dtype)] = value.split(",")
+            dtype_for_bin_list[key + len(self.input_dtype)] = value.split(',')
         for key, value in self.input_fmt_for_bin.items():
-            format_for_bin_list[key] = value.split(",")
+            format_for_bin_list[key] = value.split(',')
         for key, value in self.output_fmt_for_bin.items():
-            format_for_bin_list[key + len(self.input_dtype)] = value.split(",")
+            format_for_bin_list[key + len(self.input_dtype)] = value.split(',')
 
         return ParamInfo(dtype_list, format_list, dtype_for_bin_list, format_for_bin_list)
+
 
     def gen_bin_cprs_list(self: any, param_info: ParamInfo):
         combine_dict = {}
         origin_combine_dict = {}
-        for cob_idx in range(0, len(self.input_dtype[0].split(","))):
+        for cob_idx in range(0, len(self.input_dtype[0].split(','))):
             origin_combine = ""
             combine = ""
             for param_idx in range(0, len(self.input_dtype) + len(self.output_dtype)):
-                if param_info.dtype_for_bin_list[param_idx]:
+                if (param_info.dtype_for_bin_list[param_idx]):
                     combine += param_info.dtype_for_bin_list[param_idx][cob_idx]
                 else:
                     combine += param_info.dtype_list[param_idx][cob_idx]
                 origin_combine += param_info.dtype_list[param_idx][cob_idx]
-                if param_info.format_for_bin_list[param_idx]:
+                if (param_info.format_for_bin_list[param_idx]):
                     combine += param_info.format_for_bin_list[param_idx][cob_idx]
                 else:
                     combine += param_info.format_list[param_idx][cob_idx]
                 origin_combine += param_info.format_list[param_idx][cob_idx]
-            if combine not in combine_dict:
+            if (combine not in combine_dict):
                 combine_dict[combine] = []
             combine_dict[combine].append(cob_idx)
             origin_combine_dict[origin_combine] = cob_idx
         for key, value in combine_dict.items():
-            if key not in origin_combine_dict:
+            if (key not in origin_combine_dict):
                 print(f"WARNING: ForBinQuery {key} not in origin combine")
                 self.bin_save_list += value
                 continue
@@ -123,8 +125,9 @@ class BinParamBuilder(opdesc_parser.OpDesc):
             sub_list.append(self.bin_cprs_head[index])
         self.bin_save_list += self.bin_cprs_head
 
+
     def gen_for_bin_list(self: any, param_info: ParamInfo):
-        combine_size = len(self.input_dtype[0].split(","))
+        combine_size = len(self.input_dtype[0].split(','))
         input_size = len(self.input_dtype)
         output_size = len(self.output_dtype)
 
@@ -147,57 +150,68 @@ class BinParamBuilder(opdesc_parser.OpDesc):
                     self.output_dtype_for_bin_list[i][head_idx].append(param_info.dtype_list[i + input_size][cmb_idx])
                     self.output_fmt_for_bin_list[i][head_idx].append(param_info.format_list[i + input_size][cmb_idx])
 
+
     def rm_cprs_cmb(self: any, dtype_list, format_list, input_size, output_size):
         for i in range(0, input_size):
             self.input_dtype_for_bin_list[i] = [
-                element for index, element in enumerate(self.input_dtype_for_bin_list[i]) if index in self.bin_save_list
+                element for index, element in enumerate(self.input_dtype_for_bin_list[i])
+                if index in self.bin_save_list
             ]
             self.input_fmt_for_bin_list[i] = [
-                element for index, element in enumerate(self.input_fmt_for_bin_list[i]) if index in self.bin_save_list
+                element for index, element in enumerate(self.input_fmt_for_bin_list[i])
+                if index in self.bin_save_list
             ]
-            new_dtype_list = [element for index, element in enumerate(dtype_list[i]) if index in self.bin_save_list]
+            new_dtype_list = [
+                element for index, element in enumerate(dtype_list[i])
+                if index in self.bin_save_list
+            ]
             new_dtype_str = ""
             for dtype in new_dtype_list:
                 new_dtype_str += f"{dtype},"
             self.input_dtype[i] = new_dtype_str[:-1]
-            new_format_list = [element for index, element in enumerate(format_list[i]) if index in self.bin_save_list]
+            new_format_list = [
+                element for index, element in enumerate(format_list[i])
+                if index in self.bin_save_list
+            ]
             new_format_str = ""
             for fmt in new_format_list:
                 new_format_str += f"{fmt},"
             self.input_fmt[i] = new_format_str[:-1]
         for i in range(0, output_size):
             self.output_dtype_for_bin_list[i] = [
-                element
-                for index, element in enumerate(self.output_dtype_for_bin_list[i])
+                element for index, element in enumerate(self.output_dtype_for_bin_list[i])
                 if index in self.bin_save_list
             ]
             self.output_fmt_for_bin_list[i] = [
-                element for index, element in enumerate(self.output_fmt_for_bin_list[i]) if index in self.bin_save_list
+                element for index, element in enumerate(self.output_fmt_for_bin_list[i])
+                if index in self.bin_save_list
             ]
             new_dtype_list = [
-                element for index, element in enumerate(dtype_list[i + input_size]) if index in self.bin_save_list
+                element for index, element in enumerate(dtype_list[i + input_size])
+                if index in self.bin_save_list
             ]
             new_dtype_str = ""
             for dtype in new_dtype_list:
                 new_dtype_str += f"{dtype},"
             self.output_dtype[i] = new_dtype_str[:-1]
             new_format_list = [
-                element for index, element in enumerate(format_list[i + input_size]) if index in self.bin_save_list
+                element for index, element in enumerate(format_list[i + input_size])
+                if index in self.bin_save_list
             ]
             new_format_str = ""
             for fmt in new_format_list:
                 new_format_str += f"{fmt},"
             self.output_fmt[i] = new_format_str[:-1]
 
+
     def is_set_for_bin_query(self: any):
-        return any(
-            [
-                self.input_dtype_for_bin,
-                self.output_dtype_for_bin,
-                self.input_fmt_for_bin,
-                self.output_fmt_for_bin,
-            ]
-        )
+        return any([
+            self.input_dtype_for_bin,
+            self.output_dtype_for_bin,
+            self.input_fmt_for_bin,
+            self.output_fmt_for_bin,
+        ])
+
 
     def for_bin_list_match(self: any):
         if not self.is_set_for_bin_query():
@@ -207,20 +221,21 @@ class BinParamBuilder(opdesc_parser.OpDesc):
         param_info = self.get_full_list()
         self.gen_bin_cprs_list(param_info)
         self.gen_for_bin_list(param_info)
-        if len(self.bin_save_list) == len(self.input_dtype[0].split(",")):
-            print("WARNING: ForBinQuery can not compress number of bin file with this set, please check!!.")
+        if len(self.bin_save_list) == len(self.input_dtype[0].split(',')):
+            print(f'WARNING: ForBinQuery can not compress number of bin file with this set, please check!!.')
             return
         self.rm_cprs_cmb(param_info.dtype_list, param_info.format_list, input_size, output_size)
 
-    def gen_input_json(self: any, auto_gen_path: str):
+
+    def gen_input_json(self: any, auto_gen_path: str, kernel_template_input: str, bisheng_flags: str):
         key_map = {}
         self.for_bin_list_match()
         if len(self.input_dtype) == 0:
-            count = len(self.output_dtype[0].split(","))
+            count = len(self.output_dtype[0].split(','))
         else:
-            count = len(self.input_dtype[0].split(","))
+            count = len(self.input_dtype[0].split(','))
         if count == 0:
-            raise RuntimeError(f"Op {self.op_type} must have at least one input or output")
+            raise RuntimeError(f'Op {self.op_type} must have at least one input or output')
         required_parameters = set()
         index_value = -1
 
@@ -232,53 +247,53 @@ class BinParamBuilder(opdesc_parser.OpDesc):
             op_node = {}
 
             for idx in range(0, len(self.input_name)):
-                idtypes = self.input_dtype[idx].split(",")
-                ifmts = self.input_fmt[idx].split(",")
+                idtypes = self.input_dtype[idx].split(',')
+                ifmts = self.input_fmt[idx].split(',')
                 itype = self.input_type[idx]
                 para = {}
-                para["name"] = self.input_name[idx][:-5]
-                para["index"] = idx
-                para["dtype"] = idtypes[i]
+                para['name'] = self.input_name[idx][:-5]
+                para['index'] = idx
+                para['dtype'] = idtypes[i]
                 if self.is_set_for_bin_query() and self.input_dtype_for_bin_list[idx][i]:
-                    para["dtypeForBinQuery"] = self.input_dtype_for_bin_list[idx][i]
-                para["format"] = ifmts[i]
+                    para['dtypeForBinQuery'] = self.input_dtype_for_bin_list[idx][i]
+                para['format'] = ifmts[i]
                 if self.is_set_for_bin_query() and self.input_fmt_for_bin_list[idx][i]:
-                    para["formatForBinQuery"] = self.input_fmt_for_bin_list[idx][i]
-                para["paramType"] = itype
-                para["shape"] = [-2]
-                para["format_match_mode"] = "FormatAgnostic"
+                    para['formatForBinQuery'] = self.input_fmt_for_bin_list[idx][i]
+                para['paramType'] = itype
+                para['shape'] = [-2]
+                para['format_match_mode'] = 'FormatAgnostic'
 
                 input_parameter_key = (idtypes[i], ifmts[i])
-                if itype == "dynamic":
+                if itype == 'dynamic':
                     inputs.append([para])
                     required_parameter.append(input_parameter_key)
-                elif itype == "required":
+                elif itype == 'required':
                     inputs.append(para)
                     required_parameter.append(input_parameter_key)
                 else:
                     inputs.append(para)
 
             for idx in range(0, len(self.output_name)):
-                odtypes = self.output_dtype[idx].split(",")
-                ofmts = self.output_fmt[idx].split(",")
+                odtypes = self.output_dtype[idx].split(',')
+                ofmts = self.output_fmt[idx].split(',')
                 otype = self.output_type[idx]
                 para = {}
-                para["name"] = self.output_name[idx][:-5]
-                para["index"] = idx
-                para["dtype"] = odtypes[i]
+                para['name'] = self.output_name[idx][:-5]
+                para['index'] = idx
+                para['dtype'] = odtypes[i]
                 if self.is_set_for_bin_query() and self.output_dtype_for_bin_list[idx][i]:
-                    para["dtypeForBinQuery"] = self.output_dtype_for_bin_list[idx][i]
-                para["format"] = ofmts[i]
+                    para['dtypeForBinQuery'] = self.output_dtype_for_bin_list[idx][i]
+                para['format'] = ofmts[i]
                 if self.is_set_for_bin_query() and self.output_fmt_for_bin_list[idx][i]:
-                    para["formatForBinQuery"] = self.output_fmt_for_bin_list[idx][i]
-                para["paramType"] = otype
-                para["shape"] = [-2]
-                para["format_match_mode"] = "FormatAgnostic"
+                    para['formatForBinQuery'] = self.output_fmt_for_bin_list[idx][i]
+                para['paramType'] = otype
+                para['shape'] = [-2]
+                para['format_match_mode'] = 'FormatAgnostic'
                 output_parameter_key = (odtypes[i], ofmts[i])
-                if otype == "dynamic":
+                if otype == 'dynamic':
                     outputs.append([para])
                     required_parameter.append(output_parameter_key)
-                elif otype == "required":
+                elif otype == 'required':
                     outputs.append(para)
                     required_parameter.append(output_parameter_key)
                 else:
@@ -286,10 +301,10 @@ class BinParamBuilder(opdesc_parser.OpDesc):
 
             for attr in self.attr_list:
                 att = {}
-                att["name"] = attr
-                atype = self.attr_val.get(attr).get("type").lower()
-                att["dtype"] = atype
-                att["value"] = const_var.ATTR_DEF_VAL.get(atype)
+                att['name'] = attr
+                atype = self.attr_val.get(attr).get('type').lower()
+                att['dtype'] = atype
+                att['value'] = const_var.ATTR_DEF_VAL.get(atype)
                 attrs.append(att)
 
             required_parameter_tuple = tuple(required_parameter)
@@ -297,78 +312,194 @@ class BinParamBuilder(opdesc_parser.OpDesc):
                 continue
             else:
                 required_parameters.add(required_parameter_tuple)
-                index_value += 1
+                index_value +=1
 
-            op_node["bin_filename"] = ""
-            op_node["inputs"] = inputs
-            op_node["outputs"] = outputs
+            op_node['bin_filename'] = ''
+            op_node['inputs'] = inputs
+            op_node['outputs'] = outputs
             if len(attrs) > 0:
-                op_node["attrs"] = attrs
+                op_node['attrs'] = attrs
 
             param = {}
-            param["op_type"] = self.op_type
-            param["op_list"] = [op_node]
-            objstr = json.dumps(param, indent="  ")
-            md5sum = hashlib.md5(objstr.encode("utf-8")).hexdigest()
+            param['op_type'] = self.op_type
+            param['op_list'] = [op_node]
+            objstr = json.dumps(param, indent='  ')
+            md5sum = hashlib.md5(objstr.encode('utf-8')).hexdigest()
             while key_map.get(md5sum) is not None:
-                objstr += "1"
-                md5sum = hashlib.md5(objstr.encode("utf-8")).hexdigest()
+                objstr += '1'
+                md5sum = hashlib.md5(objstr.encode('utf-8')).hexdigest()
             key_map[md5sum] = md5sum
-            bin_file = self.op_type + "_" + md5sum
-            op_node["bin_filename"] = bin_file
-            param_file = os.path.join(self.out_path, bin_file + "_param.json")
+            bin_file = self.op_type + '_' + md5sum
+            op_node['bin_filename'] = bin_file
+            param_file = os.path.join(self.out_path, bin_file + '_param.json')
             param_file = os.path.realpath(param_file)
 
             self._write_build_json(param_file, param)
-            self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path)
+            self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, bisheng_flags,
+            kernel_template_input=kernel_template_input)
             if self.op_super_config:
                 bin_file += "_relocatable"
-                op_node["bin_filename"] = bin_file
-                param_file = os.path.join(self.out_path, bin_file + "_param.json")
+                op_node['bin_filename'] = bin_file
+                param_file = os.path.join(self.out_path, bin_file + '_param.json')
                 param_file = os.path.realpath(param_file)
                 self._write_build_json(param_file, param)
                 index_value += 1
-                self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, True)
+                self._write_build_cmd(param_file, bin_file, index_value, auto_gen_path, bisheng_flags, True, 
+                                      kernel_template_input)
 
     def _write_build_json(self: any, param_file: str, param):
-        with os.fdopen(os.open(param_file, const_var.WFLAGS, const_var.WMODES), "w") as fd:
-            json.dump(param, fd, indent="  ")
+        with os.fdopen(os.open(param_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
+            json.dump(param, fd, indent='  ')
 
-    def _generate_check_result(self: any, enable_tiling_keys: bool, bin_file: str):
-        check_result = ""
-        if enable_tiling_keys is False:
-            check_result += 'echo "${res}"\n'
-            check_result += const_var.CHK_CMD.format(res_file=bin_file + ".json")
-            check_result += const_var.CHK_CMD.format(res_file=bin_file + ".o")
+    def _generate_check_result(
+        self, enable_tiling_keys: bool, bin_file: str, ci_mode_flag: bool
+    ) -> str:
+        """根据模式和 tiling keys 启用状态生成检查脚本"""
+        if ci_mode_flag:
+            if not enable_tiling_keys:
+                return self._gen_ci_no_tiling(bin_file)
+            else:
+                return self._gen_ci_tiling(bin_file)
         else:
-            check_result += "if [ $? -eq 1 ]; then\n"
-            check_result += '    if echo "${res}" | \
-grep -q "None of the given tiling keys are in the supported list"; then\n'
-            check_result += '        echo "${res}"\n'
-            check_result += "    else\n"
-            check_result += '        echo "${res}"\n'
-            check_result += "        exit 1\n"
-            check_result += "    fi\n"
-            check_result += "else\n"
-            check_result += 'echo "${res}"\n'
-            check_result += const_var.CHK_CMD.format(res_file=bin_file + ".json")
-            check_result += const_var.CHK_CMD.format(res_file=bin_file + ".o")
-            check_result += "fi\n"
-        return check_result
+            if not enable_tiling_keys:
+                return self._gen_local_no_tiling(bin_file)
+            else:
+                return self._gen_local_tiling(bin_file)
 
-    def _write_build_cmd(self: any, param_file: str, bin_file: str, index: int, auto_gen_path: str, super_mode=False):
+    def _gen_ci_no_tiling(self, bin_file: str) -> str:
+        """CI模式，未启用tiling keys：任何错误仅记录，成功执行检查"""
+        return f"""
+    __ret=$?
+    if [ $__ret -eq 0 ]; then
+        echo "${{res}}"
+        echo "{self.op_intf} {bin_file}" >> success_ops.log
+        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
+        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
+    else
+        echo "${{res}}"
+        echo "{self.op_intf} {bin_file}" >> failed_ops.log
+    fi
+    """
+
+    def _gen_ci_tiling(self, bin_file: str) -> str:
+        """CI模式，启用tiling keys：处理特定返回码1错误，其余错误仅记录，成功执行检查"""
+        return f"""
+    __ret=$?
+    if [ $__ret -eq 0 ]; then
+        echo "${{res}}"
+        echo "{self.op_intf} {bin_file}" >> success_ops.log
+        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
+        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
+    elif [ $__ret -eq 1 ] && echo "${{res}}" | grep -q "None of the given tiling keys are in the supported list"; then
+        echo "${{res}}"
+        echo "{self.op_intf} {bin_file}" >> failed_ops.log
+    else
+        echo "${{res}}"
+        echo "{self.op_intf} {bin_file}" >> failed_ops.log
+    fi
+    """
+
+    def _gen_local_no_tiling(self, bin_file: str) -> str:
+        """线下模式，未启用tiling keys：任何错误立即退出，成功执行检查"""
+        return f"""
+    __ret=$?
+    if [ $__ret -eq 0 ]; then
+        echo "${{res}}"
+        remove_pid
+        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
+        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
+    else
+        echo "${{res}}"
+        on_failure
+        exit 1
+    fi
+    """
+
+    def _gen_local_tiling(self, bin_file: str) -> str:
+        """线下模式，启用tiling keys：特定返回码1错误仅打印，其他错误退出，成功执行检查"""
+        return f"""
+    __ret=$?
+    if [ $__ret -eq 0 ]; then
+        echo "${{res}}"
+        remove_pid
+        {const_var.CHK_CMD.format(res_file=bin_file + '.json')}
+        {const_var.CHK_CMD.format(res_file=bin_file + '.o')}
+    elif [ $__ret -eq 1 ] && echo "${{res}}" | grep -q "None of the given tiling keys are in the supported list"; then
+        echo "${{res}}"
+    else
+        echo "${{res}}"
+        on_failure
+        exit 1
+    fi
+    """
+
+    def _get_no_ci_shell_str(self):
+        return f"""
+PID_FILE="{self.out_path}/compile_pids.txt"
+STOP_FILE="{self.out_path}/compile_stop.flag"
+""" + """
+add_pid() {
+    (
+        flock 9
+        echo $$ >> "$PID_FILE"
+    ) 9>"${PID_FILE}.lock"
+}
+
+remove_pid() {
+    (
+        flock 9
+        grep -v "^$$$" "$PID_FILE" > "${PID_FILE}.tmp" && mv "${PID_FILE}.tmp" "$PID_FILE"
+    ) 9>"${PID_FILE}.lock"
+}
+
+check_stop() {
+    if [ -f "$STOP_FILE" ]; then
+        echo "Stop flag detected, exiting..."
+        exit 1
+    fi
+}
+
+on_failure() {
+    touch "$STOP_FILE"
+    
+    # PIDPID
+    (
+        flock 9
+        while read pid; do
+            if [ "$pid" -ne $$ ]; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done < "$PID_FILE"
+    ) 9>"${PID_FILE}.lock"
+}
+
+check_stop
+add_pid
+check_stop
+"""
+
+
+    def _write_build_cmd(self: any, param_file: str, bin_file: str, index: int, auto_gen_path: str, bisheng_flags: str,
+                         super_mode=False, kernel_template_input=""):
         hard_soc = const_var.conv_soc_ver(self.soc)
         if not hard_soc:
             hard_soc = self.soc.capitalize()
         name_com = [self.op_type, self.op_file, str(index)]
-        compile_file = os.path.join(self.out_path, "-".join(name_com) + ".sh")
+        compile_file = os.path.join(self.out_path, '-'.join(name_com) + '.sh')
         compile_file = os.path.realpath(compile_file)
 
-        bin_cmd_str = "res=$(opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
-                --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic "
-
+        if const_var.CHECK_ASC_DEVKIT_VERSION:
+            bin_cmd_str = 'res=$(asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+                 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
+        else:
+            bin_cmd_str = 'res=$(opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+                 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic '
+        ci_mode_flag = (os.environ.get('CI_MODE', 'FALSE') == 'TRUE')
         build_cmd_var = "#!/bin/bash\n"
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} ..."\n'
+        if not ci_mode_flag:
+            build_cmd_var += self._get_no_ci_shell_str()
+        build_cmd_var += f"start_time=$(date +%s.%N)\n"
         plog_level = os.environ.get("ASCEND_GLOBAL_LOG_LEVEL")
         plog_stdout = os.environ.get("ASCEND_SLOG_PRINT_TO_STDOUT")
         if plog_level is None:
@@ -377,42 +508,61 @@ grep -q "None of the given tiling keys are in the supported list"; then\n'
             build_cmd_var += const_var.SET_PLOG_STDOUT
         build_cmd_var += const_var.SRC_ENV
         if hard_soc == "Ascend610Lite":
-            build_cmd_var += f"export ASCEND_CUSTOM_OPP_PATH={auto_gen_path}:$ASCEND_CUSTOM_OPP_PATH \n"
-        build_cmd_var += bin_cmd_str.format(
-            fun=self.op_intf, soc=hard_soc, param=param_file, impl="high_performance,optional"
-        )
+            build_cmd_var += f'export ASCEND_CUSTOM_OPP_PATH={auto_gen_path}:$ASCEND_CUSTOM_OPP_PATH \n'
+        build_cmd_var += bin_cmd_str.format(fun=self.op_intf, soc=hard_soc, param=param_file,
+                                           impl='high_performance,optional')
+        
+        print(f"bisheng_flags is: {bisheng_flags}")
+
+        if bisheng_flags:
+            # 如果 bisheng_flags 非空，直接使用其值
+            build_cmd_var += f" --op_debug_config={bisheng_flags}"
+
         enable_tiling_keys = False
+        
+        if kernel_template_input:
+            kernel_template_input = kernel_template_input.replace(',', ';')
+            build_cmd_var += f' --kernel-template-input="{kernel_template_input}"'
+
         if self.tiling_keys:
             tiling_keys_list = sorted(list(self.tiling_keys))
-            tiling_key_str = ",".join([str(_key) for _key in tiling_keys_list])
+            tiling_key_str = ','.join([str(_key) for _key in tiling_keys_list])
             build_cmd_var += f' --tiling_key="{tiling_key_str}"'
             enable_tiling_keys = True
 
         if self.op_debug_config:
-            op_debug_str = ",".join([str(_key) for _key in list(self.op_debug_config)])
-            build_cmd_var += f" --op_debug_config={op_debug_str}"
+            op_debug_str = ','.join([str(_key) for _key in list(self.op_debug_config)])
+            build_cmd_var += f' --op_debug_config={op_debug_str}'
 
         if super_mode and self.op_super_config:
-            op_super_config_str = " ".join([str(_key) for _key in list(self.op_super_config)])
-            build_cmd_var += f" {op_super_config_str}"
+            op_super_config_str = ' '.join([str(_key) for _key in list(self.op_super_config)])
+            build_cmd_var += f' {op_super_config_str}'
 
-        build_cmd_var += ")\n"
-        build_cmd_var += "\n"
-
-        check_result = self._generate_check_result(enable_tiling_keys, bin_file)
+        build_cmd_var += ")\n\n"
+    
+        check_result = self._generate_check_result(enable_tiling_keys, bin_file, ci_mode_flag)
         build_cmd_var += check_result
+        build_cmd_var += f'end_time=$(date +%s.%N)\n'
+        build_cmd_var += f'duration=$(awk "BEGIN {{ print $end_time - $start_time }}")\n'
+        build_bin_path = os.path.dirname(self.out_path)
+        build_cmd_var += f'kernel_path=$(find "{build_bin_path}" -type f -name "{bin_file}.o" -print | head -n 1)\n'
+        build_cmd_var += f'kernel_size=$(stat -c%s "$kernel_path")\n'
+        build_cmd_var += (
+            f'echo "Build [{self.soc}] op_name [{self.op_file}] index [{str(index)}] bin_file [{bin_file}] '
+            f'duration [$duration] size [$kernel_size] start_time [$start_time] end_time [$end_time]" '
+            f'>> {self.op_file}-{str(index)}.txt\n'
+        )
         build_cmd_var += f'echo "[{self.soc}] Generating {bin_file} Done"\n'
-
-        with os.fdopen(os.open(compile_file, const_var.WFLAGS, const_var.WMODES), "w") as fd:
+        with os.fdopen(os.open(compile_file, const_var.WFLAGS, const_var.WMODES), 'w') as fd:
             fd.write(build_cmd_var)
 
 
-def get_tiling_keys(tiling_keys: str) -> set:
+def get_tiling_keys(tiling_keys: str) -> Set:
     all_tiling_keys = set()
     if not tiling_keys:
         return all_tiling_keys
 
-    tiling_key_list = tiling_keys.split(";")
+    tiling_key_list = tiling_keys.split(';')
     for tiling_key_value in tiling_key_list:
         pattern = r"(?<![^\s])(\d+)-(\d+)(?![^\s])"
         results = re.findall(pattern, tiling_key_value)
@@ -434,7 +584,7 @@ def trans_soc_verion(soc_ver: str):
     return opdesc_parser.SOC_TO_SHORT_SOC_MAP[low_soc_ver]
 
 
-def parse_op_debug_confg(opc_config_file: str, soc: str) -> dict:
+def parse_op_debug_confg(opc_config_file: str, soc: str) -> Dict:
     tiling_key_info = defaultdict(set)
     op_debug_config = defaultdict(set)
     if not opc_config_file:
@@ -443,12 +593,12 @@ def parse_op_debug_confg(opc_config_file: str, soc: str) -> dict:
     if not os.path.exists(opc_config_file):
         return tiling_key_info, op_debug_config
 
-    with open(opc_config_file) as file:
+    with open(opc_config_file, 'r') as file:
         contents = file.readlines()
 
     for _content in contents:
         content = _content.strip()
-        opc_configs = content.split("@")
+        opc_configs = content.split('@')
         if len(opc_configs) < 3:
             continue
 
@@ -458,7 +608,7 @@ def parse_op_debug_confg(opc_config_file: str, soc: str) -> dict:
 
         compute_unit = opc_configs[1]
         if compute_unit:
-            compute_unit_list = compute_unit.split(";")
+            compute_unit_list = compute_unit.split(';')
             soc_lists = []
             for soc_ver in compute_unit_list:
                 short_soc_ver = trans_soc_verion(soc_ver)
@@ -468,35 +618,37 @@ def parse_op_debug_confg(opc_config_file: str, soc: str) -> dict:
 
         for options in opc_configs[2:]:
             if "--tiling_key" in options:
-                format_tiling_keys = get_tiling_keys(options.split("=")[1])
+                format_tiling_keys = get_tiling_keys(options.split('=')[1])
                 if format_tiling_keys:
                     tiling_key_info[op_type].update(format_tiling_keys)
             if "--op_debug_config" in options:
-                first_index = options.find("=")
+                first_index = options.find('=')
                 if first_index != -1:
-                    debug_config = options[first_index + 1 :]
+                    debug_config = options[first_index + 1:]
                 else:
                     debug_config = ""
 
-                format_debug_config = set(debug_config.split(";"))
+                format_debug_config = set(debug_config.split(';'))
                 for _config in format_debug_config:
                     op_debug_config[op_type].add(_config)
     return tiling_key_info, op_debug_config
 
 
-def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str, opc_config_file: str = "", ops: list = None):
+def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str, kernel_template_input: str, bisheng_flags: str,
+                        opc_config_file: str = '', ops: list = None):
     if not os.path.exists(cfgfile):
-        print(f"INFO: {cfgfile} does not exists in this project, skip generating compile commands.")
+        print(f'INFO: {cfgfile} does not exists in this project, skip generating compile commands.')
         return
 
     debug_config = defaultdict(set)
     super_config = defaultdict(set)
-
+    
     op_descs = opdesc_parser.get_op_desc(cfgfile, [], [], BinParamBuilder, ops)
     tiling_key_info, op_debug_config = parse_op_debug_confg(opc_config_file, soc)
     for _op_type, _op_option in op_debug_config.items():
         for _option in _op_option:
-            if _option.startswith("--op_relocatable_kernel_binary") or _option.startswith("--op_super_kernel_options"):
+            if (_option.startswith("--op_relocatable_kernel_binary")
+                or _option.startswith("--op_super_kernel_options")):
                 super_config[_op_type].add(_option)
             else:
                 debug_config[_op_type].add(_option)
@@ -516,19 +668,30 @@ def gen_bin_param_file(cfgfile: str, out_dir: str, soc: str, opc_config_file: st
             op_desc.set_tiling_key(tiling_key_info[op_desc.op_type])
         if all_soc_key in tiling_key_info:
             op_desc.set_tiling_key(tiling_key_info[all_soc_key])
-        op_desc.gen_input_json(auto_gen_path_dir)
+        op_desc.gen_input_json(auto_gen_path_dir, kernel_template_input, bisheng_flags)
 
 
 def parse_args(argv):
     """Command line parameter parsing"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("argv", nargs="+")
-    parser.add_argument("--opc-config-file", nargs="?", const="", default="")
+    parser.add_argument('argv', nargs='+')
+    parser.add_argument('--kernel_template_input', nargs='?', const='', default='')
+    parser.add_argument('--opc-config-file', nargs='?', const='', default='')
     return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = parse_args(sys.argv)
     if len(args.argv) <= 3:
-        raise RuntimeError("arguments must greater than 3")
-    gen_bin_param_file(args.argv[1], args.argv[2], args.argv[3], opc_config_file=args.opc_config_file)
+        raise RuntimeError('arguments must greater than 3')
+    bisheng_flags_option = ['oom', 'dump_cce', 'dump_bin', 'dump_loc', 'ccec_o0', 'ccec_g', 'check_flag_sanitizer']
+    input_bisheng_flags = ""
+    for elem in args.argv:
+        if elem in bisheng_flags_option:
+            input_bisheng_flags = elem
+    gen_bin_param_file(args.argv[1],
+                    args.argv[2],
+                    args.argv[3],
+                    args.kernel_template_input,
+                    input_bisheng_flags,
+                    opc_config_file=args.opc_config_file)

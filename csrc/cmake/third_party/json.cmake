@@ -44,10 +44,26 @@ if(json_FOUND AND NOT FORCE_REBUILD_CANN_3RD)
     add_library(json INTERFACE IMPORTED)
 else()
     set(REQ_URL "https://gitcode.com/cann-src-third-party/json/releases/download/v3.11.3/include.zip")
+    set(JSON_ARCHIVE ${JSON_DOWNLOAD_PATH}/include.zip)
+    file(MAKE_DIRECTORY ${JSON_DOWNLOAD_PATH})
+
+    # Search in CANN_3RD_LIB_PATH and move to pkg if found
+    if(EXISTS ${CANN_3RD_LIB_PATH}/include.zip AND NOT EXISTS ${JSON_ARCHIVE})
+        message("Found json archive in ${CANN_3RD_LIB_PATH}, moving to pkg")
+        file(RENAME ${CANN_3RD_LIB_PATH}/include.zip ${JSON_ARCHIVE})
+    endif()
+
+    # 检查是否使用本地归档文件
+    if(EXISTS ${JSON_ARCHIVE})
+        message("Found json archive at ${JSON_ARCHIVE}")
+        set(JSON_URL "file://${JSON_ARCHIVE}")
+    else()
+        set(JSON_URL ${REQ_URL})
+    endif()
 
     include(ExternalProject)
     ExternalProject_Add(third_party_json
-            URL ${REQ_URL}
+            URL ${JSON_URL}
             TLS_VERIFY OFF
             DOWNLOAD_DIR ${JSON_DOWNLOAD_PATH}
             DOWNLOAD_NO_EXTRACT TRUE
@@ -60,9 +76,12 @@ else()
             UPDATE_COMMAND ""
     )
 
-    ExternalProject_Get_Property(third_party_json SOURCE_DIR)
-    ExternalProject_Get_Property(third_party_json BINARY_DIR)
-    set(JSON_INCLUDE_DIR ${SOURCE_DIR}/include)
+    # 添加本地归档文件存在时的处理
+    if(NOT EXISTS ${JSON_INSTALL_PATH}/include)
+        file(MAKE_DIRECTORY "${JSON_INSTALL_PATH}/include")
+    endif()
+
+    set(JSON_INCLUDE_DIR ${JSON_INSTALL_PATH}/include)
     add_library(json INTERFACE)
     target_include_directories(json INTERFACE ${JSON_INCLUDE_DIR})
     add_dependencies(json third_party_json)
