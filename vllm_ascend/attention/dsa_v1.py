@@ -328,10 +328,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
-
+        
+        self.compressor_ratio = getattr(kv_cache_spec, 'compress_ratio', 0)
         hf_config = self.model_config.hf_config
-        layer_idx = extract_dsv4_layer_index(hf_config, layer_names[0])
-        self.compressor_ratio = get_dsv4_compress_ratio(hf_config, layer_idx)
 
         if AscendDSAMetadataBuilder.hadamard is None:
             if hf_config.model_type == 'deepseek_v4':
