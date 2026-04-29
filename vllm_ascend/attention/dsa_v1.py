@@ -1262,19 +1262,17 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
-            # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.indexer_state_cache']
-            (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
-            # (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata)
-            # (indexer_kv_scale_metadata, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, indexer_kv_state_metadata) 
+            # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
-            # ['attn', 'swa_cache', 'compressor.state_cache']
-            (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (_, swa_kv_cache, _, _, _, _,) = kv_cache
-            # ['swa_cache']
+            # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
 
@@ -1443,17 +1441,17 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if self.compress_ratio == 4:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
-            # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.state_cache']
-            (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
-            # ['attn', 'swa_cache', 'compressor.state_cache']
-            (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (_, swa_kv_cache, _, _, _, _) = kv_cache
-            # ['swa_cache']
+            # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
         cos = compress_common_attn_metadata.decode.cos[layer_name]
@@ -1642,7 +1640,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr_pertoken_scale: torch.Tensor = None,
     ):
         (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache) = kv_cache
-        (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata) = attn_metadata
+        # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+        (_, _, indexer_kv_state_metadata, indexer_kv_scale_metadata, _) = attn_metadata
 
         if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
             isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
