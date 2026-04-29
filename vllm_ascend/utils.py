@@ -80,6 +80,7 @@ def extract_dsv4_layer_index(config: Any, layer_name: str) -> int:
     from vllm.model_executor.models.utils import extract_layer_index
 
     layer_idx = extract_layer_index(layer_name)
+    # TODO(zzzzwwjj): the layer idx of mtp should be aligned with vLLM
     if ".mtp." in f".{layer_name}." and layer_idx < config.num_hidden_layers:
         return config.num_hidden_layers + layer_idx
     return layer_idx

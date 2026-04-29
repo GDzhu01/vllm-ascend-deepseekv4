@@ -160,44 +160,6 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
 
     # See `vllm/v1/attention/backends/mla/flashmla_sparse.py`
     #  for details.
-    assert spec.num_kv_heads == 1, "MLAAttentionSpec only supports 1 head."
-    # TODO(yifan): move this head size to bytes mapping to a utils file.
-    if spec.model_version == "svf":
-        # we should have a scale dim here.
-        # we should have dtype of scale and k of indexer here.
-        # NOTE(zyj): patch modifies here
-        # TODO(cmq): adapt this for A5
-        HEAD_DIM_TO_BLOCK_BYTES: dict[int, int] = {
-            128: 260,   # SVF: 128*2B NoPE, 4B for fp32 scale = 260B
-            512: 1024,  # SVF: 512*2B NoPE + RoPE = 1024B
-        }
-
-        if spec.head_size in HEAD_DIM_TO_BLOCK_BYTES:
-            actual_head_bytes = HEAD_DIM_TO_BLOCK_BYTES[spec.head_size]
-        else:
-            actual_head_bytes = spec.head_size
-        object.__setattr__(spec, "head_size", actual_head_bytes)
-        object.__setattr__(spec, "head_size_v", actual_head_bytes)
-
-        # ====================GPU=======================
-        # if spec.alignment is not None:
-        #     # Apply 576-byte alignment padding for SVF 512.
-        #     # KV cache tensor is allocated with padded page_size,
-        #     # but kernels access with shape [num_blocks, real_page_size].
-        #     actual_page_size = spec.real_page_size_bytes
-        #     padded_page_size = round_up(actual_page_size, spec.alignment)
-        #     if padded_page_size != actual_page_size:
-        #         object.__setattr__(spec, "page_size_padded", padded_page_size)
-
-        if get_ascend_device_type() == AscendDeviceType.A5:
-            # TODO(zyj): FIXME(qcs): this is a bug to just use real_page_size_bytes, 
-            # cause the page_size_padded will be overrided by this operation
-            actual_page_size = spec.real_page_size_bytes
-            padded_page_size = round_up(actual_page_size, 128)
-            if padded_page_size != actual_page_size:
-                object.__setattr__(spec, "page_size_padded", padded_page_size)
-    else:
-        raise ValueError(f"Invalid model version: {spec.model_version}")
 
 
 vllm.v1.kv_cache_interface.MLAAttentionSpec = AscendMLAAttentionSpec

@@ -534,7 +534,7 @@ class Compressor(nn.Module):
                 dtype=state_dtype,
                 compress_ratio=compress_ratio,
                 prefix=f"{prefix}.state_cache",
-                block_size=2,
+                block_size=8,
             )
         elif compress_ratio == 128:
             self.state_cache = CompressorStateCache(
