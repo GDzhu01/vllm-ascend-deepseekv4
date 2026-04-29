@@ -588,6 +588,8 @@ template <typename COMP>
 __aicore__ inline void CompressorBlockVector<COMP>::SaveLeftFirst(const LocalTensor<T> kvLocal, const LocalTensor<T> scoreLocal,
     const BlockInfo &blockInfo, uint32_t dStartIdx, uint32_t dDealSize)
 {
+    uint32_t kvStateStrideDim0 = constInfo_.kvStateStrideDim0;
+    uint32_t scoreStateStrideDim0 = constInfo_.scoreStateStrideDim0;
     uint32_t coff = static_cast<uint32_t>(COMP::coff);
     uint32_t preBIdx = 0;
     // 左边为上一个batch或者最后一个batch的数据
@@ -619,6 +621,8 @@ template <typename COMP>
 __aicore__ inline void CompressorBlockVector<COMP>::SaveState(const LocalTensor<T> kvLocal, const LocalTensor<T> scoreLocal,
     const BlockInfo &blockInfo, uint32_t dStartIdx, uint32_t dDealSize)
 {
+    uint32_t kvStateStrideDim0 = constInfo_.kvStateStrideDim0;
+    uint32_t scoreStateStrideDim0 = constInfo_.scoreStateStrideDim0;
     if (COMP::coff == COFF::OVERLAP) {
         uint32_t coff = static_cast<uint32_t>(COMP::coff);
         // 存右边
@@ -714,6 +718,8 @@ __aicore__ inline void CompressorBlockVector<COMP>::ReadState(const LocalTensor<
     if (blockInfo.compressTcSize == 0) {
         return;
     }
+    uint32_t kvStateStrideDim0 = constInfo_.kvStateStrideDim0;
+    uint32_t scoreStateStrideDim0 = constInfo_.scoreStateStrideDim0;
 
     if (COMP::coff == Compressor::COFF::OVERLAP) {
         float SOFTMAX_MIN_NUM = static_cast<float>(-1.0/0.0);
