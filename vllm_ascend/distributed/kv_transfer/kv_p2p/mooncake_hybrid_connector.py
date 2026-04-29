@@ -1480,12 +1480,13 @@ class MooncakeConnectorWorker:
                         share_tensor_addr.append(tensor_addr)
                         share_tensor_stride.append(single_tensor.stride(0) * single_tensor.element_size())
                 cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
-                self.kv_caches_base_addr.append(min(share_tensor_addr))
-                self.addr_group_idx.append(cur_tensor_group_idx)
-                self.block_stride_per_addr.append(share_tensor_stride[0])
-                self.block_len_per_addr.append(share_tensor_stride[0])
-                ptrs.append(min(share_tensor_addr))
-                lengths.append(kv_cache_tensor.size)
+                if (len(share_tensor_addr)):
+                    self.kv_caches_base_addr.append(min(share_tensor_addr))
+                    self.addr_group_idx.append(cur_tensor_group_idx)
+                    self.block_stride_per_addr.append(share_tensor_stride[0])
+                    self.block_len_per_addr.append(share_tensor_stride[0])
+                    ptrs.append(min(share_tensor_addr))
+                    lengths.append(kv_cache_tensor.size)
         else:
             raise TypeError("Mooncake connector does not support this type kv_cache now.")
 
