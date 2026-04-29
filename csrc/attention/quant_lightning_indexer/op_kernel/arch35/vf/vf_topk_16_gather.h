@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -59,7 +59,6 @@ __simd_vf__ void HistogramsHighVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__
     MicroAPI::Cast<uint32_t, uint16_t, CAST_TRAIT_UINT16_TOUINT32_EVEN>(cout1U32Even, cout1, pregB16);
     MicroAPI::Cast<uint32_t, uint16_t, CAST_TRAIT_UINT16_TOUINT32_ODD>(cout1U32Odd, cout1, pregB16);
 
-    
     MicroAPI::StoreAlign<uint32_t, MicroAPI::StoreDist::DIST_INTLV_B32>(histogramsBuf, cout0U32Even, cout0U32Odd, pregB32);
     MicroAPI::StoreAlign<uint32_t, MicroAPI::StoreDist::DIST_INTLV_B32>(histogramsBuf + 128, cout1U32Even, cout1U32Odd, pregB32);
 }
@@ -118,7 +117,6 @@ __simd_vf__ void FindHighTargetBinVFImpl(__ubuf__ uint32_t* idxHighBuf, __ubuf__
     MicroAPI::Sub(nextK, btmK, prevBinValue, pregB32);
     MicroAPI::StoreAlign<uint32_t, MicroAPI::StoreDist::DIST_NORM>(nkValueBuf, nextK, pregB32);
 }
-
 
 template<typename T>
 __simd_vf__ void HistogramsLowVFImpl(__ubuf__ uint32_t* histogramsBuf, __ubuf__ uint16_t* inputBuf, __ubuf__ uint32_t* idxHighBuf, uint16_t vfLoop, bool init)
@@ -333,18 +331,27 @@ __simd_vf__ void FindRealIndexVFImpl(__ubuf__ uint32_t* outputIdxBuf, __ubuf__ u
 }
 
 /**
-    输出Idx_Temp
+ * @brief LiTopKVF 对一个validLen的输入进行topk算法，输出idx_tmp
+ * @param tmpIdxLocal Temp阶段输出的TopKIndex;如果s2SeqLen < 16K作为最终输出 validLen * 2B
+ * @param outputValueLocal 如果s2SeqLen > 16K并且是首轮输出Value topK * 2B
+ * @param inputValueLocal 输入Value validLen * 2B
+ * @param histogramsLocal 直方图 256 * 4B 
+ * @param idxHighLocal 目标桶高八位 256 * 4B 
+ * @param idxLowLocal 目标桶低八位 256 * 4B 
+ * @param nkValueLocal 存储next_k的值 64 * 4B
+ * @param topK topK元素
+ * @param validLen 有效元素个数:QLICommon::Align(topkCountAlign256_ + validTrunkLen, (uint32_t)256)
  */
 template<bool ISOUTVALUE> // 是否输出VALUE
-__aicore__ inline void LiTopKVF(const LocalTensor<uint16_t>& tmpIdxLocal, // Temp阶段输出的Index;如果s2SeqLen < 16K作为最终输出 validLen * 2B
-                                const LocalTensor<uint16_t>& outputValueLocal, // 如果s2SeqLen > 16K并且是首轮输出Value topK * 2B
-                                const LocalTensor<uint16_t>& inputValueLocal, // 输入Value validLen * 2B
-                                const LocalTensor<uint32_t>& histogramsLocal, // 直方图 256 * 4B 
-                                const LocalTensor<uint32_t>& idxHighLocal, // 目标桶高八位 256 * 4B 
-                                const LocalTensor<uint32_t>& idxLowLocal, // 目标桶低八位 256 * 4B 
-                                const LocalTensor<uint32_t>& nkValueLocal, // 存储next_k的值 64 * 4B
-                                uint32_t topK, // topK元素
-                                uint32_t validLen) // 有效元素个数
+__aicore__ inline void LiTopKVF(const LocalTensor<uint16_t>& tmpIdxLocal,
+                                const LocalTensor<uint16_t>& outputValueLocal,
+                                const LocalTensor<uint16_t>& inputValueLocal,
+                                const LocalTensor<uint32_t>& histogramsLocal,
+                                const LocalTensor<uint32_t>& idxHighLocal,
+                                const LocalTensor<uint32_t>& idxLowLocal,
+                                const LocalTensor<uint32_t>& nkValueLocal,
+                                uint32_t topK,
+                                uint32_t validLen)
 {
     __ubuf__ uint16_t* tmpIdxBuf = (__ubuf__ uint16_t*)tmpIdxLocal.GetPhyAddr();
     __ubuf__ uint16_t* outputValueBuf = (__ubuf__ uint16_t*)outputValueLocal.GetPhyAddr();
@@ -387,16 +394,24 @@ __aicore__ inline void LiTopKVF(const LocalTensor<uint16_t>& tmpIdxLocal, // Tem
 }
 
 /**
-    gather最终的Idx
+ * @brief 通过idx_tmp gather出实际的TopKIndex，s2SeqLen > 16K才会执行
+ * @param outputIdxLocal 输出Idx 有效:topK * 2B
+ * @param outputValueLocal 输出Value topK * 2B(以后需要输出实际value使用)
+ * @param inputValueLocal 输入Value validLen * 2B
+ * @param tmpIdxLocal 本轮tmpIdx输入 validLen * 2B (0 ~ validLen - 1)
+ * @param hisIdxLocal 上一轮实际Idx输入 有效:topK * 4B 
+ * @param topK topK元素个数
+ * @param loopBasicIdx 当前循环需要加上得基准Index
+ * @param validLen 有效元素个数
  */
-__aicore__ inline void LiTopKGatherVF(const LocalTensor<uint32_t>& outputIdxLocal, // 输出Idx topK * 2B
-                                      const LocalTensor<uint16_t>& outputValueLocal, // 输出Value topK * 2B
-                                      const LocalTensor<uint16_t>& inputValueLocal, // 输入Value validLen * 2B
-                                      const LocalTensor<uint16_t>& tmpIdxLocal, // 本轮tmpIdx输入 validLen * 2B
-                                      const LocalTensor<uint32_t>& hisIdxLocal, // 上一轮Idx输入 topK * 4B
-                                      uint32_t topK, // topK元素个数
-                                      uint32_t loopBasicIdx, // 当前循环需要加上得基准Index
-                                      uint32_t validLen) // 有效元素个数
+__aicore__ inline void LiTopKGatherVF(const LocalTensor<uint32_t>& outputIdxLocal,
+                                      const LocalTensor<uint16_t>& outputValueLocal,
+                                      const LocalTensor<uint16_t>& inputValueLocal,
+                                      const LocalTensor<uint16_t>& tmpIdxLocal,
+                                      const LocalTensor<uint32_t>& hisIdxLocal,
+                                      uint32_t topK,
+                                      uint32_t loopBasicIdx,
+                                      uint32_t validLen)
 {
     __ubuf__ uint32_t* outputIdxBuf = (__ubuf__ uint32_t*)outputIdxLocal.GetPhyAddr();
     __ubuf__ uint16_t* outputValueBuf = (__ubuf__ uint16_t*)outputValueLocal.GetPhyAddr();
@@ -411,6 +426,5 @@ __aicore__ inline void LiTopKGatherVF(const LocalTensor<uint32_t>& outputIdxLoca
 
     FindRealIndexVFImpl(outputIdxBuf, tmpIdxBuf, hisIdxBuf, topK, loopBasicIdx, topkLoopNum32);
 }
-
 }
 #endif
