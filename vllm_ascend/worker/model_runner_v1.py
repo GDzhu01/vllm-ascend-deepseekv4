@@ -3008,7 +3008,8 @@ class NPUModelRunner(GPUModelRunner):
                     kv_cache_shape_list = [kv_cache_shape]
                     kv_cache_dtype_list = [current_kv_cache_spec.dtype]
                     
-                    if current_kv_cache_spec.dtype == torch.float32:
+                    if current_kv_cache_spec.dtype == torch.float32 and \
+                        current_kv_cache_spec.head_size != 256:
                         kv_state_shape = self.attn_backend.get_kv_cache_shape(
                             num_blocks, current_kv_cache_spec.block_size,
                             current_kv_cache_spec.num_kv_heads,
@@ -3030,22 +3031,11 @@ class NPUModelRunner(GPUModelRunner):
                         kv_cache_shape_list = [indexer_k_shape, indexer_scale_shape]
                         kv_cache_dtype_list = [current_kv_cache_spec.dtype, current_kv_cache_spec.scale_dtype]
 
-                    logger.info(100*"=")
-                    logger.info(f"before: {kv_cache.stride()=}")
-                    logger.info(f"before: {kv_cache.shape=}")
-
                     kv_cache = self._adjust_kv_layout(kv_tensor,
                                            kv_cache_shape_list,
                                            kv_cache_dtype_list,
                                            current_kv_cache_spec.page_size_bytes,
                                            )
-
-                    logger.info(f"after: {kv_cache.stride()=}")
-                    logger.info(f"after: {kv_cache.shape=}")
-                    logger.info(f"{kv_cache_shape_list=}")
-                    logger.info(f"{kv_cache_dtype_list=}")
-                    logger.info(100*"=")
-
                     kv_caches[layer_name] = kv_cache
                 # encounter OOM issue
                 elif isinstance(current_kv_cache_spec, AttentionSpec):

@@ -147,6 +147,7 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
     """Shared MLA cache init logic for quantiztion format across different models."""
     FP8_DTYPE = "fp8_ds_mla"
     MODEL_VERSIONS = ["v32", "svf"]
+    print(100*"F")
     if spec.cache_dtype_str != FP8_DTYPE:
         return
     assert spec.model_version in MODEL_VERSIONS, "Invalid model version."

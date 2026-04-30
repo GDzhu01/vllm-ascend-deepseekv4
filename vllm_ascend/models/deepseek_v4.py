@@ -529,13 +529,29 @@ class Compressor(nn.Module):
         state_dtype = torch.float32
         # TODO(zyj): change following codes if block_size is configurable & refactor the magic numbers
         if compress_ratio == 4:
-            self.state_cache = CompressorStateCache(
-                state_dim=2 * self.coff * self.head_dim,  # kv_state + score_state
-                dtype=state_dtype,
-                compress_ratio=compress_ratio,
-                prefix=f"{prefix}.state_cache",
-                block_size=8,
-            )
+            if self.head_dim == 256:
+                self.kv_state_cache = CompressorStateCache(
+                    state_dim=self.coff * self.head_dim,  # kv_state + score_state
+                    dtype=state_dtype,
+                    compress_ratio=compress_ratio,
+                    prefix=f"{prefix}.kv_state_cache",
+                    block_size=16,
+                )
+                self.score_state_cache = CompressorStateCache(
+                    state_dim=self.coff * self.head_dim,  # kv_state + score_state
+                    dtype=state_dtype,
+                    compress_ratio=compress_ratio,
+                    prefix=f"{prefix}.score_state_cache",
+                    block_size=16,
+                )
+            else:
+                self.state_cache = CompressorStateCache(
+                    state_dim=2 * self.coff * self.head_dim,  # kv_state + score_state
+                    dtype=state_dtype,
+                    compress_ratio=compress_ratio,
+                    prefix=f"{prefix}.state_cache",
+                    block_size=16,
+                )
         elif compress_ratio == 128:
             self.state_cache = CompressorStateCache(
                 state_dim=2 * self.head_dim,  # kv_state + score_state

@@ -1334,20 +1334,20 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv = torch.ops._C_ascend.compressor(
+            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
                 # TODO(yilin): adapt to the latest operator
-                compressed_kv_state.squeeze(-2),
-                compressed_score_state.squeeze(-2),
+                compress_kv_state_cache.squeeze(-2),
+                compress_score_state_cache.squeeze(-2),
                 self.compressor_ape,
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
                 compress_cos.view(-1, compress_cos.shape[-1]),
                 # TODO(lxs): adapt the block table
-                state_block_table=compressor_kv_state_metadata.prefill.block_table,
-                score_block_table=compressor_score_state_metadata.prefill.block_table,
+                # state_block_table=compressor_kv_state_metadata.prefill.block_table,
+                score_block_table=compressor_kv_state_metadata.prefill.block_table,
                 kv_block_table=compressor_kv_state_metadata.prefill.block_table,
                 cu_seqlens=actual_seq_lengths_query,
                 seqused=None,
@@ -1356,7 +1356,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
-                rotary_mode=2)
+                rotary_mode=2,
+                enable_grad=False)
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
@@ -1544,7 +1545,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             coff = 2 if self.compressor_overlap else 1
 
             # compressor
-            compressed_kv = torch.ops._C_ascend.compressor(
+            compressed_kv,_,_,_,_ = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1563,7 +1564,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
-                rotary_mode=2)
+                rotary_mode=2,
+                enable_grad=False)
             # kv_compress_epilog
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
                 compress_kv_cache,
@@ -1683,7 +1685,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table = indexer_kv_state_metadata.decode.block_table
             start_pos = indexer_kv_scale_metadata.decode.start_pos
 
-        kv = torch.ops._C_ascend.compressor(
+        kv,_,_,_,_ = torch.ops._C_ascend.compressor(
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
@@ -1702,7 +1704,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio=self.compress_ratio,
             coff=coff,
             norm_eps=self.compressor_norm_eps,
-            rotary_mode=2)
+            rotary_mode=2,
+            enable_grad=False)
 
         if kv.numel() == 0:
             kv = None
