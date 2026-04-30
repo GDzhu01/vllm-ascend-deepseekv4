@@ -1,10 +1,10 @@
 /**
- * This program is free software, you can redistribute it and/or modify it.
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This file is a part of the CANN Open Software.
- * Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
@@ -134,7 +134,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
     int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
     int64_t rsqrtSize = RoundUp(rowOnceLoop, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
     int64_t xSize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-    int64_t ySize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
+    int64_t ySize = rowOnceLoop * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
     int64_t postSize = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
     int64_t combFragSize = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
     int64_t base0Size = hcMultAlign_ * sizeof(float);
@@ -158,7 +158,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
         while (1) {
             dFactor_ = CeilDiv(d_, base);
             xSize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-            ySize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER;
+            ySize = rowOnceLoop * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER;
             int64_t targetSize = xSize + ySize;
             if (targetSize <= ubRemain) {
                 break;
@@ -180,7 +180,7 @@ ge::graphStatus HcPreSinkhornTiling::CalcRegbaseOpTiling()
             mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
             rsqrtSize = RoundUp(rowFactor_, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
             xSize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-            ySize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
+            ySize = rowFactor_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
             postSize = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
             combFragSize = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
             totalSize = mix0Size + mix1Size + mix2Size + rsqrtSize + xSize + ySize + postSize + combFragSize + 
@@ -233,14 +233,14 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
     int64_t mix2Size = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
     int64_t rsqrtSize = RoundUp(rowOnceLoop, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
     int64_t xSize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-    int64_t ySize = rowOnceLoop * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
+    int64_t ySize = rowOnceLoop * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
     int64_t postSize = rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
     int64_t combFragSize = rowOnceLoop * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
     int64_t base0Size = hcMultAlign_ * sizeof(float);
     int64_t base1Size = hcMultAlign_ * sizeof(float);
     int64_t base2Size = hcMult_ * hcMultAlign_ * sizeof(float);
     int64_t xCastSize = rowOnceLoop * hcMult_ * RoundUp(d_, 8) * sizeof(float);
-    int64_t yCastSize = rowOnceLoop * hcMult_ * RoundUp(d_, 8) * sizeof(float);
+    int64_t yCastSize = rowOnceLoop * RoundUp(d_, 8) * sizeof(float);
     int64_t rowBrcb0Size = RoundUp(rowOnceLoop, 8) * BLOCK_SIZE;
     int64_t hcBrcb1Size = RoundUp(rowOnceLoop * hcMultAlign_, 8) * BLOCK_SIZE;
     int64_t reduceBufSize = rowOnceLoop * hcMultAlign_ * sizeof(float);
@@ -262,9 +262,9 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
         while (1) {
             dFactor_ = CeilDiv(d_, base);
             xSize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-            ySize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER;
+            ySize = rowOnceLoop * RoundUp(dFactor_, 16) * 2 * DOUBLE_BUFFER;
             xCastSize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 8) * sizeof(float);
-            yCastSize = rowOnceLoop * hcMult_ * RoundUp(dFactor_, 8) * sizeof(float);
+            yCastSize = rowOnceLoop * RoundUp(dFactor_, 8) * sizeof(float);
             int64_t targetSize = xSize + ySize + xCastSize + yCastSize;
             if (targetSize <= ubRemain) {
                 break;
@@ -286,11 +286,11 @@ ge::graphStatus HcPreSinkhornTiling::CalcMembaseOpTiling()
             mix2Size = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER; 
             rsqrtSize = RoundUp(rowFactor_, BLOCK_SIZE / sizeof(float)) * sizeof(float) * DOUBLE_BUFFER;
             xSize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER; // x是bfloat16_t 类型
-            ySize = rowFactor_ * hcMult_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
+            ySize = rowFactor_ * RoundUp(d_, 16) * 2 * DOUBLE_BUFFER;
             postSize = rowFactor_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
             combFragSize = rowFactor_ * hcMult_ * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;
             xCastSize = rowFactor_ * hcMult_ * RoundUp(d_, 8) * sizeof(float);
-            yCastSize = rowFactor_ * hcMult_ * RoundUp(d_, 8) * sizeof(float);
+            yCastSize = rowFactor_ * RoundUp(d_, 8) * sizeof(float);
             rowBrcb0Size = RoundUp(rowFactor_, 8) * BLOCK_SIZE;
             hcBrcb1Size = RoundUp(rowFactor_ * hcMultAlign_, 8) * BLOCK_SIZE;
             reduceBufSize = rowFactor_ * hcMultAlign_ * sizeof(float);

@@ -25,7 +25,6 @@
 #ifndef HCCL_COMM
     #include "block_mmad_preload_async_fixpipe_quant.hpp"
     #include "copy_gm_to_l1_custom.hpp"
-    #include "copy_l0c_to_gm_custom.hpp"
     #include "block_epilogue_pertoken_row.hpp"
     #include "block_epilogue_pertoken_v2.hpp"
     #include "block_epilogue_pertoken_swiglu.hpp"
@@ -41,7 +40,6 @@
 #else
     #include "utils/block_mmad_preload_async_fixpipe_quant.hpp"
     #include "utils/copy_gm_to_l1_custom.hpp"
-    #include "utils/copy_l0c_to_gm_custom.hpp"
     #include "utils/block_epilogue_pertoken_row.hpp"
     #include "utils/block_epilogue_pertoken_v2.hpp"
     #include "utils/block_epilogue_pertoken_swiglu.hpp"
@@ -145,8 +143,8 @@ public:
 
         CATLASS_HOST_DEVICE
         Params(
-            GemmCoord problemShape_,
-            uint32_t EP_, uint32_t listLen_, uint32_t expertPerRank_, uint32_t maxOutputSize_,
+            GemmCoord problemShape_, uint32_t EP_, uint32_t listLen_, 
+            uint32_t expertPerRank_, uint32_t maxOutputSize_,
             uint32_t rank_, uint32_t rankSize_, int64_t topK_,
             uint64_t initRoutingQuantTilingKey_, uint32_t epilogueCoreNum_, uint32_t epilogueGranularity_,
             GM_ADDR ptrA_, LayoutA layoutA_, LayoutA layoutA2_,
@@ -865,7 +863,7 @@ private:
             int64_t gmOffsetC = layoutC.GetOffset(offsetC);
             int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
             blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], gmPermutedToken[gmOffsetD], 
-                gmPerTokenScale2[rowStartThisCore], resource, params.epilogueCoreNum, params.swigluLimit);
+                gmPerTokenScale2[rowStartThisCore], params.epilogueCoreNum, params.swigluLimit);
         }
         AscendC::SyncAll<true>();
         // Synchronization signal: SwiGLU notifies GMM2 [1]
@@ -884,7 +882,7 @@ private:
                 int64_t gmOffsetC = layoutC.GetOffset(offsetC);
                 int64_t gmOffsetD = params.layoutD1.GetOffset(offsetC);
                 blockEpilogue1(gmC[gmOffsetC], shapeC, gmPerTokenScale1[rowStartThisCore], 
-                    gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], resource, coreNum, params.swigluLimit);
+                    gmPermutedToken[gmOffsetD], gmPerTokenScale2[rowStartThisCore], coreNum, params.swigluLimit);
             }
             AscendC::SyncAll<true>();
             // Synchronization signal: SwiGLU notifies GMM2 [2]

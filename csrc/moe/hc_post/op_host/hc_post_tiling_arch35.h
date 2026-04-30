@@ -1,17 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -36,6 +30,8 @@ constexpr size_t CONST1 = 1;
 constexpr size_t CONST2 = 2;
 constexpr size_t CONST3 = 3;
 constexpr size_t CONST4 = 4;
+constexpr size_t WORKSPACE_SIZE = static_cast<size_t>(16 * 1024 * 1024);
+constexpr int64_t ONCE_DEAL_DPARAM = 4096;
 
 template <typename T>
 static inline T CeilDiv(T num, T rnd)
@@ -67,8 +63,6 @@ ge::graphStatus HcPostTilingRegbase::GetPlatformInfoRegbase()
         ubSize_ <= 0, OPS_LOG_E(context_->GetNodeName(), "ubSize must be greater than 0."),
         return ge::GRAPH_FAILED);
 
-    ubBlockSize_ = 32;
-
     return ge::GRAPH_SUCCESS;
 }
 
@@ -96,43 +90,47 @@ ge::graphStatus HcPostTilingRegbase::GetInputShapeInfoRegbase()
     OPS_ERR_IF(xInput == nullptr, OPS_LOG_E(context_->GetNodeName(), "get xInput nullptr."),
         return ge::GRAPH_FAILED);
     gert::Shape xShape = xInput->GetStorageShape();
-    size_t dimsN = xShape.GetDimNum();
-    OPS_ERR_IF((dimsN != CONST3),
-        OPS_LOG_E(context_->GetNodeName(), "xInput dim:%lu should be 3.", dimsN),
+    size_t xDimsN = xShape.GetDimNum();
+    OPS_ERR_IF((xDimsN != CONST2 && xDimsN != CONST3),
+        OPS_LOG_E(context_->GetNodeName(), "xInput dim:%lu should be 2 or 3.", xDimsN),
         return ge::GRAPH_FAILED);
 
     auto residualInput = context_->GetInputShape(INPUT_IDX_RESIDUAL);
     OPS_ERR_IF(residualInput == nullptr, OPS_LOG_E(context_->GetNodeName(), "get residualInput nullptr."),
         return ge::GRAPH_FAILED);
     gert::Shape residualShape = residualInput->GetStorageShape();
-    dimsN = residualShape.GetDimNum();
-    OPS_ERR_IF((dimsN != CONST4),
-        OPS_LOG_E(context_->GetNodeName(), "residualInput dim:%lu should be 4.", dimsN),
+    size_t residualDimsN = residualShape.GetDimNum();
+    OPS_ERR_IF((residualDimsN != xDimsN + 1),
+        OPS_LOG_E(context_->GetNodeName(), "residualInput dim:%lu should be %lu.", residualDimsN, xDimsN + 1),
         return ge::GRAPH_FAILED);
 
     auto postInput = context_->GetInputShape(INPUT_IDX_POST);
     OPS_ERR_IF(postInput == nullptr, OPS_LOG_E(context_->GetNodeName(), "get residualInput nullptr."),
         return ge::GRAPH_FAILED);
     gert::Shape postShape = postInput->GetStorageShape();
-    dimsN = postShape.GetDimNum();
-    OPS_ERR_IF((dimsN != CONST3),
-        OPS_LOG_E(context_->GetNodeName(), "postInput dim:%lu should be 3.", dimsN),
+    size_t postDimsN = postShape.GetDimNum();
+    OPS_ERR_IF((postDimsN != xDimsN),
+        OPS_LOG_E(context_->GetNodeName(), "postInput dim:%lu should be %lu.", postDimsN, xDimsN),
         return ge::GRAPH_FAILED);
 
     auto combInput = context_->GetInputShape(INPUT_IDX_COMB);
     OPS_ERR_IF(combInput == nullptr, OPS_LOG_E(context_->GetNodeName(), "get residualInput nullptr."),
         return ge::GRAPH_FAILED);
     gert::Shape combShape = combInput->GetStorageShape();
-    dimsN = combShape.GetDimNum();
-    OPS_ERR_IF((dimsN != CONST4),
-        OPS_LOG_E(context_->GetNodeName(), "combInput dim:%lu should be 4.", dimsN),
+    size_t combDimsN = combShape.GetDimNum();
+    OPS_ERR_IF((combDimsN != xDimsN + 1),
+        OPS_LOG_E(context_->GetNodeName(), "combInput dim:%lu should be %lu.", combDimsN, xDimsN + 1),
         return ge::GRAPH_FAILED);
-    bParam_ = xShape.GetDim(DIM_INDEX_0);
-    sParam_ = xShape.GetDim(DIM_INDEX_1);
-    dParam_ = xShape.GetDim(DIM_INDEX_2);
-    hcParam_ = residualShape.GetDim(DIM_INDEX_2);
-    tilingRegbaseData_.set_bParam(bParam_);
-    tilingRegbaseData_.set_sParam(sParam_);
+    if (xDimsN == CONST2) {
+        bsParam_ = xShape.GetDim(DIM_INDEX_0);
+        dParam_ = xShape.GetDim(DIM_INDEX_1);
+        hcParam_ = residualShape.GetDim(DIM_INDEX_1);
+    } else {
+        bsParam_ = xShape.GetDim(DIM_INDEX_0) * xShape.GetDim(DIM_INDEX_1);
+        dParam_ = xShape.GetDim(DIM_INDEX_2);
+        hcParam_ = residualShape.GetDim(DIM_INDEX_2);
+    }
+    tilingRegbaseData_.set_bsParam(bsParam_);
     tilingRegbaseData_.set_dParam(dParam_);
     tilingRegbaseData_.set_hcParam(hcParam_);
 
@@ -187,7 +185,7 @@ ge::graphStatus HcPostTilingRegbase::GetInputDtypeInfoRegbase()
 
 ge::graphStatus HcPostTilingRegbase::DoOpTilingRegbase()
 {
-    int64_t batchSize = bParam_ * sParam_;
+    int64_t batchSize = bsParam_;
     context_->SetTilingKey(tilingKey_);
     int64_t useCoreNum = batchSize < coreNum_ ? batchSize : coreNum_;
     int64_t batchOneCore = CeilDiv(batchSize, static_cast<int64_t>(useCoreNum));
@@ -199,13 +197,18 @@ ge::graphStatus HcPostTilingRegbase::DoOpTilingRegbase()
     tilingRegbaseData_.set_frontCore(frontCore);
     context_->SetBlockDim(useCoreNum);
 
+    int64_t dSplitTime = dParam_ / ONCE_DEAL_DPARAM;
+    tilingRegbaseData_.set_dSplitTime(dSplitTime);
+    tilingRegbaseData_.set_dOnceDealing(ONCE_DEAL_DPARAM);
+    tilingRegbaseData_.set_dLastDealing(dParam_ - dSplitTime * ONCE_DEAL_DPARAM);
+
     return ge::GRAPH_SUCCESS;
 }
 
 ge::graphStatus HcPostTilingRegbase::PostTilingRegbase()
 {
     size_t* workspaces = context_->GetWorkspaceSizes(1);
-    workspaces[0] = static_cast<size_t>(16 * 1024 * 1024);
+    workspaces[0] = WORKSPACE_SIZE;
     tilingRegbaseData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingRegbaseData_.GetDataSize());
     return ge::GRAPH_SUCCESS;

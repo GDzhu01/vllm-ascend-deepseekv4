@@ -699,7 +699,7 @@ ge::graphStatus SASInfoParser::GetActualseqInfo()
         }
     }
     if (kvLayout_ != SASLayout::PA_ND && kvLayout_ != SASLayout::BSND && kvLayout_ != SASLayout::TND) {
-        OP_LOGE(opName_, "ori_kv and cmp_kv only support PA_ND and BSND and TND layout.");
+        OP_LOGE(opName_, "ori_kv and cmp_kv only support PA_ND, BSND and TND layout.");
         return ge::GRAPH_FAILED;
     }
     if (kvLayout_ == SASLayout::PA_ND) {
@@ -1079,13 +1079,15 @@ ge::graphStatus SASTilingCheck::CheckSingleParaCmpSparseIndices() const
         }
         if (cmpSparseIndicesLayout_ == SASLayout::TND)
         {
-            OP_CHECK_IF((opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != TOPK_LIMIT),
-                        OP_LOGE(opName_, "K should be %u, but got: %lld ",TOPK_LIMIT,
+            OP_CHECK_IF(!(opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 512 || \
+                          opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 1024),
+                        OP_LOGE(opName_, "K should be 512 or 1024, but got: %lld ",
                         opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1)),
                         return ge::GRAPH_FAILED);
         } else{
-            OP_CHECK_IF((opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_FOUR - 1) != TOPK_LIMIT),
-                        OP_LOGE(opName_, "K should be %u, but got: %lld ",TOPK_LIMIT,
+            OP_CHECK_IF(!(opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 512 || \
+                          opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_THREE - 1) != 1024),
+                        OP_LOGE(opName_, "K should be 512 or 1024, but got: %lld ",
                         opParamInfo_.cmpSparseIndices.tensor->GetStorageShape().GetDim(DIM_NUM_FOUR - 1)),
                         return ge::GRAPH_FAILED);
         }

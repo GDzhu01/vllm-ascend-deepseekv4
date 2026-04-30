@@ -36,7 +36,6 @@
 #include "mc2/dispatch_gmm_combine_decode/dispatch_gmm_combine_decode_torch_adpt.h"
 #include "mc2/dispatch_layout/dispatch_layout_torch_adpt.h"
 #include "gmm/grouped_matmul_swiglu_quant_weight_nz_tensor_list/grouped_matmul_swiglu_quant_torch_adpt.h"
-#include "gmm/grouped_matmul_swiglu_quant_weight_nz_tensor_list/grouped_matmul_swiglu_quant_v2_torch_adpt.h“
 #include "attention/lightning_indexer_vllm/lightning_indexer_vllm_torch_adpt.h"
 #include "mc2/matmul_allreduce_add_rmsnorm/matmul_allreduce_add_rmsnorm_torch_adpt.h"
 #include "mla_preprocess/mla_preprocess_torch_adpt.h"
@@ -1239,8 +1238,6 @@ at::Tensor construct_hc_post_output_tensor(const at::Tensor& residual)
 
 // step1，工具函数，检查输入shape
 void check_hc_post_shape_and_dtype(const at::Tensor& x, const at::Tensor& residual, const at::Tensor& post, const at::Tensor& com) {
-    constexpr int64_t HC_LIMIT = 4;
-    constexpr int64_t D_LIMIT = 4096;
     // check x shape: [b, s, d]
     TORCH_CHECK(x.dim() == 3, "Input tensor x's dim num should be 3, actual ", x.dim(), ".");
     for (size_t i = 0; i < 3; i++) {
@@ -1249,13 +1246,12 @@ void check_hc_post_shape_and_dtype(const at::Tensor& x, const at::Tensor& residu
     auto batch = x.size(0);
     auto sequence = x.size(1);
     auto d = x.size(2);
-    TORCH_CHECK(d == D_LIMIT, "The d of x only support ", D_LIMIT, ", actual ", d, ".");
     // check residual: [b, s, hc, d]
     TORCH_CHECK(residual.dim() == 4, "Input tensor residual's dim num should be 4, actual ", residual.dim(), ".");
     auto hc = residual.size(2);
+    TORCH_CHECK(hc > 0, "The hc of residual should be positive, actual ", hc, ".");
     TORCH_CHECK(residual.size(0) == batch, "The residual.shape[0] should be batch, actual residual.shape[0] is ", residual.size(0), ", batch is ", batch, ".");
     TORCH_CHECK(residual.size(1) == sequence, "The residual.shape[1] should be sequence, actual residual.shape[1] is ", residual.size(1), ", sequence is ", sequence, ".");
-    TORCH_CHECK(hc == HC_LIMIT, "The hc of residual only support ", HC_LIMIT, ", actual ", hc, ".");
     TORCH_CHECK(residual.size(3) == d, "The residual.shape[3] should be d, actual residual.shape[3] is ", residual.size(3), ", d is ", d, ".");
     // check post [b, s, hc]
     TORCH_CHECK(post.dim() == 3, "Input tensor post's dim num should be 3, actual ", post.dim(), ".");
@@ -1494,6 +1490,17 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_npu(
     return std::make_tuple(y_out, scale_out);
 }
 
+void npu_scatter_nd_update_v2(
+    at::Tensor& var,
+    const at::Tensor& indices,
+    const at::Tensor& update)
+{
+    // construct the output tensor
+    at::IntArrayRef var_stride = var.strides();
+    EXEC_NPU_CMD(aclnnScatterNdUpdateV2, var, indices, update, var_stride);
+    return;
+}
+
 } // namespace vllm_ascend
 
 #ifdef ASCEND_PLATFORM_310P
@@ -1626,14 +1633,6 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                                                  (Tensor output, Tensor output_scale, Tensor output_offset)"
     );
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_weight_nz_tensor_list);
-    
-    ops.def(
-        "grouped_matmul_swiglu_quant_v2(Tensor x, Tensor x_scale, Tensor group_list, Tensor[] weight,  Tensor[] weight_scale, Tensor[] weight_assist_matrix,"
-        "                                                   Tensor? bias=None, Tensor? smooth_scale=None, int dequant_mode=1, int dequant_dtype=1, int quant_mode=1,"
-        "                                                 int quant_dtype=3, bool transpose_weight=False, int group_list_type=1, int[2] tuning_config=[],float swiglu_limit=-1000000.0) ->"
-        "                                                  (Tensor y, Tensor y_scale)"
-    );
-    ops.impl("grouped_matmul_swiglu_quant_v2", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_v2);
 
     ops.def(
         "npu_lightning_indexer(Tensor query, Tensor key, Tensor weights, *,"
@@ -1655,7 +1654,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     ops.def(
         "dispatch_ffn_combine(Tensor x, Tensor[] weight1, Tensor[] weight2, Tensor expert_idx,"
-        "                     Tensor[] scale1, Tensor[] scale2, Tensor probs, str group,"
+        "                     Tensor[] scale1, Tensor[] scale2, Tensor[]? bias1, Tensor[]? bias2, Tensor probs, str group,"
         "                     int max_output_size, float swiglu_limit, Tensor! out, Tensor! expert_token_nums) -> (Tensor out, Tensor expert_token_nums)"
     );
     ops.impl("dispatch_ffn_combine", torch::kPrivateUse1, &vllm_ascend::dispatch_ffn_combine);
@@ -1959,5 +1958,12 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                            int sparse_count=2048, int sparse_mode=3) -> Tensor"
     );
     ops.impl("npu_lightning_indexer_quant", torch::kPrivateUse1, &vllm_ascend::npu_lightning_indexer_quant);
+
+    ops.def(
+        "npu_scatter_nd_update_v2("
+                "Tensor(a!) var, Tensor indices, Tensor update"
+            ") -> ()"
+    );
+    ops.impl("npu_scatter_nd_update_v2", torch::kPrivateUse1, &vllm_ascend::npu_scatter_nd_update_v2);
 }
 #endif

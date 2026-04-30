@@ -27,6 +27,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
     export CPATH=${ABSOLUTE_CATLASS_PATH}:${CPATH}
 
     CUSTOM_OPS_ARRAY=(
+        "scatter_nd_update_v2"
         "moe_grouped_matmul"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
         "lightning_indexer_vllm"
@@ -53,7 +54,6 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
         "grouped_matmul_swiglu_quant"
-        "grouped_matmul_swiglu_quant_v2"
     )
 
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
@@ -97,6 +97,12 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
     sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
 
+    TARGET_DIR="$SCRIPT_DIR/mc2/dispatch_ffn_combine_w4_a8/op_kernel/utils/"
+    TARGET_FILE="$TARGET_DIR/$(basename "$HCCL_STRUCT_FILE_PATH")"
+    cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
+    sed -i 's/struct HcclOpResParam {/struct HcclOpResParamCustom {/g' "$TARGET_FILE"
+    sed -i 's/struct HcclRankRelationResV2 {/struct HcclRankRelationResV2Custom {/g' "$TARGET_FILE"
+
     # for dispatch_normal and combine_normal
     TARGET_DIR="$SCRIPT_DIR/mc2/moe_dispatch_normal/op_kernel/utils/"
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
@@ -106,10 +112,12 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
     cp "$HCCL_STRUCT_FILE_PATH" "$TARGET_DIR"
     
     CUSTOM_OPS_ARRAY=(
+        "scatter_nd_update_v2"
         "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
         "lightning_indexer_vllm"
         "sparse_flash_attention"
         "dispatch_ffn_combine"
+        "dispatch_ffn_combine_w4_a8"
         "dispatch_ffn_combine_bf16"
         "dispatch_gmm_combine_decode"
         "moe_combine_normal"
@@ -137,7 +145,6 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "rms_norm_dynamic_quant"
         "inplace_partial_rotary_mul"
         "grouped_matmul_swiglu_quant"
-        "grouped_matmul_swiglu_quant_v2"
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend910_93"
@@ -176,8 +183,8 @@ fi
 
   mkdir -p -- "$install_dir"
 
-    # 删除 install_dir 下除 .gitkeep 外的第一层内容
-    find "$install_dir" -mindepth 1 -maxdepth 1 \
+  # 删除 install_dir 下除 .gitkeep 外的所有内容（包含隐藏文件/目录）
+  find "$install_dir" -mindepth 1 -maxdepth 1 \
     ! -name '.gitkeep' \
     -exec rm -rf -- {} +
 

@@ -1,17 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -32,8 +26,7 @@
 namespace optiling {
 BEGIN_TILING_DATA_DEF(HcPostTilingData)
 TILING_DATA_FIELD_DEF(int64_t, usedCoreNum);
-TILING_DATA_FIELD_DEF(int64_t, bParam);
-TILING_DATA_FIELD_DEF(int64_t, sParam);
+TILING_DATA_FIELD_DEF(int64_t, bsParam);
 TILING_DATA_FIELD_DEF(int64_t, hcParam);
 TILING_DATA_FIELD_DEF(int64_t, dParam);
 TILING_DATA_FIELD_DEF(int64_t, batchOneCore);
@@ -73,8 +66,7 @@ private:
     int64_t ubSize_ = 0;
     int64_t ubBlockSize_ = 0;
 
-    int64_t bParam_ = 0;
-    int64_t sParam_ = 0;
+    int64_t bsParam_ = 0;
     int64_t dParam_ = 0;
     int64_t hcParam_ = 0;
     int64_t batchSize_ = 0;
@@ -108,8 +100,7 @@ private:
     int64_t ubSize_ = 0;
     int64_t ubBlockSize_ = 0;
 
-    int64_t bParam_ = 0;
-    int64_t sParam_ = 0;
+    int64_t bsParam_ = 0;
     int64_t dParam_ = 0;
     int64_t hcParam_ = 0;
 

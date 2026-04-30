@@ -1,17 +1,11 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
  */
 
 /*!
@@ -33,14 +27,14 @@ public:
     __aicore__ inline void Init(GM_ADDR x, GM_ADDR residual, GM_ADDR post, GM_ADDR comb, GM_ADDR y, GM_ADDR workspace,
         const HcPostTilingData *tilingData, TPipe *pipe);
     __aicore__ inline void Process();
-    __aicore__ inline void DataCopyInX(int64_t batchIndex);
+    __aicore__ inline void DataCopyInX(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset);
     __aicore__ inline void DataCopyInPost(int64_t batchIndex);
-    __aicore__ inline void DataCopyInResidual(int64_t batchIndex);
+    __aicore__ inline void DataCopyInResidual(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset);
     __aicore__ inline void DataCopyInComb(int64_t batchIndex);
-    __aicore__ inline void DataCopyOut(int64_t batchIndex);
-    __aicore__ inline void doProcess(int64_t batchSize);
-    __aicore__ inline void doPostMulX(LocalTensor<T1> xUb, LocalTensor<T2> postUb, LocalTensor<float> sumTempBuf);
-    __aicore__ inline void doMulAndAdd(LocalTensor<T1> residualUb, LocalTensor<T2> combUb, LocalTensor<float> sumTempBuf);
+    __aicore__ inline void DataCopyOut(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset);
+    __aicore__ inline void DoProcess(int64_t batchSize);
+    __aicore__ inline void DoCompute(LocalTensor<float> sumTempBuf, LocalTensor<T2> postUb, LocalTensor<T2> combUb, int64_t batchIndex, int64_t dOffset, int64_t dDealing);
+    __aicore__ inline void DoMulAndAdd(LocalTensor<T1> xUb, LocalTensor<T2> postUb, LocalTensor<T1> residualUb, LocalTensor<T2> combUb, LocalTensor<float> sumTempBuf, int64_t dOnceDealing);
 
 private:
     TPipe* pipe_;
@@ -56,6 +50,10 @@ private:
     int64_t batchOneCore_ = 0;
     int64_t isFrontCore_ = 0;
     int64_t dParamAlign_ = 0;
+    int64_t dOnceDealing_ = 0;
+    int64_t dLastDealing_ = 0;
+    int64_t dSplitTime_ = 0;
+    int64_t dParamOnceAlign_ = 0;
     static constexpr int32_t ONE_BLOCK_SIZE = 32;
     int32_t perBlock32 = ONE_BLOCK_SIZE / sizeof(float);
 
@@ -71,7 +69,6 @@ private:
     TQue<QuePosition::VECIN, 1> combQue_;
     TQue<QuePosition::VECOUT, 1> sumQue_;
     TBuf<QuePosition::VECCALC> sumTempBuf_;
-
 };
 
 template <typename T1, typename T2>
@@ -90,7 +87,11 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::Init(GM_ADDR x, GM_ADDR re
     batchOneCore_ = tilingData->batchOneCore;
     isFrontCore_ = blkIdx_ < tilingData->frontCore;
     int64_t frontCore = tilingData->frontCore;
+    dOnceDealing_ = tilingData->dOnceDealing;
+    dLastDealing_ = tilingData->dLastDealing;
+    dSplitTime_ = tilingData->dSplitTime;
     dParamAlign_ = (dParam_ + perBlock32 - 1) / perBlock32 * perBlock32;
+    dParamOnceAlign_ = (dOnceDealing_ + perBlock32 - 1) / perBlock32 * perBlock32;
 
     int64_t xOffset = blkIdx_ * batchOneCore_ * dParam_;
     int64_t residualOffset = blkIdx_ * batchOneCore_ * hcParam_ * dParam_;
@@ -110,12 +111,12 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::Init(GM_ADDR x, GM_ADDR re
     combGm_.SetGlobalBuffer((__gm__ T2 *)comb + combOffset);
     yGm_.SetGlobalBuffer((__gm__ T1 *)y + yOffset);
 
-    pipe_->InitBuffer(xQue_, 2, dParam_ * sizeof(T1));
-    pipe_->InitBuffer(residualQue_, 2, hcParam_ * dParam_ * sizeof(T1));
+    pipe_->InitBuffer(xQue_, 2, dParamOnceAlign_ * sizeof(T1));
+    pipe_->InitBuffer(residualQue_, 2, hcParam_ * dParamOnceAlign_ * sizeof(T1));
     pipe_->InitBuffer(postQue_, 2, hcParam_ * sizeof(T2));
     pipe_->InitBuffer(combQue_, 2, hcParam_ * hcParam_ * sizeof(T2));
-    pipe_->InitBuffer(sumQue_, 2, hcParam_* dParam_ * sizeof(T1));
-    pipe_->InitBuffer(sumTempBuf_, hcParam_ * dParam_ * sizeof(float));
+    pipe_->InitBuffer(sumQue_, 2, hcParam_* dParamOnceAlign_ * sizeof(T1));
+    pipe_->InitBuffer(sumTempBuf_, hcParam_ * dParamOnceAlign_ * sizeof(float));
 }
 
 template <typename T1, typename T2>
@@ -125,23 +126,23 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::Process()
         return;
     }
     if (isFrontCore_) {
-        doProcess(tiling_->batchOneCore);
+        DoProcess(tiling_->batchOneCore);
     } else {
-        doProcess(tiling_->batchOneCoreTail);
+        DoProcess(tiling_->batchOneCoreTail);
     }
 }
 
 template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInX(int64_t batchIndex)
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInX(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset)
 {
     LocalTensor<T1> xUb = xQue_.AllocTensor<T1>();
     DataCopyExtParams copyParams;
     copyParams.blockCount = 1;
-    copyParams.blockLen = dParam_ * sizeof(T1);
+    copyParams.blockLen = dOnceDealing * sizeof(T1);
     copyParams.srcStride = 0;
     copyParams.dstStride = 0;
     DataCopyPadExtParams<T1> dataCopyPadParams{false, 0, 0, 0};
-    DataCopyPad(xUb, xGm_[batchIndex * dParam_], copyParams, dataCopyPadParams);
+    DataCopyPad(xUb, xGm_[batchIndex * dParam_ + dOffset], copyParams, dataCopyPadParams);
     xQue_.EnQue<T1>(xUb);
 }
 
@@ -160,16 +161,16 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInPost(int64_t bat
 }
 
 template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInResidual(int64_t batchIndex)
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInResidual(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset)
 {
     LocalTensor<T1> residualUb = residualQue_.AllocTensor<T1>();
     DataCopyExtParams copyParams;
-    copyParams.blockCount = 1;
-    copyParams.blockLen = hcParam_ * dParam_ * sizeof(T1);
-    copyParams.srcStride = 0;
+    copyParams.blockCount = hcParam_;
+    copyParams.blockLen = dOnceDealing * sizeof(T1);
+    copyParams.srcStride = (dParamAlign_ - dOnceDealing) * sizeof(T1);
     copyParams.dstStride = 0;
     DataCopyPadExtParams<T1> dataCopyPadParams{false, 0, 0, 0};
-    DataCopyPad(residualUb, residualGm_[batchIndex * hcParam_ * dParam_], copyParams, dataCopyPadParams);
+    DataCopyPad(residualUb, residualGm_[batchIndex * hcParam_ * dParam_ + dOffset], copyParams, dataCopyPadParams);
     residualQue_.EnQue<T1>(residualUb);
 }
 
@@ -188,74 +189,41 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyInComb(int64_t bat
 }
 
 template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyOut(int64_t batchIndex)
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DataCopyOut(int64_t batchIndex, int64_t dOnceDealing, int64_t dOffset)
 {
     LocalTensor<T1> outBuf = sumQue_.DeQue<T1>();
     DataCopyExtParams copyParams;
     copyParams.blockCount = hcParam_;
-    copyParams.blockLen = dParam_ * sizeof(T1);
-    copyParams.srcStride = dParamAlign_ - dParam_;
-    copyParams.dstStride = 0;
-    AscendC::DataCopyPad(yGm_[batchIndex * hcParam_ * dParam_], outBuf, copyParams);
+    copyParams.blockLen = dOnceDealing * sizeof(T1);
+    copyParams.srcStride = 0;
+    copyParams.dstStride = (dParamAlign_ - dOnceDealing) * sizeof(T1);
+    AscendC::DataCopyPad(yGm_[batchIndex * hcParam_ * dParam_ + dOffset], outBuf, copyParams);
     sumQue_.FreeTensor(outBuf);
 }
 
 template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doPostMulX(LocalTensor<T1> xUb, LocalTensor<T2> postUb, LocalTensor<float> sumTempBuf)
-{
-    uint32_t vfLen = 256 / sizeof(float);
-    uint16_t repeatTimes = (dParam_ + vfLen - 1) / vfLen;
-    uint16_t hcTimes = hcParam_;
-    uint32_t xDealNumAlign = dParamAlign_;
-
-    auto xAddr = (__ubuf__ T1*)xUb.GetPhyAddr();
-    auto postAddr = (__ubuf__ T2*)postUb.GetPhyAddr();
-    auto sumAddr = (__ubuf__ float*)sumTempBuf.GetPhyAddr();
-    __VEC_SCOPE__
-    {
-        uint32_t xDealNum = static_cast<uint32_t>(hcParam_ * dParam_);
-        AscendC::MicroAPI::RegTensor<T1> xReg;
-        AscendC::MicroAPI::RegTensor<T2> postReg;
-        AscendC::MicroAPI::RegTensor<float> xRegFloat;
-        AscendC::MicroAPI::RegTensor<float> postRegFloat;
-        AscendC::MicroAPI::RegTensor<float> sumRegFloat;
-        AscendC::MicroAPI::MaskReg pMask;
-        AscendC::MicroAPI::MaskReg pregMain = AscendC::MicroAPI::CreateMask<float, AscendC::MicroAPI::MaskPattern::ALL>();
-        for (uint16_t hcIndex = 0; hcIndex < hcTimes; hcIndex++) {
-            pMask = AscendC::MicroAPI::UpdateMask<float>(xDealNum);
-            if constexpr (sizeof(T2) == 2) {
-                AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B16>(postReg, postAddr + hcIndex);
-                AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(postRegFloat, postReg, pregMain);
-            } else {
-                AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(postRegFloat, postAddr + hcIndex);
-            }
-            for (uint16_t i = 0; i < repeatTimes; i++) {
-                AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(xReg, xAddr+i*vfLen);
-                AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(xRegFloat, xReg, pMask);
-                AscendC::MicroAPI::Mul(sumRegFloat, xRegFloat, postRegFloat, pMask);
-                AscendC::MicroAPI::DataCopy(sumAddr+hcIndex*xDealNumAlign+i*vfLen, sumRegFloat, pMask);
-            }
-        }
-    }
-}
-
-template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doMulAndAdd(LocalTensor<T1> residualUb, LocalTensor<T2> combUb, LocalTensor<float> sumTempBuf)
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DoMulAndAdd(LocalTensor<T1> xUb, LocalTensor<T2> postUb, LocalTensor<T1> residualUb, LocalTensor<T2> combUb, LocalTensor<float> sumTempBuf, int64_t dOnceDealing)
 {
     uint16_t aTimes = hcParam_;
-    uint32_t xDealNumAlign = dParamAlign_;
+    uint32_t xDealNumAlign = (dOnceDealing + perBlock32 - 1) / perBlock32 * perBlock32;
     uint32_t vfLen = 256 / sizeof(float);
-    uint16_t repeatTimes = dParam_ / vfLen;
+    uint16_t repeatTimes = dOnceDealing / vfLen;
     uint16_t hcTimes = hcParam_;
-    uint32_t tailNum = dParam_ % vfLen;
+    uint32_t tailNum = dOnceDealing % vfLen;
     uint16_t tailLoopTimes = tailNum == 0 ? 0 : 1;
 
     auto residualAddr = (__ubuf__ T1*)residualUb.GetPhyAddr();
     auto combAddr = (__ubuf__ T2*)combUb.GetPhyAddr();
     auto sumAddr = (__ubuf__ float*)sumTempBuf.GetPhyAddr();
+	auto xAddr = (__ubuf__ T1*)xUb.GetPhyAddr();
+    auto postAddr = (__ubuf__ T2*)postUb.GetPhyAddr();
     __VEC_SCOPE__
     {
-        uint32_t xDealNum = static_cast<uint32_t>(hcParam_ * dParam_);
+        uint32_t xDealNum = static_cast<uint32_t>(hcParam_ * dOnceDealing);
+		AscendC::MicroAPI::RegTensor<T1> xReg;
+        AscendC::MicroAPI::RegTensor<T2> postReg;
+        AscendC::MicroAPI::RegTensor<float> xRegFloat;
+        AscendC::MicroAPI::RegTensor<float> postRegFloat;
         AscendC::MicroAPI::RegTensor<T1> residualReg0;
         AscendC::MicroAPI::RegTensor<T1> residualReg1;
         AscendC::MicroAPI::RegTensor<T1> residualReg2;
@@ -286,19 +254,22 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doMulAndAdd(LocalTensor<T1
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B16>(combReg1, combAddr+hcParam_+hcIndex);
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B16>(combReg2, combAddr+2*hcParam_+hcIndex);
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B16>(combReg3, combAddr+3*hcParam_+hcIndex);
+				AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B16>(postReg, postAddr + hcIndex);
                 AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(combRegFloat0, combReg0, pregMain);
                 AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(combRegFloat1, combReg1, pregMain);
                 AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(combRegFloat2, combReg2, pregMain);
                 AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(combRegFloat3, combReg3, pregMain);
+                AscendC::MicroAPI::Cast<float, T2, castB16ToB32>(postRegFloat, postReg, pregMain);
             } else {
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(combRegFloat0, combAddr+hcIndex);
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(combRegFloat1, combAddr+hcParam_+hcIndex);
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(combRegFloat2, combAddr+2*hcParam_+hcIndex);
                 AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(combRegFloat3, combAddr+3*hcParam_+hcIndex);
+				AscendC::MicroAPI::DataCopy<T2, AscendC::MicroAPI::LoadDist::DIST_BRC_B32>(postRegFloat, postAddr + hcIndex);
             }
 
             for (uint16_t j = 0; j < repeatTimes; j++) {
-                AscendC::MicroAPI::DataCopy(sumRegFloat, sumAddr+hcIndex*xDealNumAlign+j*vfLen);
+                AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(xReg, xAddr+j*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg0, residualAddr+j*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg1, residualAddr+xDealNumAlign+j*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg2, residualAddr+2*xDealNumAlign+j*vfLen);
@@ -307,18 +278,16 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doMulAndAdd(LocalTensor<T1
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat1, residualReg1, pMask);
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat2, residualReg2, pMask);
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat3, residualReg3, pMask);
+				AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(xRegFloat, xReg, pMask);
                 AscendC::MicroAPI::Mul(sumTempReg0, residualRegFloat0, combRegFloat0, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg1, residualRegFloat1, combRegFloat1, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg2, residualRegFloat2, combRegFloat2, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg3, residualRegFloat3, combRegFloat3, pMask);
-                AscendC::MicroAPI::Add(sumTempReg0, sumTempReg0, sumTempReg1, pMask);
-                AscendC::MicroAPI::Add(sumTempReg2, sumTempReg2, sumTempReg3, pMask);
-                AscendC::MicroAPI::Add(sumRegFloat, sumRegFloat, sumTempReg0, pMask);
-                AscendC::MicroAPI::Add(sumRegFloat, sumRegFloat, sumTempReg2, pMask);
-                AscendC::MicroAPI::DataCopy(sumAddr+hcIndex*xDealNumAlign+j*vfLen, sumRegFloat, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat3, combRegFloat3, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat1, combRegFloat1, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat2, combRegFloat2, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, xRegFloat, postRegFloat, pMask);
+                AscendC::MicroAPI::DataCopy(sumAddr+hcIndex*xDealNumAlign+j*vfLen, sumTempReg0, pMask);
             }
             for (uint16_t k = 0; k < tailLoopTimes; k++) {
-                AscendC::MicroAPI::DataCopy(sumRegFloat, sumAddr+hcIndex*xDealNumAlign+repeatTimes*vfLen);
+                AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(xReg, xAddr+repeatTimes*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg0, residualAddr+repeatTimes*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg1, residualAddr+xDealNumAlign+repeatTimes*vfLen);
                 AscendC::MicroAPI::DataCopy<T1, AscendC::MicroAPI::LoadDist::DIST_UNPACK_B16>(residualReg2, residualAddr+2*xDealNumAlign+repeatTimes*vfLen);
@@ -327,43 +296,54 @@ __aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doMulAndAdd(LocalTensor<T1
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat1, residualReg1, pMask);
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat2, residualReg2, pMask);
                 AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(residualRegFloat3, residualReg3, pMask);
+				AscendC::MicroAPI::Cast<float, T1, castB16ToB32>(xRegFloat, xReg, pMask);
                 AscendC::MicroAPI::Mul(sumTempReg0, residualRegFloat0, combRegFloat0, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg1, residualRegFloat1, combRegFloat1, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg2, residualRegFloat2, combRegFloat2, pMask);
-                AscendC::MicroAPI::Mul(sumTempReg3, residualRegFloat3, combRegFloat3, pMask);
-                AscendC::MicroAPI::Add(sumTempReg0, sumTempReg0, sumTempReg1, pMask);
-                AscendC::MicroAPI::Add(sumTempReg2, sumTempReg2, sumTempReg3, pMask);
-                AscendC::MicroAPI::Add(sumRegFloat, sumRegFloat, sumTempReg0, pMask);
-                AscendC::MicroAPI::Add(sumRegFloat, sumRegFloat, sumTempReg2, pMask);
-                AscendC::MicroAPI::DataCopy(sumAddr+hcIndex*xDealNumAlign+repeatTimes*vfLen, sumRegFloat, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat3, combRegFloat3, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat1, combRegFloat1, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, residualRegFloat2, combRegFloat2, pMask);
+                AscendC::MicroAPI::MulAddDst(sumTempReg0, xRegFloat, postRegFloat, pMask);
+                AscendC::MicroAPI::DataCopy(sumAddr+hcIndex*xDealNumAlign+repeatTimes*vfLen, sumTempReg0, pMask);
             }
         }
     }
 }
 
 template <typename T1, typename T2>
-__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::doProcess(int64_t batchSize)
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DoCompute(LocalTensor<float> sumTempBuf, LocalTensor<T2> postUb, LocalTensor<T2> combUb, int64_t batchIndex, int64_t dOffset, int64_t dDealing)
+{
+    DataCopyInX(batchIndex, dDealing, dOffset);
+    LocalTensor<T1> xUb = xQue_.DeQue<T1>();
+    DataCopyInResidual(batchIndex, dDealing, dOffset);
+    LocalTensor<T1> residualUb = residualQue_.DeQue<T1>();
+    DoMulAndAdd(xUb, postUb, residualUb, combUb, sumTempBuf, dDealing);
+    LocalTensor<T1> sumUb = sumQue_.AllocTensor<T1>();
+    AscendC::Cast(sumUb, sumTempBuf, AscendC::RoundMode::CAST_RINT, hcParam_ * dOnceDealing_);
+    sumQue_.EnQue<T1>(sumUb);
+    DataCopyOut(batchIndex, dDealing, dOffset);
+    residualQue_.FreeTensor(residualUb);
+    xQue_.FreeTensor(xUb);
+}
+
+template <typename T1, typename T2>
+__aicore__ inline void HcPostRegBaseBfloat16<T1, T2>::DoProcess(int64_t batchSize)
 {
     LocalTensor<float> sumTempBuf = sumTempBuf_.Get<float>();
     for (int64_t batchIndex = 0; batchIndex < batchSize; batchIndex++) {
-        DataCopyInX(batchIndex);
         DataCopyInPost(batchIndex);
-        LocalTensor<T1> xUb = xQue_.DeQue<T1>();
         LocalTensor<T2> postUb = postQue_.DeQue<T2>();
-        DataCopyInResidual(batchIndex);
         DataCopyInComb(batchIndex);
-        LocalTensor<T1> residualUb = residualQue_.DeQue<T1>();
         LocalTensor<T2> combUb = combQue_.DeQue<T2>();
-        doPostMulX(xUb, postUb, sumTempBuf);
-        doMulAndAdd(residualUb, combUb, sumTempBuf);
-        LocalTensor<T1> sumUb = sumQue_.AllocTensor<T1>();
-        AscendC::Cast(sumUb, sumTempBuf, AscendC::RoundMode::CAST_RINT, hcParam_ * dParamAlign_);
-        sumQue_.EnQue<T1>(sumUb);
-        DataCopyOut(batchIndex);
+        int64_t dOffset = 0;
+        for (int64_t dIndex = 0; dIndex < dSplitTime_; dIndex++) {
+            dOffset = dIndex*dOnceDealing_;
+            DoCompute(sumTempBuf, postUb, combUb, batchIndex, dOffset, dOnceDealing_);
+        }
+        if (dLastDealing_ != 0) {
+            dOffset = dSplitTime_ * dOnceDealing_;
+            DoCompute(sumTempBuf, postUb, combUb, batchIndex, dOffset, dLastDealing_);
+        }
         combQue_.FreeTensor(combUb);
-        residualQue_.FreeTensor(residualUb);
         postQue_.FreeTensor(postUb);
-        xQue_.FreeTensor(xUb);
     }
 }
 

@@ -137,36 +137,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weigh
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(output, output_scale, output_offset);
 }
-std::tuple<at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_v2_meta(
-    const at::Tensor & x,
-    const at::Tensor & x_scale,
-    const at::Tensor & group_list,
-    const at::TensorList & weight,
-    const at::TensorList & weight_scale,
-    const at::TensorList & weight_assist_matrix,
-    const c10::optional<at::Tensor> & bias,
-    const c10::optional<at::Tensor> & smooth_scale,
-    int64_t dequant_mode,
-    int64_t dequant_dtype,
-    int64_t quant_mode,
-    int64_t quant_dtype,
-    bool  transpose_weight,
-    int64_t group_list_type,
-    at::IntArrayRef tuning_config,
-    double swiglu_limit)
-{
 
-    auto x_size = x.sizes();
-    int n = weight[0].sizes()[1];
-    int m = x_size[0];
-    int k = x_size[1];
-
-    at::Tensor y = at::empty({m, n/2}, x.options().dtype(at::kChar));
-    at::Tensor y_scale = at::empty({m}, x.options().dtype(at::kFloat));
-
-
-    return std::tuple<at::Tensor, at::Tensor>(y, y_scale);
-}
 std::tuple<at::Tensor, at::Tensor> dispatch_gmm_combine_decode_meta(
     const at::Tensor &x,
     const at::Tensor &expert_ids,
@@ -214,6 +185,8 @@ std::tuple<at::Tensor&, at::Tensor&> dispatch_ffn_combine_meta(
     const at::Tensor& expert_idx,
     const at::TensorList& scale1,
     const at::TensorList& scale2,
+    const c10::optional<at::TensorList>& bias1,
+    const c10::optional<at::TensorList>& bias2,
     const at::Tensor& probs,
     c10::string_view group,
     int64_t max_output_size,
@@ -1101,6 +1074,14 @@ at::Tensor npu_lightning_indexer_quant_meta(
     return lightning_indexer_quant_output;
 }
 
+void npu_scatter_nd_update_v2_meta(
+    at::Tensor& var,
+    const at::Tensor& indices,
+    const at::Tensor& update)
+{
+    return;
+}
+
 } // namespace meta
 } // namespace vllm_ascend
 
@@ -1122,8 +1103,6 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("grouped_matmul_swiglu_quant_weight_nz", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz);
     // Grouped matmul swiglu quant weight nz tensor list
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz_tensor_list_meta);
-    // Grouped matmul swiglu quant v2
-    ops.impl("grouped_matmul_swiglu_quant_v2", &vllm_ascend::meta::grouped_matmul_swiglu_quant_v2_meta);
     // dispatch_gmm_combine_decode meta implementation
     ops.impl("dispatch_gmm_combine_decode", &vllm_ascend::meta::dispatch_gmm_combine_decode_meta);
     // batch_matmul_transpose
@@ -1164,5 +1143,7 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("moe_grouped_matmul", &vllm_ascend::meta::moe_grouped_matmul_meta);
     // Lightning indexer quant
     ops.impl("npu_lightning_indexer_quant", &vllm_ascend::meta::npu_lightning_indexer_quant_meta);
+    // npu_scatter_nd_update_v2
+    ops.impl("npu_scatter_nd_update_v2", &vllm_ascend::meta::npu_scatter_nd_update_v2_meta);
 }
 }

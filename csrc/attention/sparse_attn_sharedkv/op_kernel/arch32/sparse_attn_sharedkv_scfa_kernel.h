@@ -468,8 +468,8 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::Init(
         (__gm__ T *)(workspace + offset + aiCoreIdx * dbWorkspaceRatio * constInfo.bmm2ResUbSize * sizeof(T)));
     offset += GetBlockNum() * dbWorkspaceRatio * constInfo.bmm2ResUbSize * sizeof(T);
 
-    kvMergeGm_.SetGlobalBuffer((__gm__ KV_T *)(workspace + offset + aiCoreIdx * constInfo.sparseBlockCount * 512 * 4 * sizeof(KV_T)));
-    offset += GetBlockNum() * constInfo.sparseBlockCount * 512 * 4 * sizeof(KV_T);
+    kvMergeGm_.SetGlobalBuffer((__gm__ KV_T *)(workspace + offset + aiCoreIdx * 512 * 512 * 4 * sizeof(KV_T)));
+    offset += GetBlockNum() * 512 * 512 * 4 * sizeof(KV_T);
 
     kvValidSizeGm_.SetGlobalBuffer(
         (__gm__ int32_t *)(workspace + offset + (aiCoreIdx * 2) * 128 * 4 * sizeof(int32_t)));
@@ -599,17 +599,14 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::CalcParams(uint32_t loop, u
 
     info.actualSingleProcessSInnerSizeAlign = SASAlign(info.actualSingleProcessSInnerSize, SASVectorBlock<SAST>::BYTE_BLOCK);
     if (info.isOri) {
-        info.v0S2DealSize = CeilDiv(tempLoopInfo.v0OriSize, tempLoopInfo.oriLoopTimes);
-        info.v0S2Start = s2LoopIdx * info.v0S2DealSize;
-        if (s2LoopIdx + 1 == tempLoopInfo.oriLoopTimes) { // tail
-         info.v0S2DealSize = tempLoopInfo.v0OriSize - info.v0S2Start;
-        }
+        info.v0S2Start = 0;
+        info.v0S2DealSize = 0;
     } else {
-        info.v0S2DealSize = CeilDiv(tempLoopInfo.v0CmpSize, tempLoopInfo.cmpLoopTimes);
-        info.v0S2Start = tempLoopInfo.v0OriSize + (s2LoopIdx - tempLoopInfo.oriLoopTimes) * info.v0S2DealSize;
-        if (s2LoopIdx + 1 == tempLoopInfo.s2LoopTimes) { // tail
-            info.v0S2DealSize = tempLoopInfo.v0OriSize + tempLoopInfo.v0CmpSize - info.v0S2Start;
+        info.v0S2Start = 0;
+        if (s2LoopIdx + 1 == tempLoopInfo.s2LoopTimes && s2LoopIdx == 2) { // tail
+            info.v0S2Start = 512;
         }
+        info.v0S2DealSize = 512;
     }
 }
 
@@ -767,7 +764,7 @@ __aicore__ inline void SparseAttnSharedkvScfa<SAST>::ProcessBalance()
             for (uint32_t s2LoopIdx = constInfo.s2Start; s2LoopIdx < (s2LoopEnd + extraLoop); s2LoopIdx++) {
                 PreloadPipeline(gloop, cmpLoop, constInfo.s2Start, s2LoopIdx, extraInfo);
                 ++gloop;
-                if (s2LoopIdx >= (s2LoopEnd + extraLoop) - 1) { // 用于判断v0使用的循环GM的id
+                if (s2LoopIdx >= tempLoopInfo.oriLoopTimes && s2LoopIdx < s2LoopEnd) { // 用于判断v0使用的循环GM的id
                     ++cmpLoop;
                 }
             }
