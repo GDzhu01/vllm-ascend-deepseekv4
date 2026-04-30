@@ -3007,6 +3007,18 @@ class NPUModelRunner(GPUModelRunner):
                         current_kv_cache_spec.head_size)
                     kv_cache_shape_list = [kv_cache_shape]
                     kv_cache_dtype_list = [current_kv_cache_spec.dtype]
+                    
+                    if current_kv_cache_spec.dtype == torch.float32:
+                        kv_state_shape = self.attn_backend.get_kv_cache_shape(
+                            num_blocks, current_kv_cache_spec.block_size,
+                            current_kv_cache_spec.num_kv_heads,
+                            current_kv_cache_spec.head_size // 2)
+                        score_state_shape = self.attn_backend.get_kv_cache_shape(
+                            num_blocks, current_kv_cache_spec.block_size,
+                            current_kv_cache_spec.num_kv_heads,
+                            current_kv_cache_spec.head_size // 2)
+                        kv_cache_shape_list = [kv_state_shape, score_state_shape]
+                        kv_cache_dtype_list = [current_kv_cache_spec.dtype, current_kv_cache_spec.dtype]
 
                     if hasattr(current_kv_cache_spec, "scale_dim") and current_kv_cache_spec.scale_dim != 0:
                         indexer_k_shape = kv_cache_shape

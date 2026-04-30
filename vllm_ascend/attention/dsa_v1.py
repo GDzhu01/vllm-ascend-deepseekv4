@@ -1260,17 +1260,17 @@ class AscendDSAImpl(DSAAttentionImpl):
     ):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, compress_kv_state_cache, compress_score_state_cache, _, _, _, _) = kv_cache
             # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
             (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, compress_kv_state_cache, compress_score_state_cache, _, _, _, _) = kv_cache
             # sorted keys: [attn, compressor.state_cache, swa_cache]
             (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (_, swa_kv_cache, _, _, _, _,) = kv_cache
+            (_, swa_kv_cache, _, _, _, _, _, _,) = kv_cache
             # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
@@ -1339,13 +1339,16 @@ class AscendDSAImpl(DSAAttentionImpl):
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
                 # TODO(yilin): adapt to the latest operator
-                state_cache.squeeze(-2),
+                compressed_kv_state.squeeze(-2),
+                compressed_score_state.squeeze(-2),
                 self.compressor_ape,
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
                 compress_cos.view(-1, compress_cos.shape[-1]),
                 # TODO(lxs): adapt the block table
                 state_block_table=compressor_kv_state_metadata.prefill.block_table,
+                score_block_table=compressor_score_state_metadata.prefill.block_table,
+                kv_block_table=compressor_kv_state_metadata.prefill.block_table,
                 cu_seqlens=actual_seq_lengths_query,
                 seqused=None,
                 start_pos=compress_common_attn_metadata.prefill.start_pos,
@@ -1353,8 +1356,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
-                rotary_mode=2,
-                cache_mode=1)
+                rotary_mode=2)
 
             if compressed_kv.numel() == 0:
                 compressed_kv = None
@@ -1439,17 +1441,17 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_common_attn_metadata = None
 
         if self.compress_ratio == 4:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, compress_kv_state_cache, compress_score_state_cache, _, _, _, _) = kv_cache
             # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
             (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
-            (compress_kv_cache, swa_kv_cache, state_cache, _, _, _) = kv_cache
+            (compress_kv_cache, swa_kv_cache, compress_kv_state_cache, compress_score_state_cache, _, _, _, _) = kv_cache
             # sorted keys: [attn, compressor.state_cache, swa_cache]
             (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (_, swa_kv_cache, _, _, _, _) = kv_cache
+            (_, swa_kv_cache, _, _, _, _, _, _) = kv_cache
             # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
@@ -1546,12 +1548,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
-                state_cache.squeeze(-2),
+                compress_kv_state_cache.squeeze(-2),
+                compress_score_state_cache.squeeze(-2),
                 self.compressor_ape,
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
                 compress_cos.view(-1, compress_cos.shape[-1]),
-                state_block_table=compressor_kv_state_metadata.decode.block_table,
+                kv_block_table=compressor_kv_state_metadata.decode.block_table,
+                score_block_table=compressor_kv_state_metadata.decode.block_table,
                 cu_seqlens=actual_seq_lengths_query,
                 seqused=None,
                 start_pos=compress_common_attn_metadata.decode.start_pos,
@@ -1559,8 +1563,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_ratio=self.compress_ratio,
                 coff=coff,
                 norm_eps=self.compressor_norm_eps,
-                rotary_mode=2,
-                cache_mode=1)
+                rotary_mode=2)
             # kv_compress_epilog
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
                 compress_kv_cache,
@@ -1638,7 +1641,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         with_prefill: bool = False,
         qr_pertoken_scale: torch.Tensor = None,
     ):
-        (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache) = kv_cache
+        (_, _, _, _, indexer_kv_state, indexer_score_state, indexer_k_cache, indexer_scale_cache) = kv_cache
         # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
         (_, _, indexer_kv_state_metadata, indexer_kv_scale_metadata, _) = attn_metadata
 
@@ -1684,12 +1687,14 @@ class AscendDSAImpl(DSAAttentionImpl):
             x,
             self.indexcom_wkv.weight,
             self.indexcom_wgate.weight,
-            indexer_state_cache.squeeze(-2),
+            indexer_kv_state.squeeze(-2),
+            indexer_score_state.squeeze(-2),
             self.indexcom_ape,
             self.indexcom_norm.weight,
             compressed_sin.view(-1, compressed_sin.shape[-1]),
             compressed_cos.view(-1, compressed_cos.shape[-1]),
-            state_block_table=kv_block_table,
+            kv_block_table=kv_block_table,
+            score_block_table=kv_block_table,
             cu_seqlens=actual_seq_lengths_query,
             seqused=None,
             start_pos=start_pos,
@@ -1697,8 +1702,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio=self.compress_ratio,
             coff=coff,
             norm_eps=self.compressor_norm_eps,
-            rotary_mode=2,
-            cache_mode=1)
+            rotary_mode=2)
 
         if kv.numel() == 0:
             kv = None

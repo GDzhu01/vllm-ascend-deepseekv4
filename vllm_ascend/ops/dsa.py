@@ -214,8 +214,10 @@ def dsa_forward(
         unfold_kvcache(cache) for cache in (
         compress_kv_cache,
         swa_kv_cache,
-        state_cache,
-        indexer_state_cache,
+        compress_kv_state_cache,
+        compress_score_state_cache,
+        indexer_kv_state_cache,
+        indexer_score_state_cache,
         indexer_k_cache,
         indexer_scale_cache,
     )])
