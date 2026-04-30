@@ -883,6 +883,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             compressed_tokens_start = self.decode_ratio_to_sas_metadata["compressed_tokens_start_" + str(self.compressor_ratio)]
         
         slot_mapping = self.slot_mapping[:compressed_tokens_start]
+        if slot_mapping.shape[0] == 0:
+            slot_mapping = torch.ones_like(self.slot_mapping[:1])
+            slot_mapping[0, 0] = -1
+            slot_mapping[0, 1] = 127
 
         assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
@@ -1308,8 +1312,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
         lid = extract_layer_index(layer_name)
-        logger.info(f"{'*'*100}, {lid}")
-        if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+        # logger.info(f"{'*'*100}, {lid}")
+        if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
             logger.info(f"{lid=}, swa prefill: {swa_metadata.prefill.slot_mapping=}")
         # swa exec kv
         torch.ops._C_ascend.npu_scatter_nd_update_v2(
@@ -1339,7 +1343,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # compressor
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"prefill: {state_cache.squeeze(-2).shape=}")
                 logger.info(f"prefill: {compressor_kv_state_metadata.prefill.block_table=}")
                 logger.info(f"prefill: {actual_seq_lengths_query=}")
@@ -1378,7 +1382,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # kv_compress_epilog
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, compress prefill: {compressor_attn_metadata.prefill.slot_mapping=}")
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
                 compress_kv_cache,
@@ -1387,7 +1391,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if self.compress_ratio <= 1:
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, c1 prefill: {swa_metadata.prefill.block_table=}")
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1407,7 +1411,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_kv="PA_ND")[0]
         elif self.compress_ratio == 4:
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, c4 prefill: {swa_metadata.prefill.block_table=}")
                 logger.info(f"{lid=}, c4 prefill: {compressor_attn_metadata.prefill.block_table=}")
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
@@ -1433,7 +1437,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_kv="PA_ND")[0]
         else:
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, c128 prefill: {swa_metadata.prefill.block_table=}")
                 logger.info(f"{lid=}, c128 prefill: {compressor_attn_metadata.prefill.block_table=}")
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
@@ -1541,7 +1545,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             )
 
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, swa decode: {swa_metadata.decode.slot_mapping=}")
             # swa exec kv
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
@@ -1578,7 +1582,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # compressor
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, swa decode: {state_cache.squeeze(-2).shape=}")
                 logger.info(f"{lid=}, swa decode: {compressor_kv_state_metadata.decode.block_table=}")
                 logger.info(f"{lid=}, swa decode: {actual_seq_lengths_query=}")
@@ -1608,7 +1612,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # kv_compress_epilog
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, compress decode: {compressor_attn_metadata.decode.slot_mapping=}")            
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
                 compress_kv_cache,
@@ -1616,7 +1620,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressed_kv)
         if self.compress_ratio <= 1:
             lid = extract_layer_index(layer_name)
-            if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+            if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
                 logger.info(f"{lid=}, c1 decode: {swa_metadata.decode.block_table=}")
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1739,7 +1743,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             start_pos = indexer_kv_scale_metadata.decode.start_pos
 
         lid = extract_layer_index(layer_name)
-        if torch.distributed.get_rank() == 0 and int(lid) in [0,1,2,3]:
+        if torch.distributed.get_rank() == -1 and int(lid) in [0,1,2,3]:
             logger.info(f"{lid=}, c4 indexer: {indexer_state_cache.squeeze(-2).shape=}")
             logger.info(f"{lid=}, c4 indexer: {kv_block_table=}")
             logger.info(f"{lid=}, c4 indexer: {actual_seq_lengths_query=}")
