@@ -362,6 +362,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.seqused_q = torch.tensor([], device=self.device)
         # Note(qcs): we use two dimension slot_mapping for kvcache with shape [block_nums, block_size, head_num, head_dim]
         self.slot_mapping = torch.zeros((vllm_config.scheduler_config.max_num_batched_tokens, 2), dtype=torch.int32, device=self.device)
+        self.prefill_slot_mapping = torch.zeros((vllm_config.scheduler_config.max_num_batched_tokens, 2), dtype=torch.int32, device=self.device)
+        self.decode_slot_mapping = torch.zeros((vllm_config.scheduler_config.max_num_batched_tokens, 2), dtype=torch.int32, device=self.device)
 
     @classmethod
     def get_cudagraph_support(
@@ -640,6 +642,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_slot_mapping = self.slot_mapping[
             compressed_tokens_start:compressed_tokens_end +
             compressed_tokens_start]
+        self.prefill_slot_mapping[:prefill_slot_mapping.shape[0]] = prefill_slot_mapping
+        self.prefill_slot_mapping[prefill_slot_mapping.shape[0]:, 0] = -1
+        self.prefill_slot_mapping[prefill_slot_mapping.shape[0]:, 1] = 127
 
         assert self.start_pos_prefill is not None
         self.start_pos_prefill.fill_(0)
@@ -760,7 +765,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             context_lens=self.seq_lens[reqs_start:],
             input_positions=prefill_input_positions,
             block_table=self.block_table[reqs_start:, ...],
-            slot_mapping=prefill_slot_mapping,
+            slot_mapping=self.prefill_slot_mapping[:max(prefill_input_positions.shape[0], self.num_prefill)],
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,
@@ -882,11 +887,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         else:
             compressed_tokens_start = self.decode_ratio_to_sas_metadata["compressed_tokens_start_" + str(self.compressor_ratio)]
         
-        slot_mapping = self.slot_mapping[:compressed_tokens_start]
-        if slot_mapping.shape[0] == 0:
-            slot_mapping = torch.ones_like(self.slot_mapping[:1])
-            slot_mapping[0, 0] = -1
-            slot_mapping[0, 1] = 127
+        decode_slot_mapping = self.slot_mapping[:compressed_tokens_start]
+        self.decode_slot_mapping[:decode_slot_mapping.shape[0]] = decode_slot_mapping
+        self.decode_slot_mapping[decode_slot_mapping.shape[0]:, 0] = -1
+        self.decode_slot_mapping[decode_slot_mapping.shape[0]:, 1] = 127
 
         assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
@@ -1003,7 +1007,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         decode_metadata = AscendDSADecodeMetadata(
             input_positions=input_positions,
             block_table=self.block_table[:block_table_size, ...],
-            slot_mapping=slot_mapping,
+            slot_mapping=self.decode_slot_mapping[:max(decode_slot_mapping.shape[0], self.num_decodes)],
             seq_lens=self.seq_lens[:self.num_decodes],  # cached
             seq_lens_list=seq_lens_list,
             max_seq_lens=max_seq_lens,
