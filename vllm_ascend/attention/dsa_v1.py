@@ -1874,3 +1874,20 @@ class AscendDSAImpl(DSAAttentionImpl):
             cmp_ratio=4,
             return_value=False)
         return topk_idxs
+
+def print_feature(data, tab):
+    result = f"print_feature>>>>>>{tab}>>>>>>:\n"
+    if isinstance(data, torch.Tensor):
+        data=data.double()
+        result += f"    shape: {data.shape}\n"
+        result += f"    max: {data.max()}\n"
+        result += f"    min: {data.min()}\n"
+        result += f"    mean: {data.mean()}\n"
+        result += f"    norm: {data.norm()}\n"
+        result += f"    data: {data}\n"
+    else:
+        result += f"    len: {len(data)}\n"
+        result += f"    data: {data}\n"
+    torch.set_printoptions(threshold=float(4096), edgeitems=1024)
+    print(result)
+    torch.set_printoptions(threshold=float(1000), edgeitems=3)
