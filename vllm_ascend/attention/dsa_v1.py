@@ -765,7 +765,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             context_lens=self.seq_lens[reqs_start:],
             input_positions=prefill_input_positions,
             block_table=self.block_table[reqs_start:, ...],
-            slot_mapping=self.prefill_slot_mapping[:max(prefill_input_positions.shape[0], self.num_prefill)],
+            slot_mapping=self.prefill_slot_mapping[:max(prefill_input_positions.shape[0], num_prefill)],
             max_query_len=max_query_len,
             max_seq_lens=max_seq_lens,
             query_start_loc=prefill_query_start_loc,
