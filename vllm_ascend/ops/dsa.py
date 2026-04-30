@@ -197,17 +197,20 @@ def dsa_forward(
 
     compress_kv_cache = None
     swa_kv_cache = self.swa_cache_layer.kv_cache
-    state_cache = None
-    indexer_state_cache = None
+    compress_kv_state_cache = None
+    compress_score_state_cache = None
+    indexer_kv_state_cache = None
+    indexer_score_state_cache = None
     indexer_k_cache = None
     indexer_scale_cache = None
+    
 
     if self.compress_ratio > 1:
-        state_cache = self.compressor.state_cache.kv_cache
+        compress_kv_state_cache, compress_score_state_cache = self.compressor.state_cache.kv_cache[0][0], self.compressor.state_cache.kv_cache[0][1]
         compress_kv_cache = self.dsa_attn.kv_cache[forward_context.virtual_engine]
     if self.compress_ratio == 4:
         # TODO(qcs): refactor me
-        indexer_state_cache = self.indexer.compressor.state_cache.kv_cache
+        indexer_kv_state_cache, indexer_score_state_cache = self.indexer.compressor.state_cache.kv_cache[0][0], self.indexer.compressor.state_cache.kv_cache[0][1]
         indexer_k_cache, indexer_scale_cache = self.indexer.k_cache.kv_cache[0][0], self.indexer.k_cache.kv_cache[0][1]
 
     kv_cache = tuple([
