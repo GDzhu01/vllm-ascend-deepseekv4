@@ -541,6 +541,11 @@ def get_kv_cache_groups_with_multi_groups(
     # have the same physical memory per block per layer. Split the layers
     # into groups with the same number of layers, and thus same total page
     # size.
+    from vllm_ascend.utils import extract_dsv4_layer_index, get_dsv4_compress_ratio
+    def f(x, config=vllm_config.model_config.hf_config):
+        return get_dsv4_compress_ratio(config, extract_dsv4_layer_index(config, x))
+    kv_cache_spec_list = {k:kv_cache_spec_list[k] for k in sorted(kv_cache_spec_list, key=lambda r: (f(r) != 4, f(r)))}
+
     kv_cache_groups = _get_kv_cache_groups_uniform_page_size_with_multi_groups(kv_cache_spec_list)
     _annotate_eagle_groups_deepseek_v4(vllm_config, kv_cache_spec_list, kv_cache_groups)
     return kv_cache_groups

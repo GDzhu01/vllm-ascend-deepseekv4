@@ -1259,12 +1259,18 @@ class AscendDSAImpl(DSAAttentionImpl):
     ):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            # (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # print("c4", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
+            (compressor_attn_metadata, swa_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (swa_cache, compressor_attn_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # print("c128", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
             (swa_metadata, compressor_attn_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
+            # (compressor_attn_cache, swa_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (swa_cache,) = kv_cache
@@ -1433,12 +1439,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         assert attn_metadata[0].decode is not None
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            # (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            (compressor_attn_metadata, swa_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (swa_cache, compressor_attn_cache, compressor_kv_state, compressor_score_state) = kv_cache
             (swa_metadata, compressor_attn_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
+            # (compressor_attn_cache, swa_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (swa_cache,) = kv_cache
