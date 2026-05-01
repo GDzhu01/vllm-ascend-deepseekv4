@@ -137,143 +137,18 @@ class DeepseekV4Config(PretrainedConfig):
 
     def __init__(
         self,
-        # base
-        vocab_size=129280,
-        hidden_size=4096,
-        moe_inter_dim=2048,
-        num_hidden_layers=43,
-        moe_layer_freq=1,
-        n_hash_layers=3,
-        num_attention_heads=64,
-        # moe
-        n_routed_experts=256,
-        n_shared_experts=1,
-        n_activated_experts=6,
-        num_experts_per_tok=6,
-        first_k_dense_replace=0,
-        score_func="sqrtsoftplus",
-        topk_method="noaux_tc",
-        routed_scaling_factor=1.5,
-        # mqa
-        q_lora_rank=1024,
-        head_dim=512,
-        rope_head_dim=64,
-        norm_eps: float = 1e-6,
-        o_groups=8,
-        o_lora_rank=1024,
-        window_size=128,
-        compress_ratios=[
-            1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
-            128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
-            128, 4, 128, 4, 128, 4, 128, 4, 128, 4
-        ],
-        # yarn
-        compress_rope_theta=40000,
-        # original_seq_len=65536,
-        # rope_theta=10000,
-        # rope_factor=4,
-        # beta_fast=32,
-        # beta_slow=1,
-        # rope_theta=10000.0,
-        # rope_scaling=None,
-        max_seq_len=65536,
-        rope_theta=10000.0,
-        rope_scaling=None,
-
-        # index
-        index_n_heads=64,
-        index_head_dim=128,
-        index_topk=512,
-        # hc
-        hc_mult=4,
-        hc_sinkhorn_iters=20,
-        hc_eps: float = 1e-6,
-        dtype="bfloat16",
-        scale_fmt="ue8m0",
-
-        #
-        pad_token_id=0,
-        bos_token_id=1,
-        eos_token_id=1,
-        tie_word_embeddings=False,
-        norm_topk_prob=True,
-        max_position_embeddings=163840,
         **kwargs,
     ):
-        # base
-        self.vocab_size = vocab_size
-        self.moe_inter_dim = moe_inter_dim
-        self.n_hash_layers = n_hash_layers
-        self.hidden_size = hidden_size
-        self.num_hidden_layers = num_hidden_layers
-        self.moe_layer_freq = moe_layer_freq
-        self.num_attention_heads = num_attention_heads
-
-        # moe
-        self.n_routed_experts = n_routed_experts
-        self.n_shared_experts = n_shared_experts
-        self.n_activated_experts = n_activated_experts
-        self.score_func = score_func
-        self.num_experts_per_tok = num_experts_per_tok
-        self.first_k_dense_replace = first_k_dense_replace
-        self.topk_method = topk_method
-        self.routed_scaling_factor = routed_scaling_factor
-
-        # mqa
-        self.q_lora_rank = q_lora_rank
-        self.head_dim = head_dim
-        self.rope_head_dim = rope_head_dim
-        self.norm_eps = norm_eps
-        self.o_groups = o_groups
-        self.o_lora_rank = o_lora_rank
-        self.window_size = window_size
-        self.compress_ratios = [1, 1, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4]
-        # NOTE: This is only for making is_deepseek_mla is True
-        self.kv_lora_rank = o_lora_rank
-
-        # index
-        self.index_n_heads = index_n_heads
-        self.index_head_dim = index_head_dim
-        self.index_topk = index_topk
-
-        # hc
-        self.hc_mult = hc_mult
-        self.hc_sinkhorn_iters = hc_sinkhorn_iters
-        self.hc_eps = hc_eps
-        self.dtype = dtype
-        self.scale_fmt = scale_fmt
-
-        #
-        self.moe_intermediate_size = moe_inter_dim
-        self.rms_norm_eps = 1e-6
-        self.pad_token_id = None
-        self.bos_token_id = 0
-        self.eos_token_id = 1
-        self.tie_word_embeddings = False
-        self.attention_bias = False
-        self.max_position_embeddings = max_position_embeddings
-        self.initializer_range = 0.02
-        self.hidden_act = 'silu'
-        self.norm_topk_prob = norm_topk_prob
-
-        self.rope_theta = rope_theta
-        self.rope_scaling = rope_scaling
-        self.compress_rope_theta = compress_rope_theta
-        self.max_seq_len = max_seq_len
-        if self.rope_scaling is not None and "type" in self.rope_scaling:
+        super().__init__(
+            **kwargs,
+        )
+        if getattr(self, "rope_scaling", None) is not None and "type" in self.rope_scaling:
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
 
-        if self.rope_scaling is not None:
+        if getattr(self, "rope_scaling", None) is not None:
             for key in ["beta_fast", "beta_slow", "factor"]:
                 if key in self.rope_scaling:
                     self.rope_scaling[key] = float(self.rope_scaling[key])
 
         rope_config_validation(self)
-
-        super().__init__(
-            pad_token_id=pad_token_id,
-            bos_token_id=bos_token_id,
-            eos_token_id=eos_token_id,
-            tie_word_embeddings=tie_word_embeddings,
-            **kwargs,
-        )
+        self.kv_lora_rank = kwargs.get("o_lora_rank", 1024)

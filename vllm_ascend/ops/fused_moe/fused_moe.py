@@ -207,6 +207,7 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
                 activation=activation,
                 w1_scale=w1_scale,
                 w2_scale=w2_scale,
+                swiglu_limit=layer.swiglu_limit,
             )
         )
         if zero_expert_num > 0 and zero_expert_type is not None:
@@ -371,7 +372,8 @@ class AscendFusedMoE(FusedMoE):
         self.moe_config.num_experts = self.global_num_experts
         self.moe_config.num_local_experts = self.local_num_experts
         self.moe_config.global_redundant_expert_num = self.global_redundant_expert_num
-
+        # TODO(qcs): check the default value of ops.
+        self.swiglu_limit= getattr(self.vllm_config.model_config.hf_config, "swiglu_limit", 1000000)
         moe_quant_params = {
             "num_experts": self.local_num_experts,
             "hidden_size": self.hidden_size,

@@ -365,8 +365,10 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
             num_expert_group=num_expert_group,
             custom_routing_function=custom_routing_function,
             scoring_func=scoring_func,
+            routed_scaling_factor=routed_scaling_factor,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
+            tid2eid=tid2eid,
         )
 
         # this is a naive implementation for experts load balance so as
@@ -401,6 +403,7 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
                 w2_scale=[layer.w2_weight_scale],
                 w1_scale_bias=layer.w13_scale_bias if hasattr(layer, "w13_scale_bias") else None,
                 w2_scale_bias=layer.w2_scale_bias if hasattr(layer, "w2_scale_bias") else None,
+                swiglu_limit=layer.swiglu_limit,
             )
         )
 

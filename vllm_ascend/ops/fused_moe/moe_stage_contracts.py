@@ -68,6 +68,7 @@ class MoEFusedExpertsInput:
     activation: str = "silu"
     need_trans: bool = False
     dynamic_eplb: bool = False
+    swiglu_limit: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,7 @@ class MoEMlpComputeInput:
     activation: str = "silu"
     need_trans: bool = False
     dynamic_eplb: bool = False
+    swiglu_limit: int = 0
 
 
 __all__ = [

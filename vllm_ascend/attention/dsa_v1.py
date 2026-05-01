@@ -309,7 +309,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 got {self.decode_threshold}"
 
         self.reorder_batch_threshold = self.decode_threshold
-        self.rope_dim = self.model_config.hf_text_config.rope_head_dim
+        self.rope_dim = self.model_config.hf_text_config.qk_rope_head_dim
         self.cos_cache = None
         self.sin_cache = None
 
@@ -326,17 +326,11 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
-
-        layer_idx = extract_layer_index(layer_names[0])
-        if layer_idx in [0, 1]:
-            self.compressor_ratio = 1
-        elif layer_idx % 2 == 0:
-            self.compressor_ratio = 4
-        else:
-            self.compressor_ratio = 128
+        
+        self.compressor_ratio = getattr(kv_cache_spec, 'compress_ratio', 0)
+        hf_config = self.model_config.hf_config
 
         if AscendDSAMetadataBuilder.hadamard is None:
-            hf_config = self.model_config.hf_config
             if hf_config.model_type == 'deepseek_v4':
                 indexer_head_dim = hf_config.index_head_dim
                 try:
@@ -671,7 +665,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     batch_size=len(self.seq_lens[reqs_start:]),
                     cmp_ratio=1,
                     ori_mask_mode=4,  # 4:sliding window
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -698,7 +692,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     cmp_ratio=4,
                     ori_mask_mode=4,
                     cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -723,7 +717,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     cmp_ratio=128,  #
                     ori_mask_mode=4,  # 4:sliding window
                     cmp_mask_mode=3,  # 3:causal
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="TND" if self.enable_kv_tnd else "PA_ND",
@@ -897,7 +891,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
-        index_topk = 512
+        index_topk = self.model_config.hf_config.index_topk
 
         assert self.decode_sas_metadata is not None
         if self.compressor_ratio == 1:
@@ -917,7 +911,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     cmp_ratio=1,
                     ori_mask_mode=4,
                     cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="PA_ND",
@@ -944,7 +938,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     cmp_ratio=4,
                     ori_mask_mode=4,
                     cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="PA_ND",
@@ -969,7 +963,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     cmp_ratio=128,
                     ori_mask_mode=4,
                     cmp_mask_mode=3,
-                    ori_win_left=self.model_config.hf_config.window_size - 1,
+                    ori_win_left=self.model_config.hf_config.sliding_window - 1,
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="PA_ND",
@@ -1134,7 +1128,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             self.indexcom_head_dim = self.indexer.compressor.head_dim
             self.indexcom_rotate = self.indexer.compressor.rotate
-            self.index_topk = 512
+            self.index_topk = self.indexer.index_topk
 
         # compress param
         if self.compressor is not None:
@@ -1780,7 +1774,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             key_quant_mode=0,
             layout_query="TND",
             layout_key="PA_BSND",
-            sparse_count=512,
+            sparse_count=self.index_topk,
             sparse_mode=3,
             pre_tokens=(1 << 63) - 1,
             next_tokens=(1 << 63) - 1,

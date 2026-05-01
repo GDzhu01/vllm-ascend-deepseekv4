@@ -65,6 +65,10 @@ from vllm.model_executor.models.utils import (
     sequence_parallel_chunk)
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
+from vllm_ascend.utils import (
+    extract_dsv4_layer_index,
+    get_dsv4_compress_ratio,
+)
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
@@ -289,11 +293,11 @@ class DeepseekV4MoE(nn.Module):
                 prefix=f"{prefix}.shared_experts",
             )
 
-        self.hash = layer_idx < config.n_hash_layers and not is_draft_layer
+        self.hash = layer_idx < config.num_hash_layers and not is_draft_layer
         if self.hash:
             self.gate.tid2eid = nn.Parameter(torch.empty(
                 config.vocab_size,
-                config.n_activated_experts,
+                config.num_experts_per_tok,
                 dtype=torch.int32),
                                              requires_grad=False)
             self.gate.e_score_correction_bias = None
@@ -306,9 +310,9 @@ class DeepseekV4MoE(nn.Module):
             shared_experts=self.shared_experts,
             gate=self.gate,
             num_experts=config.n_routed_experts,
-            top_k=config.n_activated_experts,
+            top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
-            intermediate_size=config.moe_inter_dim,
+            intermediate_size=config.moe_intermediate_size,
             reduce_results=False,
             renormalize=config.norm_topk_prob,
             quant_config=quant_config,
@@ -316,10 +320,10 @@ class DeepseekV4MoE(nn.Module):
             num_expert_group=getattr(config, "n_group", 1),
             topk_group=getattr(config, "topk_group", 1),
             prefix=f"{prefix}.experts",
-            scoring_func=getattr(config, "score_func", "softmax"),
-            # we do scaling outside, set factor to 1.0 to avoid double mul
-            # aiter applies routed_scaling_factor internally
-            # routed_scaling_factor=1.5,
+            scoring_func=getattr(config, "scoring_func", "softmax"),
+            # Keep scaling outside the router path so the order matches
+            # DeepSeek V4: normalize top-k weights, then scale routed output.
+            # AITER applies routed_scaling_factor internally.
             routed_scaling_factor=1.0 if not self.is_rocm_aiter_moe_enabled
             else self.routed_scaling_factor,
             e_score_correction_bias=self.gate.e_score_correction_bias,
@@ -328,7 +332,7 @@ class DeepseekV4MoE(nn.Module):
             is_sequence_parallel=self.is_sequence_parallel,
             n_shared_experts=config.n_shared_experts
             if self.is_fusion_moe_shared_experts_enabled else 0,
-            hash=layer_idx < config.n_hash_layers and not is_draft_layer,
+            hash=layer_idx < config.num_hash_layers and not is_draft_layer,
             tid2eid=self.gate.tid2eid)
 
     def forward(self,
@@ -359,8 +363,6 @@ class DeepseekV4MoE(nn.Module):
         if self.shared_experts is None:
             assert shared_output is None
 
-        # Fix FP16 overflow
-        # See DeepseekV2DecoderLayer for more details.
         if hidden_states.dtype != torch.float16:
             if not self.is_rocm_aiter_moe_enabled:
                 if self.shared_experts is not None:
@@ -420,7 +422,7 @@ class Indexer(nn.Module):
         self.config = config
         self.n_heads = config.index_n_heads
         self.head_dim = config.index_head_dim
-        self.rope_head_dim = config.rope_head_dim
+        self.rope_head_dim = config.qk_rope_head_dim
         self.index_topk = config.index_topk
         self.q_lora_rank = config.q_lora_rank
         self.softmax_scale = self.head_dim**-0.5
@@ -476,13 +478,13 @@ class Compressor(nn.Module):
         self.config = config
         self.dim = config.hidden_size
         self.head_dim = head_dim
-        self.rope_head_dim = config.rope_head_dim
-        self.nope_head_dim = head_dim - config.rope_head_dim
+        self.rope_head_dim = config.qk_rope_head_dim
+        self.nope_head_dim = head_dim - config.qk_rope_head_dim
         self.compress_ratio = compress_ratio
         self.overlap = compress_ratio == 4
         self.rotate = rotate
-        self.norm_eps = config.norm_eps
-        coff = 1 + self.overlap
+        self.norm_eps = config.rms_norm_eps
+        self.coff = 1 + self.overlap
 
         self.ape = nn.Parameter(
             torch.empty(compress_ratio,
@@ -504,7 +506,7 @@ class Compressor(nn.Module):
             prefix=f"{prefix}.wgate",
             return_bias=False,
         )
-        self.norm = RMSNorm(self.head_dim, config.norm_eps)
+        self.norm = RMSNorm(self.head_dim, config.rms_norm_eps)
 
         self.kv_cache = None
 
@@ -568,6 +570,7 @@ class DeepseekV4Attention(nn.Module):
         super().__init__()
         layer_idx = int(prefix.split(sep=".")[-2])
         self.layer_idx = layer_idx
+        config_layer_idx = extract_dsv4_layer_index(config, prefix)
         tp_size = get_tensor_model_parallel_world_size()
         self.dim = config.hidden_size
         self.n_heads = config.num_attention_heads
@@ -575,13 +578,13 @@ class DeepseekV4Attention(nn.Module):
         self.q_lora_rank = config.q_lora_rank
         self.o_lora_rank = config.o_lora_rank
         self.head_dim = config.head_dim
-        self.rope_head_dim = config.rope_head_dim
-        self.nope_head_dim = config.head_dim - config.rope_head_dim
+        self.rope_head_dim = config.qk_rope_head_dim
+        self.nope_head_dim = config.head_dim - config.qk_rope_head_dim
         self.n_groups = config.o_groups
         self.n_local_groups = self.n_groups // tp_size
-        self.window_size = config.window_size
-        self.eps = config.norm_eps
-        self.norm_eps = config.norm_eps
+        self.window_size = config.sliding_window
+        self.eps = config.rms_norm_eps
+        self.norm_eps = config.rms_norm_eps
         self.scale = self.head_dim**-0.5
 
         self.attn_sink = nn.Parameter(
@@ -594,7 +597,7 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wq_a",
             return_bias=False,
         )
-        self.q_norm = RMSNorm(self.q_lora_rank, eps=config.norm_eps)
+        self.q_norm = RMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
         self.wq_b = ColumnParallelLinear(
             self.q_lora_rank,
             self.n_heads * self.head_dim,
@@ -629,13 +632,14 @@ class DeepseekV4Attention(nn.Module):
             prefix=f"{prefix}.wo_b",
             return_bias=False,
         )
-        self.compress_ratio = config.compress_ratios[layer_idx]
+        self.compress_ratio = get_dsv4_compress_ratio(config,
+                                                      config_layer_idx)
 
         if self.compress_ratio > 1:
-            config.rope_parameters['rope_theta'] = 160000
+            config.rope_parameters['rope_theta'] = config.compress_rope_theta
             rope_groups = ['default', f'c{self.compress_ratio}']
         else:
-            config.rope_parameters['rope_theta'] = 10000
+            config.rope_parameters['rope_theta'] = config.rope_theta
             rope_groups = ['default']
         self.rotary_emb = ComplexExpRotaryEmbedding(
             vllm_config=vllm_config,
@@ -877,7 +881,7 @@ class DeepseekV4Model(nn.Module):
         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
             ["hidden_states", "residual"], config.hidden_size)
 
-        self.norm_eps = config.norm_eps
+        self.norm_eps = config.rms_norm_eps
         self.hc_eps = config.hc_eps
         self.hc_mult = hc_mult = config.hc_mult
         hc_dim = hc_mult * config.hidden_size
