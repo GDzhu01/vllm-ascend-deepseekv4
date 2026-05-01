@@ -107,6 +107,7 @@ def select_experts(
             num_expert_group=num_expert_group,
             custom_routing_function=custom_routing_function,
             scoring_func=scoring_func,
+            routed_scaling_factor=routed_scaling_factor,
             e_score_correction_bias=e_score_correction_bias,
             global_num_experts=global_num_experts,
             tid2eid=None,
@@ -300,6 +301,7 @@ def _native_select_experts(
     num_expert_group: int | None = None,
     custom_routing_function: Callable | None = None,
     scoring_func: str = "softmax",
+    routed_scaling_factor: float = 1.0,
     e_score_correction_bias: torch.Tensor | None = None,
     global_num_experts: torch.Tensor | None = None,
     use_hash: bool = False,
@@ -339,7 +341,7 @@ def _native_select_experts(
         raise ValueError(f"Unsupported scoring function: {scoring_func}")
 
     if use_grouped_topk:
-        return _select_expert_use_group_topk(
+        topk_weights, topk_ids = _select_expert_use_group_topk(
             topk_weights=topk_weights,
             top_k=top_k,
             renormalize=renormalize,
@@ -347,6 +349,7 @@ def _native_select_experts(
             num_expert_group=num_expert_group,
             e_score_correction_bias=e_score_correction_bias,
         )
+        return topk_weights * routed_scaling_factor, topk_ids
     
     if e_score_correction_bias is not None:
         topk_weights = topk_weights + e_score_correction_bias
@@ -369,6 +372,7 @@ def _native_select_experts(
     # Required by npu_moe_init_routing
     topk_ids = topk_ids.to(torch.int32)
     topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+    topk_weights = topk_weights * routed_scaling_factor
 
     return topk_weights, topk_ids
 
