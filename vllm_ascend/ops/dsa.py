@@ -190,6 +190,7 @@ def dsa_forward(
     else:
         attn_metadata = forward_context.attn_metadata
 
+    # print(f"{attn_metadata.__class__()=}, {layer_name=}")
     if attn_metadata is None:
         # Profiling run.
         output.fill_(0)
