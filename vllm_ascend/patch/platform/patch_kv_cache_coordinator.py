@@ -235,7 +235,7 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
                     # length shrunk; invalidate previous eagle verifications
                     eagle_verified.clear()
                 curr_hit_length = _new_hit_length
-                compress_ratio = getattr(spec, "compress_ratio", 1)
+                compress_ratio = getattr(spec, "compress_ratio", 0)
                 curr_hit_length = len(hit_blocks[0]) * spec.block_size * max(compress_ratio, 1)
                 for group_id, blocks in zip(group_ids, hit_blocks):
                     hit_blocks_by_group[group_id] = blocks

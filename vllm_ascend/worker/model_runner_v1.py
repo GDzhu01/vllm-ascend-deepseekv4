@@ -144,6 +144,7 @@ from vllm_ascend.utils import (
     lmhead_tp_enable,
     set_weight_prefetch_method,
     should_skip_allreduce_across_dp_group,
+    get_dsv4_compress_ratio,
 )
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 from vllm_ascend.worker.pcp_utils import PCPManager
@@ -2202,7 +2203,7 @@ class NPUModelRunner(GPUModelRunner):
 
             # check
             if isinstance(builder, AscendDSAMetadataBuilder):
-                compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 1)
+                compress_ratio = getattr(attn_group.kv_cache_spec, "compress_ratio", 0)
                 if prefill_ratio_to_sas_metadata is None:
                     prefill_ratio_to_sas_metadata = dict()
                 if decode_ratio_to_sas_metadata is None:
@@ -3369,7 +3370,8 @@ class NPUModelRunner(GPUModelRunner):
         # NOTE: `pad_size` refers to `block_size * num_heads * head_dim * sizeof(dtype)`
         # of indexer scale kvcache spec
         pad_size = 1024 * 1 * 1 * 2
-        if layer_id in [0, 1] or "mtp" in layer_name:
+        compress_ratio = get_dsv4_compress_ratio(hf_config, layer_id)
+        if compress_ratio <= 1:
             # TODO(cmq): DON'T use magic number for the block size and pad_size
             kv_cache_spec_list.append(SWAAttentionSpec(
                 block_size=128,
@@ -3379,7 +3381,7 @@ class NPUModelRunner(GPUModelRunner):
                 sliding_window=hf_config.sliding_window,
                 page_size_padded=pad_size,
             ))
-        elif layer_id % 2 == 0:
+        elif compress_ratio == 4:
             # TODO(cmq): DON'T use magic number for the block size
             kv_cache_spec_list.append(Compress4AttentionSpec(
                 block_size=128,
@@ -3437,7 +3439,7 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.float32,
                 page_size_padded=pad_size,
             ))
-        elif layer_id % 2 != 0:
+        elif compress_ratio == 128:
             # TODO(cmq): DON'T use magic number for the block size
             kv_cache_spec_list.append(Compress128AttentionSpec(
                 block_size=128,
@@ -3473,6 +3475,8 @@ class NPUModelRunner(GPUModelRunner):
                 dtype=torch.float32,
                 page_size_padded=pad_size,
             ))
+        else:
+            raise ValueError(f"Unsupported compress ratio {compress_ratio} for DSV4.")
         return kv_cache_spec_list
 
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
