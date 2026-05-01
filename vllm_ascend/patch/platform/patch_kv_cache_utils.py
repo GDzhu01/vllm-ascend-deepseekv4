@@ -34,6 +34,19 @@ USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
 
 logger = init_logger(__name__)
 
+class AscendKVCacheGroupSpec(KVCacheGroupSpec):
+    """
+    Represents a group of model layers that share the same KV cache block table.
+    These layers are regarded as one layer in the KV cache manager.
+    """
+
+    # The names of model layers in this group
+    layer_names: list[str]
+    # The KV cache spec of this manager layer
+    kv_cache_spec: KVCacheSpec
+    # Whether this group contains EAGLE/MTP draft attention layers.
+    is_eagle_group: bool = False
+
 def estimate_max_model_len_with_multi_groups(
     vllm_config: VllmConfig,
     kv_cache_spec_list: dict[str, KVCacheSpec],
@@ -117,9 +130,9 @@ def check_enough_kv_cache_memory_with_multi_groups(
 
 def create_kv_cache_group_specs_with_multi_groups(
     kv_cache_spec_list: dict[str, list[KVCacheSpec]], grouped_layer_names: list[list[str]]
-) -> list[KVCacheGroupSpec]:
+) -> list[AscendKVCacheGroupSpec]:
     """
-    Create KVCacheGroupSpec object for each kv cache group layer.
+    Create AscendKVCacheGroupSpec object for each kv cache group layer.
     The layers in the same group should share the same
     KVCacheSpec.
 
@@ -131,7 +144,7 @@ def create_kv_cache_group_specs_with_multi_groups(
             names that belong to the same group and should share the same
             KVCacheSpec.
     Returns:
-        A list of KVCacheGroupSpec objects, one for each group.
+        A list of AscendKVCacheGroupSpec objects, one for each group.
     """
     kv_cache_groups = []
 
@@ -154,7 +167,7 @@ def create_kv_cache_group_specs_with_multi_groups(
                 continue
             merged_layer_spec = layer_specs[0].merge(layer_specs)
             kv_cache_groups.append(
-                KVCacheGroupSpec(layer_names_one_group, merged_layer_spec)
+                AscendKVCacheGroupSpec(layer_names_one_group, merged_layer_spec)
             )
 
     return kv_cache_groups
@@ -185,7 +198,7 @@ def is_kv_cache_spec_uniform_with_multi_groups(kv_cache_spec_list: dict[str, lis
 
 def _get_kv_cache_groups_uniform_spec_with_multi_groups(
     kv_cache_specs_list: dict[str, list[KVCacheSpec]],
-) -> list[KVCacheGroupSpec]:
+) -> list[AscendKVCacheGroupSpec]:
     """
     Generates the KV cache configuration for a model with the same KV cache
     spec for all layers.
@@ -194,7 +207,7 @@ def _get_kv_cache_groups_uniform_spec_with_multi_groups(
         kv_cache_specs: The kv cache spec of each attention layer in the model
 
     Returns:
-        The generated KVCacheGroupSpecs
+        The generated AscendKVCacheGroupSpecs
     """
     # Only one spec in a layer, thus grouped_layer_names has no need to take spec list in one
     # layer into account
@@ -258,7 +271,7 @@ def is_kv_cache_type_attention_free_with_multi_groups(kv_cache_spec_list: dict[s
 
 def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
     kv_cache_spec_list: dict[str, list[KVCacheSpec]],
-) -> list[KVCacheGroupSpec]:
+) -> list[AscendKVCacheGroupSpec]:
     """
     Generates the KV cache groups for hybrid models with multiple
     attention types but still with a uniform page size (physical memory per
@@ -319,7 +332,7 @@ def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
     Args:
         kv_cache_spec: The KVCacheSpec of each attention layer in the model
     Returns:
-        The generated KVCacheGroupSpecs
+        The generated AscendKVCacheGroupSpecs
     """
     # Group all layers by kv_cache_spec.
     # E.g., 2 full attention layers and 3 sliding window attention layers,
@@ -388,7 +401,7 @@ def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
     kv_cache_groups = []
     for group_layer_spec, layer_names_one_group in zip(group_layer_specs, grouped_layers):
         kv_cache_groups.append(
-            KVCacheGroupSpec(layer_names_one_group, group_layer_spec)
+            AscendKVCacheGroupSpec(layer_names_one_group, group_layer_spec)
         )
     return kv_cache_groups
     # TODO (wjq) refactor me later
@@ -469,10 +482,27 @@ def is_one_spec_type_in_list(kv_cache_specs_list: dict[str, list[KVCacheSpec]]):
             return False
     return True
 
+def _annotate_eagle_groups_deepseek_v4(
+    vllm_config: VllmConfig,
+    kv_cache_spec_list: dict[str, list[KVCacheSpec]],
+    kv_cache_groups: list[AscendKVCacheGroupSpec],
+) -> None:
+    spec_config = vllm_config.speculative_config
+    if spec_config is None or not spec_config.use_eagle():
+        return
+    # DeepseekV4's MTP attention layer is always the last layer, and we flag whichever
+    # group contains it.
+    # FIXME(yifan): avoid/generalize this hacky check.
+    for kv_cache_spec in kv_cache_spec_list:
+        last_layer = next(reversed(kv_cache_spec))
+        for group in kv_cache_groups:
+            if last_layer in group.layer_names:
+                group.is_eagle_group = True
+                break
 
 def get_kv_cache_groups_with_multi_groups(
     vllm_config: VllmConfig, kv_cache_spec_list: dict[str, list[KVCacheSpec]]
-) -> list[KVCacheGroupSpec]:
+) -> list[AscendKVCacheGroupSpec]:
     """
     Split the layers in the model into groups with the same KV cache spec.
 
@@ -511,12 +541,14 @@ def get_kv_cache_groups_with_multi_groups(
     # have the same physical memory per block per layer. Split the layers
     # into groups with the same number of layers, and thus same total page
     # size.
-    return _get_kv_cache_groups_uniform_page_size_with_multi_groups(kv_cache_spec_list)
+    kv_cache_groups = _get_kv_cache_groups_uniform_page_size_with_multi_groups(kv_cache_spec_list)
+    _annotate_eagle_groups_deepseek_v4(vllm_config, kv_cache_spec_list, kv_cache_groups)
+    return kv_cache_groups
 
 def _project_kv_cache_groups_to_worker(
-    global_kv_cache_groups: list[KVCacheGroupSpec],
+    global_kv_cache_groups: list[AscendKVCacheGroupSpec],
     worker_spec_list: dict[str, list[KVCacheSpec]],
-) -> list[KVCacheGroupSpec]:
+) -> list[AscendKVCacheGroupSpec]:
     """
     Projects global KV cache groups onto a single worker's assigned layers.
 
@@ -531,7 +563,7 @@ def _project_kv_cache_groups_to_worker(
     Returns:
         The projected KV cache groups containing only this worker's layers.
     """
-    projected_groups: list[KVCacheGroupSpec] = []
+    projected_groups: list[AscendKVCacheGroupSpec] = []
     for group in global_kv_cache_groups:
         worker_layer_names = [
             layer_name for layer_name in group.layer_names if layer_name in worker_spec_list
@@ -545,12 +577,12 @@ def _project_kv_cache_groups_to_worker(
                     for layer_name in worker_layer_names
                 },
             )
-        projected_groups.append(KVCacheGroupSpec(worker_layer_names, group_spec))
+        projected_groups.append(AscendKVCacheGroupSpec(worker_layer_names, group_spec))
     return projected_groups
 
 def  get_kv_cache_config_from_groups_multispec(
             vllm_config: VllmConfig,
-            kv_cache_groups: list[KVCacheGroupSpec],
+            kv_cache_groups: list[AscendKVCacheGroupSpec],
             available_memory: int,
     ) -> KVCacheConfig:
         """
