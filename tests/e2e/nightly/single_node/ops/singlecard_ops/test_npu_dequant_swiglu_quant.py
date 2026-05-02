@@ -25,17 +25,15 @@ def dequant_swiglu_quant_golden(
     output_scale = torch.empty((m,), dtype=torch.float32)
 
     start_idx = 0
-    pre_v = 0
-    for group_idx, curr_v in enumerate(group_index.tolist()):
-        curr_v = int(curr_v)
-        group_tokens = curr_v - pre_v
-        pre_v = curr_v
+    for group_idx, group_tokens in enumerate(group_index.tolist()):
+        group_tokens = int(group_tokens)
         if group_tokens <= 0:
             continue
 
-        dequant_out = x[start_idx:curr_v].to(
+        end_idx = start_idx + group_tokens
+        dequant_out = x[start_idx:end_idx].to(
             torch.float32) * weight_scale[group_idx].view(1, -1)
-        dequant_out = dequant_out * activation_scale[start_idx:curr_v].view(
+        dequant_out = dequant_out * activation_scale[start_idx:end_idx].view(
             -1, 1)
 
         gate, up = dequant_out.chunk(2, dim=-1)
@@ -45,10 +43,10 @@ def dequant_swiglu_quant_golden(
 
         abs_max = torch.max(torch.abs(swiglu_out), dim=-1).values
         quant_scale = 127 / abs_max
-        output[start_idx:curr_v] = torch.round(
+        output[start_idx:end_idx] = torch.round(
             swiglu_out * quant_scale.view(-1, 1)).to(torch.int8)
-        output_scale[start_idx:curr_v] = 1 / quant_scale
-        start_idx = curr_v
+        output_scale[start_idx:end_idx] = 1 / quant_scale
+        start_idx = end_idx
 
     return output, output_scale
 
@@ -65,7 +63,8 @@ def test_npu_dequant_swiglu_quant_with_limit():
     weight_scale = torch.rand(group_num, hidden_size * 2,
                               dtype=torch.float32) * 0.10 + 0.05
     activation_scale = torch.rand(m, dtype=torch.float32) * 0.10 + 0.05
-    group_index = torch.tensor([128, 256, 384, 512], dtype=torch.int64)
+    # npu_dequant_swiglu_quant uses per-group token counts, not prefix sums.
+    group_index = torch.tensor([128, 128, 128, 128], dtype=torch.int64)
     clamp_limit = 1.0
     glu_alpha = 1.0
     glu_bias = 0.0
