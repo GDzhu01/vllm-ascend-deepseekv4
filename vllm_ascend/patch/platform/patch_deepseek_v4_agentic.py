@@ -100,8 +100,8 @@ tool_calls_template = (
 )
 tool_calls_block_name: str = "tool_calls"
 ESCAPED_ARGUMENTS_PARAM_NAME = "__vllm_param_arguments__"
-REASONING_EFFORT_MAX_VALUES = frozenset({"max", "xhigh"})
-REASONING_EFFORT_NOOP_VALUES = frozenset({"none", "low", "medium", "high", None})
+REASONING_EFFORT_MAX_VALUES = frozenset({"max"})
+REASONING_EFFORT_NOOP_VALUES = frozenset({"high", None})
 
 tool_output_template: str = "<tool_result>{content}</tool_result>"
 
@@ -147,9 +147,7 @@ TOOLS_TEMPLATE = (
 
 
 def _patch_chat_completion_reasoning_effort() -> None:
-    reasoning_effort_annotation = (
-        Literal["none", "low", "medium", "high", "max", "xhigh"] | None
-    )
+    reasoning_effort_annotation = Literal["high", "max"] | None
     ChatCompletionRequest.__annotations__["reasoning_effort"] = (
         reasoning_effort_annotation
     )
@@ -636,7 +634,7 @@ def _normalize_reasoning_effort(reasoning_effort: str | None) -> str | None:
         return "max"
     if reasoning_effort in REASONING_EFFORT_NOOP_VALUES:
         return None
-    return None
+    raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
 
 def get_deepseek_v4_tokenizer(tokenizer: HfTokenizer) -> HfTokenizer:
@@ -653,9 +651,10 @@ def get_deepseek_v4_tokenizer(tokenizer: HfTokenizer) -> HfTokenizer:
             tools: list[dict[str, Any]] | None = None,
             **kwargs,
         ) -> str | list[int]:
-            thinking = kwargs.get("thinking", False) or kwargs.get(
-                "enable_thinking", False
-            )
+            if "thinking" in kwargs and kwargs["thinking"] is not None:
+                thinking = bool(kwargs["thinking"])
+            else:
+                thinking = bool(kwargs.get("enable_thinking", False))
             thinking_mode = "thinking" if thinking else "chat"
 
             conversation = kwargs.get("conversation", messages)
