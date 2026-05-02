@@ -16,9 +16,6 @@ def dequant_swiglu_quant_golden(
     weight_scale: torch.Tensor,
     activation_scale: torch.Tensor,
     group_index: torch.Tensor,
-    clamp_limit: float,
-    glu_alpha: float,
-    glu_bias: float,
 ):
     m, n = x.shape
     output = torch.empty((m, n // 2), dtype=torch.int8)
@@ -37,9 +34,7 @@ def dequant_swiglu_quant_golden(
             -1, 1)
 
         gate, up = dequant_out.chunk(2, dim=-1)
-        gate = torch.clamp(gate, max=clamp_limit)
-        up = torch.clamp(up, min=-clamp_limit, max=clamp_limit)
-        swiglu_out = gate * torch.sigmoid(glu_alpha * gate) * (up + glu_bias)
+        swiglu_out = gate * torch.sigmoid(gate) * up
 
         abs_max = torch.max(torch.abs(swiglu_out), dim=-1).values
         quant_scale = 127 / abs_max
@@ -52,7 +47,7 @@ def dequant_swiglu_quant_golden(
 
 
 @torch.inference_mode()
-def test_npu_dequant_swiglu_quant_with_limit():
+def test_npu_dequant_swiglu_quant_grouped_dynamic_quant():
     torch.manual_seed(0)
 
     m = 512
@@ -65,13 +60,9 @@ def test_npu_dequant_swiglu_quant_with_limit():
     activation_scale = torch.rand(m, dtype=torch.float32) * 0.10 + 0.05
     # npu_dequant_swiglu_quant uses per-group token counts, not prefix sums.
     group_index = torch.tensor([128, 128, 128, 128], dtype=torch.int64)
-    clamp_limit = 1.0
-    glu_alpha = 1.0
-    glu_bias = 0.0
 
     output_golden, output_scale_golden = dequant_swiglu_quant_golden(
-        x, weight_scale, activation_scale, group_index, clamp_limit, glu_alpha,
-        glu_bias)
+        x, weight_scale, activation_scale, group_index)
 
     output, output_scale = torch.ops._C_ascend.npu_dequant_swiglu_quant(
         x=x.npu(),
@@ -83,10 +74,6 @@ def test_npu_dequant_swiglu_quant_with_limit():
         group_index=group_index.npu(),
         activate_left=True,
         quant_mode=1,
-        swiglu_mode=1,
-        clamp_limit=clamp_limit,
-        glu_alpha=glu_alpha,
-        glu_bias=glu_bias,
     )
 
     torch.testing.assert_close(output.cpu(), output_golden, atol=1, rtol=0)
