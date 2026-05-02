@@ -59,7 +59,7 @@ if [[ "$SOC_VERSION" =~ ^ascend310 ]]; then
     )
     CUSTOM_OPS=$(IFS=';'; echo "${CUSTOM_OPS_ARRAY[*]}")
     SOC_ARG="ascend310p"
-elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
+elif [[ "$SOC_VERSION" =~ ^(ascend)?910b ]]; then
     log "matched SOC branch: ascend910b"
     # ASCEND910B (A2) series
     # dependency: catlass
@@ -204,9 +204,6 @@ else
     # others
     # currently, no custom aclnn ops for other series
     log "no custom ACLNN ops configured for SOC_VERSION=${SOC_VERSION}; skip build_aclnn"
-    if [[ "${SOC_VERSION}" =~ ^910b ]]; then
-        log "hint: received short 910b SOC name; ascend910b branch currently matches only SOC_VERSION starting with ascend910b"
-    fi
     exit 0
 fi
 
