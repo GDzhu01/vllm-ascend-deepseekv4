@@ -1506,16 +1506,13 @@ std::tuple<at::Tensor, at::Tensor> npu_dequant_swiglu_quant(
     double glu_alpha,
     double glu_bias)
 {
-    TORCH_CHECK(x.dim() > 1, "x dim should larger than 1", OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(quant_mode == 0 || quant_mode == 1, "quant_mode only support 0 or 1, but got ", quant_mode,
-                OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(swiglu_mode == 0 || swiglu_mode == 1, "swiglu_mode only support 0 or 1, but got ", swiglu_mode,
-                OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(std::isfinite(clamp_limit) && clamp_limit > 0.0, "clamp_limit should be positive finite",
-                OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(std::isfinite(glu_alpha), "glu_alpha should be finite", OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(std::isfinite(glu_bias), "glu_bias should be finite", OPS_ERROR(ErrCode::PARAM));
-    TORCH_CHECK(x.size(x.dim() - 1) % 2 == 0, "x last dim should be even", OPS_ERROR(ErrCode::PARAM));
+    TORCH_CHECK(x.dim() > 1, "x dim should larger than 1");
+    TORCH_CHECK(quant_mode == 0 || quant_mode == 1, "quant_mode only support 0 or 1, but got ", quant_mode);
+    TORCH_CHECK(swiglu_mode == 0 || swiglu_mode == 1, "swiglu_mode only support 0 or 1, but got ", swiglu_mode);
+    TORCH_CHECK(std::isfinite(clamp_limit) && clamp_limit > 0.0, "clamp_limit should be positive finite");
+    TORCH_CHECK(std::isfinite(glu_alpha), "glu_alpha should be finite");
+    TORCH_CHECK(std::isfinite(glu_bias), "glu_bias should be finite");
+    TORCH_CHECK(x.size(x.dim() - 1) % 2 == 0, "x last dim should be even");
 
     c10::SmallVector<int64_t, 8> y_size;
     c10::SmallVector<int64_t, 8> scale_size;
