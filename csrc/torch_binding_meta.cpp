@@ -1082,6 +1082,34 @@ void npu_scatter_nd_update_v2_meta(
     return;
 }
 
+std::tuple<at::Tensor, at::Tensor> npu_dequant_swiglu_quant_meta(
+    const at::Tensor& x,
+    const c10::optional<at::Tensor>& weight_scale,
+    const c10::optional<at::Tensor>& activation_scale,
+    const c10::optional<at::Tensor>& bias,
+    const c10::optional<at::Tensor>& quant_scale,
+    const c10::optional<at::Tensor>& quant_offset,
+    const c10::optional<at::Tensor>& group_index,
+    bool activate_left,
+    int64_t quant_mode,
+    int64_t swiglu_mode,
+    double clamp_limit,
+    double glu_alpha,
+    double glu_bias)
+{
+    c10::SmallVector<int64_t, 8> y_size;
+    c10::SmallVector<int64_t, 8> scale_size;
+    for (int64_t i = 0; i < x.dim() - 1; ++i) {
+        y_size.push_back(x.size(i));
+        scale_size.push_back(x.size(i));
+    }
+    y_size.push_back(x.size(x.dim() - 1) / 2);
+
+    at::Tensor y = at::empty(y_size, x.options().dtype(c10::ScalarType::Char));
+    at::Tensor scale = at::empty(scale_size, x.options().dtype(c10::ScalarType::Float));
+    return {y, scale};
+}
+
 } // namespace meta
 } // namespace vllm_ascend
 
@@ -1145,5 +1173,6 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("npu_lightning_indexer_quant", &vllm_ascend::meta::npu_lightning_indexer_quant_meta);
     // npu_scatter_nd_update_v2
     ops.impl("npu_scatter_nd_update_v2", &vllm_ascend::meta::npu_scatter_nd_update_v2_meta);
+    ops.impl("npu_dequant_swiglu_quant", &vllm_ascend::meta::npu_dequant_swiglu_quant_meta);
 }
 }
