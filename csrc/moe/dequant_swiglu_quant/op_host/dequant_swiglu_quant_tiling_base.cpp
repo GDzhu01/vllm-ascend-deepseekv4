@@ -30,7 +30,6 @@
     } while (0)
 
 namespace optiling {
-using Ops::NN::Optiling::TilingBaseClass;
 constexpr uint32_t UB_RESERVED_BUFF = 0;          // reserve 0k
 constexpr uint32_t PACK_UINT_IN_CACHE_512B = 512; // pack unit in cache 512B
 constexpr uint32_t ALIGN_UINT_IN_CACHE_32B = 32;  // align unit in cache 32B
@@ -94,9 +93,6 @@ public:
 protected:
     bool IsCapable() override
     {
-        if (Ops::NN::OpTiling::IsRegbaseSocVersion(context_)) {
-            return false;
-        }
         auto shapeGroupIndex = context_->GetOptionalInputShape(6);
         if (shapeGroupIndex == nullptr) {
             return true;

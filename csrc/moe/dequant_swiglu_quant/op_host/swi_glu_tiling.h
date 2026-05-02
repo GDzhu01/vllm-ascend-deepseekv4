@@ -26,8 +26,6 @@
 #include "../tiling_base/tiling_templates_registry.h"
 #include "swi_glu_grad_regbase_tiling.h"
 
-using namespace Ops::NN::Optiling;
-
 namespace optiling {
 const int64_t STATIC_FLOAT16_X = 10000;
 const int64_t STATIC_BFLOAT16_X = 10001;

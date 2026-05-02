@@ -30,10 +30,8 @@
 #include "../tiling_base/tiling_base.h"
 #include "../tiling_base/tiling_templates_registry.h"
 
-using namespace Ops::NN::Optiling;
 namespace optiling
 {
-using Ops::NN::Optiling::TilingBaseClass;
 BEGIN_TILING_DATA_DEF(DequantSwigluQuantBaseTilingData)
 TILING_DATA_FIELD_DEF(int64_t, inDimx);
 TILING_DATA_FIELD_DEF(int64_t, inDimy);

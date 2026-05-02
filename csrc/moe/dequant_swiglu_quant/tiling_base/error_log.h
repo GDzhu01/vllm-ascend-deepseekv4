@@ -1,56 +1,63 @@
-#ifndef OPS_BUILT_IN_OP_TILING_ERROR_LOG_H_
-#define OPS_BUILT_IN_OP_TILING_ERROR_LOG_H_
+/**
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
-#include <string>
-#include "toolchain/slog.h"
+#pragma once
 
-#define OP_LOGI(opname, ...)
-#define OP_LOGW(opname, ...)             \
-    do {                                 \
-        printf("[WARN][%s] ", (opname), ##__VA_ARGS__); \
-        printf("\n");                    \
-    } while (0)
+#include "log/log.h"
 
-#define OP_LOGE_WITHOUT_REPORT(opname, ...) \
-    do {                                    \
-        printf("[ERRORx][%s] ", (opname), ##__VA_ARGS__);  \
-        printf("\n");                       \
-    } while (0)
+#ifndef OP_LOGE_FOR_INVALID_DTYPE
+#define OP_LOGE_FOR_INVALID_DTYPE(opname, param, actual, expected) \
+    OP_LOGE(opname, "Invalid dtype for %s, actual: %s, expected: %s", param, actual, expected)
+#endif
 
-#define OP_LOGE(opname, ...)              \
-    do {                                  \
-        printf("[ERROR][%s] ", (opname), ##__VA_ARGS__);    \
-        printf("\n");                     \
-    } while (0)
+#ifndef OP_LOGE_FOR_INVALID_DTYPES_WITH_REASON
+#define OP_LOGE_FOR_INVALID_DTYPES_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid dtype for %s, actual: %s, reason: %s", param, actual, reason)
+#endif
 
-#define OP_LOGD(opname, ...)
+#ifndef OP_LOGE_FOR_INVALID_SHAPE
+#define OP_LOGE_FOR_INVALID_SHAPE(opname, param, actual, expected) \
+    OP_LOGE(opname, "Invalid shape for %s, actual: %s, expected: %s", param, actual, expected)
+#endif
 
-namespace optiling {
+#ifndef OP_LOGE_FOR_INVALID_SHAPE_WITH_REASON
+#define OP_LOGE_FOR_INVALID_SHAPE_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid shape for %s, actual: %s, reason: %s", param, actual, reason)
+#endif
 
-#define VECTOR_INNER_ERR_REPORT_TILIING(op_name, err_msg, ...)   \
-    do {                                                         \
-        OP_LOGE_WITHOUT_REPORT(op_name, err_msg, ##__VA_ARGS__); \
-    } while (0)
+#ifndef OP_LOGE_FOR_INVALID_SHAPES_WITH_REASON
+#define OP_LOGE_FOR_INVALID_SHAPES_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid shapes for %s, actual: %s, reason: %s", param, actual, reason)
+#endif
 
-// Modify OP_TILING_CHECK macro to ensure proper handling of expressions
-#define OP_CHECK_IF(cond, log_func, expr) \
-    do {                                      \
-        if (cond) {                           \
-            log_func;                         \
-            expr;                             \
-        }                                     \
-    } while (0)
+#ifndef OP_LOGE_FOR_INVALID_SHAPEDIM
+#define OP_LOGE_FOR_INVALID_SHAPEDIM(opname, param, actual, expected) \
+    OP_LOGE(opname, "Invalid shape dim for %s, actual: %s, expected: %s", param, actual, expected)
+#endif
 
+#ifndef OP_LOGE_FOR_INVALID_SHAPEDIMS_WITH_REASON
+#define OP_LOGE_FOR_INVALID_SHAPEDIMS_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid shape dims for %s, actual: %s, reason: %s", param, actual, reason)
+#endif
 
+#ifndef OP_LOGE_FOR_INVALID_SHAPESIZE
+#define OP_LOGE_FOR_INVALID_SHAPESIZE(opname, param, actual, expected) \
+    OP_LOGE(opname, "Invalid shape size for %s, actual: %s, expected: %s", param, actual, expected)
+#endif
 
-#define OP_CHECK_NULL_WITH_CONTEXT(context, ptr)                          \
-    do {                                                                  \
-        if ((ptr) == nullptr) {                                           \
-            OP_LOGE(context->GetNodeType(), "%s is null", #ptr);               \
-            return ge::GRAPH_FAILED;                                      \
-        }                                                                 \
-    } while (0)
+#ifndef OP_LOGE_FOR_INVALID_SHAPESIZES_WITH_REASON
+#define OP_LOGE_FOR_INVALID_SHAPESIZES_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid shape size for %s, actual: %s, reason: %s", param, actual, reason)
+#endif
 
-}  // namespace optiling
-
-#endif  // OPS_BUILT_IN_OP_TILING_ERROR_LOG_H_
+#ifndef OP_LOGE_FOR_INVALID_VALUE_WITH_REASON
+#define OP_LOGE_FOR_INVALID_VALUE_WITH_REASON(opname, param, actual, reason) \
+    OP_LOGE(opname, "Invalid value for %s, actual: %s, reason: %s", param, actual, reason)
+#endif

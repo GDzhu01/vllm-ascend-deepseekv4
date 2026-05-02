@@ -23,7 +23,6 @@
 using namespace AscendC;
 using namespace ge;
 namespace optiling {
-using Ops::NN::Optiling::TilingBaseClass;
 
 constexpr int64_t ATTR_ACTIVATE_LEFT_INDEX = 0;
 constexpr int64_t ATTR_QUANT_MODE_INDEX = 1;
@@ -774,9 +773,6 @@ ge::graphStatus DequantSwigluQuantV35DskTiling::GetShapeAttrsInfo() {
 }
 
 bool DequantSwigluQuantV35DskTiling::IsCapable() {
-  if (!Ops::NN::OpTiling::IsRegbaseSocVersion(context_)) {
-    return false;
-  }
   if (static_cast<size_t>(activateDim_) != xDimNum_ - static_cast<size_t>(1)) {
     OP_LOGI(context_->GetNodeName(), "transform tiling template 2!");
     return false;
@@ -1165,9 +1161,6 @@ ge::graphStatus DequantSwigluQuantV35NlastTiling::GetShapeAttrsInfo()
 
 bool DequantSwigluQuantV35NlastTiling::IsCapable()
 {
-  if (!Ops::NN::OpTiling::IsRegbaseSocVersion(context_)) {
-    return false;
-  }
   if (static_cast<size_t>(actDimIndex_) == xShape_.GetDimNum() - 1) {
     return false;
   }

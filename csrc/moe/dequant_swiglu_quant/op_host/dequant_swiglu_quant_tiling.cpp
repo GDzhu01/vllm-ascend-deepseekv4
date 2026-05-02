@@ -18,7 +18,6 @@
 #include "swi_glu_tiling.h"
 #include "../tiling_base/tiling_templates_registry.h"
 
-using Ops::NN::Optiling::TilingRegistry;
 // using namespace AscendC;
 using namespace ge;
 namespace optiling
@@ -557,9 +556,6 @@ bool DequantSwigluQuantDskTiling::IsPerformanceAndGroupIndexBrach() {
 }
 
 bool DequantSwigluQuantDskTiling::IsCapable() {
-  if (Ops::NN::OpTiling::IsRegbaseSocVersion(context_)) {
-    return false;
-  }
   return IsPerformanceAndGroupIndexBrach();
 }
 
