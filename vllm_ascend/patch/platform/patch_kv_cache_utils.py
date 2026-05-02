@@ -635,6 +635,19 @@ def  get_kv_cache_config_from_groups_multispec(
             # (sw.1, padding) will be: (group_size = 2)
             # full.0, sw.0, sw.1: share a Tensor with size=available_memory//2
             # full.1, sw.2: share another Tensor with size=available_memory//2
+            #
+            # Plan A: deterministic two-phase allocation.
+            # Phase 1 - compute layer -> tensor index mapping:
+            #   For each layer (visited in deterministic order), pick the
+            #   first tensor slot whose used-group set has no overlap with
+            #   the layer's group memberships, and reserve those groups in
+            #   that tensor slot.
+            # Phase 2 - materialize KVCacheTensor list from the mapping.
+            # Phase 3 - assert that every layer in any group has been
+            #   allocated. This replaces the silent skipping behavior in
+            #   the previous round-robin loop, where cross-group layers
+            #   could be lost after `sort kvcache spec list` (commit
+            #   0a41e0e6) reordered the iteration.
             group_size = max(len(group.layer_names) for group in kv_cache_groups)
 
             page_size = get_uniform_page_size(
@@ -642,37 +655,72 @@ def  get_kv_cache_config_from_groups_multispec(
             assert group_size > 0, "group_size must be greater than 0"
             num_blocks = get_num_blocks(vllm_config, group_size, available_memory,
                                         page_size)
-            layer_kv_cache_group_idx = defaultdict(set)
-            for i, group in enumerate(kv_cache_groups):
+
+            # Build layer -> set of group indices.
+            layer_to_groups: dict[str, set[int]] = defaultdict(set)
+            for j, group in enumerate(kv_cache_groups):
                 for layer_name in group.layer_names:
-                    layer_kv_cache_group_idx[layer_name].add(i)
-            used_layer_kv_cache_group_idx = defaultdict(set)
-            kv_cache_tensors = []
-            allocate_complete_layers = []
-            # NOTE(zxr): we assume that each layer use only one kv_cache_tensor
-            for i in range(group_size):
-                shared_by = []
-                used_group_idx_set = []
-                for j in range(len(kv_cache_groups)):
-                    for layer_name in kv_cache_groups[j].layer_names:
-                        if layer_name in allocate_complete_layers:
-                            continue
-                        group_used = False
-                        for gid in layer_kv_cache_group_idx[layer_name]:
-                            if gid in used_group_idx_set:
-                                group_used = True
-                                break
-                            else:
-                                used_layer_kv_cache_group_idx[layer_name].add(gid)
-                        if group_used is True:
-                            continue
-                        shared_by.append(layer_name)
-                        used_group_idx_set.extend(layer_kv_cache_group_idx[layer_name])
-                        if len(used_layer_kv_cache_group_idx[layer_name]) == len(layer_kv_cache_group_idx[layer_name]):
-                            allocate_complete_layers.append(layer_name)
-                kv_cache_tensors.append(
-                    KVCacheTensor(size=page_size * num_blocks,
-                                  shared_by=shared_by))
+                    layer_to_groups[layer_name].add(j)
+
+            # Deterministic layer iteration order: first occurrence in the
+            # group list. This is independent of any sort applied to
+            # `kv_cache_groups` itself, but stable across runs.
+            ordered_layers: list[str] = []
+            seen: set[str] = set()
+            for group in kv_cache_groups:
+                for layer_name in group.layer_names:
+                    if layer_name not in seen:
+                        seen.add(layer_name)
+                        ordered_layers.append(layer_name)
+
+            # Phase 1: assign each layer to a tensor slot (0..group_size-1).
+            tensor_used_groups: list[set[int]] = [set() for _ in range(group_size)]
+            layer_to_tensor: dict[str, int] = {}
+            for layer_name in ordered_layers:
+                needed = layer_to_groups[layer_name]
+                placed = False
+                for ti in range(group_size):
+                    if not (needed & tensor_used_groups[ti]):
+                        tensor_used_groups[ti] |= needed
+                        layer_to_tensor[layer_name] = ti
+                        placed = True
+                        break
+                if not placed:
+                    raise RuntimeError(
+                        f"KV cache planning failed: layer '{layer_name}' "
+                        f"belongs to groups {sorted(needed)} but no tensor "
+                        f"slot among {group_size} can accept it without "
+                        f"group conflict. tensor_used_groups="
+                        f"{[sorted(s) for s in tensor_used_groups]}"
+                    )
+
+            # Phase 2: materialize tensors. Preserve original `layer_names`
+            # order within each shared_by list so downstream layout is
+            # deterministic.
+            tensor_layer_lists: list[list[str]] = [[] for _ in range(group_size)]
+            for layer_name in ordered_layers:
+                tensor_layer_lists[layer_to_tensor[layer_name]].append(layer_name)
+            kv_cache_tensors = [
+                KVCacheTensor(size=page_size * num_blocks,
+                              shared_by=tensor_layer_lists[ti])
+                for ti in range(group_size)
+            ]
+
+            # Phase 3: strong completeness check. Surfaces any planning
+            # bug at config time instead of producing silently-wrong KV
+            # cache mappings at runtime.
+            all_layers_in_groups = {
+                ln for g in kv_cache_groups for ln in g.layer_names
+            }
+            allocated_layers = {
+                ln for t in kv_cache_tensors for ln in t.shared_by
+            }
+            missing = all_layers_in_groups - allocated_layers
+            extra = allocated_layers - all_layers_in_groups
+            assert not missing and not extra, (
+                f"KV cache allocation invariant violated. "
+                f"missing={sorted(missing)} extra={sorted(extra)}"
+            )
         return KVCacheConfig(
             num_blocks=num_blocks,
             kv_cache_tensors=kv_cache_tensors,
