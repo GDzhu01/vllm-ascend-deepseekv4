@@ -372,7 +372,14 @@ def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
     # group_size = 22
     # TODO(lxs): generalize the logic for determining group size.
     # Now, we use num_hidden_layers // 2 as the group size for DSV4.
-    group_size = cdiv(len(kv_cache_spec_list), 2)
+    # MTP layers are extra dense draft layers; keep them on the non-compress
+    # side instead of letting them shrink the number of KV tensors and drop the
+    # tail main-model layer from allocation.
+    num_mtp_layers = sum(
+        1 for layer_name in kv_cache_spec_list
+        if ".mtp." in f".{layer_name}."
+    )
+    group_size = cdiv(len(kv_cache_spec_list) - num_mtp_layers, 2) + num_mtp_layers
     grouped_layers = []
     group_layer_specs = []
     for layer_spec, layers in same_type_layers.items():
@@ -636,6 +643,21 @@ def  get_kv_cache_config_from_groups_multispec(
             # full.0, sw.0, sw.1: share a Tensor with size=available_memory//2
             # full.1, sw.2: share another Tensor with size=available_memory//2
             group_size = max(len(group.layer_names) for group in kv_cache_groups)
+            unique_layer_names = {
+                layer_name
+                for group in kv_cache_groups
+                for layer_name in group.layer_names
+            }
+            num_mtp_layers = sum(
+                1 for layer_name in unique_layer_names
+                if ".mtp." in f".{layer_name}."
+            )
+            if num_mtp_layers:
+                group_size = max(
+                    group_size,
+                    cdiv(len(unique_layer_names) - num_mtp_layers, 2) +
+                    num_mtp_layers,
+                )
 
             page_size = get_uniform_page_size(
                 [group.kv_cache_spec for group in kv_cache_groups])
@@ -657,18 +679,13 @@ def  get_kv_cache_config_from_groups_multispec(
                     for layer_name in kv_cache_groups[j].layer_names:
                         if layer_name in allocate_complete_layers:
                             continue
-                        group_used = False
-                        for gid in layer_kv_cache_group_idx[layer_name]:
-                            if gid in used_group_idx_set:
-                                group_used = True
-                                break
-                            else:
-                                used_layer_kv_cache_group_idx[layer_name].add(gid)
-                        if group_used is True:
+                        group_idxs = layer_kv_cache_group_idx[layer_name]
+                        if any(gid in used_group_idx_set for gid in group_idxs):
                             continue
                         shared_by.append(layer_name)
-                        used_group_idx_set.extend(layer_kv_cache_group_idx[layer_name])
-                        if len(used_layer_kv_cache_group_idx[layer_name]) == len(layer_kv_cache_group_idx[layer_name]):
+                        used_group_idx_set.extend(group_idxs)
+                        used_layer_kv_cache_group_idx[layer_name].update(group_idxs)
+                        if len(used_layer_kv_cache_group_idx[layer_name]) == len(group_idxs):
                             allocate_complete_layers.append(layer_name)
                 kv_cache_tensors.append(
                     KVCacheTensor(size=page_size * num_blocks,
