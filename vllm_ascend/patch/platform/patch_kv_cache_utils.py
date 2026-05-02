@@ -673,6 +673,42 @@ def  get_kv_cache_config_from_groups_multispec(
                 kv_cache_tensors.append(
                     KVCacheTensor(size=page_size * num_blocks,
                                   shared_by=shared_by))
+
+        # === Fix: Handle missing layers due to group conflicts after sorting ===
+        # Some layers may belong to multiple groups and get skipped during shared_by
+        # construction due to group_used check. Add them to existing tensor's shared_by.
+        all_layers_in_groups = set()
+        for group in kv_cache_groups:
+            for layer_name in group.layer_names:
+                all_layers_in_groups.add(layer_name)
+
+        allocated_layers = set()
+        for kv_cache_tensor in kv_cache_tensors:
+            for layer_name in kv_cache_tensor.shared_by:
+                allocated_layers.add(layer_name)
+
+        missing_layers = all_layers_in_groups - allocated_layers
+        if missing_layers:
+            logger.warning(
+                "Adding missing layers to existing KVCacheTensor shared_by: %s. "
+                "These layers were skipped due to group conflicts after sorting.",
+                missing_layers
+            )
+            # Add missing layers to existing tensor's shared_by instead of creating new ones
+            for layer_name in missing_layers:
+                # Strategy: Find tensor with smallest shared_by (least utilized)
+                best_tensor_idx = min(
+                    range(len(kv_cache_tensors)),
+                    key=lambda i: len(kv_cache_tensors[i].shared_by)
+                )
+                
+                kv_cache_tensors[best_tensor_idx].shared_by.append(layer_name)
+                logger.info(
+                    "Added missing layer '%s' to kv_cache_tensor[%d] shared_by",
+                    layer_name, best_tensor_idx
+                )
+        # === END Fix ===
+
         return KVCacheConfig(
             num_blocks=num_blocks,
             kv_cache_tensors=kv_cache_tensors,
