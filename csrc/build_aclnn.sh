@@ -28,7 +28,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910b ]]; then
 
     CUSTOM_OPS_ARRAY=(
         "dequant_swiglu_quant"
-        # "scatter_nd_update_v2"
+        "scatter_nd_update_v2"
         # "moe_grouped_matmul"
         # "grouped_matmul_swiglu_quant_weight_nz_tensor_list"
         # "lightning_indexer_vllm"
