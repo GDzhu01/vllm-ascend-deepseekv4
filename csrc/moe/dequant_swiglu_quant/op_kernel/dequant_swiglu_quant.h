@@ -32,6 +32,32 @@ constexpr static int64_t MASK_BLK_STRIDE = 8;
 constexpr static int64_t SWI_FACTOR = 2;
 constexpr static float DYNAMIC_QUANT_FACTOR = 1.0 / 127.0;
 
+__aicore__ inline void CopyLocalContiguousFloat(
+    const LocalTensor<float>& dst, const LocalTensor<float>& src, uint32_t count)
+{
+    constexpr uint32_t MAX_REPEAT_TIMES = 255;
+    constexpr uint32_t MAX_REPEAT_ELEMS = MASK_NUM_T32 * MAX_REPEAT_TIMES;
+    CopyRepeatParams copyParams{1, 1, MASK_BLK_STRIDE, MASK_BLK_STRIDE};
+    uint32_t offset = 0;
+
+    while (count >= MAX_REPEAT_ELEMS) {
+        Copy(dst[offset], src[offset], MASK_NUM_T32, MAX_REPEAT_TIMES, copyParams);
+        offset += MAX_REPEAT_ELEMS;
+        count -= MAX_REPEAT_ELEMS;
+    }
+
+    if (count >= MASK_NUM_T32) {
+        uint8_t repeatTimes = static_cast<uint8_t>(count / MASK_NUM_T32);
+        Copy(dst[offset], src[offset], MASK_NUM_T32, repeatTimes, copyParams);
+        offset += repeatTimes * MASK_NUM_T32;
+        count -= repeatTimes * MASK_NUM_T32;
+    }
+
+    if (count > 0) {
+        Copy(dst[offset], src[offset], count, 1, copyParams);
+    }
+}
+
 TEMPLATE_DSQ_DECLARE
 class DequantSwigluQuantBase
 {
@@ -606,8 +632,8 @@ __aicore__ inline void DequantSwigluQuantBase<TEMPLATE_DSQ_ARGS>::SwiGluGate(
     LocalTensor<float> tmpUbF32Act = tmpUbF32;
     LocalTensor<float> tmpUbF32Gate = tmpUbF32[calEleNum];
     // 前一半作为 tmpUbF32Act，后一半作为 tmpUbF32Gate
-    Copy(tmpUbF32Act, xLocalF32, calEleNum);
-    Copy(tmpUbF32Gate, xLocalF32[calEleNum], calEleNum);
+    CopyLocalContiguousFloat(tmpUbF32Act, xLocalF32, calEleNum);
+    CopyLocalContiguousFloat(tmpUbF32Gate, xLocalF32[calEleNum], calEleNum);
     PipeBarrier<PIPE_V>();
 
     // tmpUbF32Gate
