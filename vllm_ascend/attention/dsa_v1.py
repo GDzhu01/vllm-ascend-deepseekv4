@@ -46,10 +46,6 @@ BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
 
-def _seq_lens_from_cu_seqlens(cu_seqlens: torch.Tensor) -> torch.Tensor:
-    return (cu_seqlens[1:] - cu_seqlens[:-1]).contiguous()
-
-
 def hadamard_transform_ref(x: torch.Tensor, hadamard: torch.Tensor, scale:int =1.0,):
     x_shape = x.shape
     dim = x.shape[-1]
@@ -1352,7 +1348,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table=compressor_kv_state_metadata.prefill.block_table,
                 score_block_table=compressor_score_state_metadata.prefill.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
+                seqused=None,
                 start_pos=compress_common_attn_metadata.prefill.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1561,7 +1557,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table=compressor_kv_state_metadata.decode.block_table,
                 score_block_table=compressor_score_state_metadata.decode.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
+                seqused=None,
                 start_pos=compress_common_attn_metadata.decode.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1702,7 +1698,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table=kv_block_table,
             score_block_table=score_block_table,
             cu_seqlens=actual_seq_lengths_query,
-            seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
+            seqused=None,
             start_pos=start_pos,
             rope_head_dim=self.rope_head_dim,
             cmp_ratio=self.compress_ratio,
