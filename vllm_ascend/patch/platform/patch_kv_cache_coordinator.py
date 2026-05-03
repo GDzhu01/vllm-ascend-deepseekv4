@@ -323,6 +323,7 @@ def find_longest_cache_hit(
         # sliding_window_contiguous_blocks),
         # which is good for low cache hit rate scenarios.
         max_num_blocks = max_length // kv_cache_spec.block_size
+        max_num_blocks = min(max_num_blocks, len(block_hashes))
         computed_blocks = tuple(
             [block_pool.null_block] * max_num_blocks
             for _ in range(len(kv_cache_group_ids))
