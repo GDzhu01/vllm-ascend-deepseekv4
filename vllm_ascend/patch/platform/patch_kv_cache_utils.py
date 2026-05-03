@@ -382,6 +382,7 @@ def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
     group_size = cdiv(len(kv_cache_spec_list) - num_mtp_layers, 2) + num_mtp_layers
     grouped_layers = []
     group_layer_specs = []
+    first_c4_layer_name = ""
     for layer_spec, layers in same_type_layers.items():
         num_padding_layers = group_size - len(layers) % group_size
         if num_padding_layers != group_size:
@@ -402,8 +403,21 @@ def _get_kv_cache_groups_uniform_page_size_with_multi_groups(
         # the same and will cause memory waste.
         # To avoid this, we assign layers[i::num_groups] to the i-th group
         # instead of layers[i * group_size: (i + 1) * group_size]
+        mtp_layer_names = set()
+        for layer_name in layers:
+            if "mtp" in layer_name:
+                mtp_layer_names.add(layer_name)
+        layers_without_mtp = list(set(layers) - mtp_layer_names)
+        sort_layers = sorted(layers_without_mtp, key=lambda x: int(x.split(".")[2]))
+        # NOTE(zxr): first group must be C4.
+        if first_c4_layer_name == "":
+            first_c4_layer_name = sort_layers[0]
+        elif num_groups > 1:
+            first_c4_idx = sort_layers.index(first_c4_layer_name)
+            sort_layers = sort_layers[first_c4_idx:] + sort_layers[:first_c4_idx]
+        sort_layers.extend(list(mtp_layer_names))
         for i in range(num_groups):
-            grouped_layers.append(layers[i::num_groups])
+            grouped_layers.append(sort_layers[i::num_groups])
             group_layer_specs.append(layer_spec)
     kv_cache_groups = []
     for group_layer_spec, layer_names_one_group in zip(group_layer_specs, grouped_layers):
@@ -687,9 +701,10 @@ def  get_kv_cache_config_from_groups_multispec(
                         used_layer_kv_cache_group_idx[layer_name].update(group_idxs)
                         if len(used_layer_kv_cache_group_idx[layer_name]) == len(group_idxs):
                             allocate_complete_layers.append(layer_name)
-                kv_cache_tensors.append(
-                    KVCacheTensor(size=page_size * num_blocks,
-                                  shared_by=shared_by))
+                if len(shared_by) > 0:
+                    kv_cache_tensors.append(
+                        KVCacheTensor(size=page_size * num_blocks,
+                                    shared_by=shared_by))
         return KVCacheConfig(
             num_blocks=num_blocks,
             kv_cache_tensors=kv_cache_tensors,
