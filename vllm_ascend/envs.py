@@ -107,9 +107,16 @@ env_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ASCEND_FUSION_OP_TRANSPOSE_KV_CACHE_BY_BLOCK": lambda: bool(
         int(os.getenv("VLLM_ASCEND_FUSION_OP_TRANSPOSE_KV_CACHE_BY_BLOCK", "1"))
     ),
-    # Whether to use MultiBlockPool for KV cache management
+    # Whether to use MultiBlockPool for KV cache management.
     "USE_MULTI_BLOCK_POOL":
     lambda: bool(int(os.getenv("USE_MULTI_BLOCK_POOL", '0'))),
+    # Whether to use Ascend multi-group KV cache management. This keeps the
+    # upstream hybrid shared_by tensor layout, but uses Ascend's compressed-KV
+    # aware block accounting for DeepSeek-V4.
+    "VLLM_ASCEND_USE_MULTI_GROUPS_KV_CACHE": lambda: bool(
+        int(
+            os.getenv("VLLM_ASCEND_USE_MULTI_GROUPS_KV_CACHE",
+                      os.getenv("USE_MULTI_GROUPS_KV_CACHE", '0')))),
 }
 
 # end-env-vars-definition

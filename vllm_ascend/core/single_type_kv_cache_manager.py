@@ -8,7 +8,7 @@ from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_utils import BlockHashList, KVCacheBlock
 from vllm.v1.core.single_type_kv_cache_manager import (
     SingleTypeKVCacheManager, SlidingWindowManager, FullAttentionManager, spec_manager_map)
-from vllm.v1.kv_cache_interface import KVCacheSpec, AttentionSpec, FullAttentionSpec, MLAAttentionSpec
+from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
 from vllm.v1.request import Request
 
 from vllm_ascend.core.kv_cache_spec import (CompressAttentionSpec, # --
@@ -32,6 +32,14 @@ class CompressAttentionManager(FullAttentionManager):
         self.compress_ratio = kv_cache_spec.compress_ratio
         self._null_block = block_pool.null_block
 
+    def _num_storage_tokens(self, num_tokens: int) -> int:
+        if self.compress_ratio <= 1:
+            return num_tokens
+        return num_tokens // self.compress_ratio
+
+    def _num_complete_tokens(self, num_tokens: int) -> int:
+        return self._num_storage_tokens(num_tokens)
+
     def get_num_blocks_to_allocate(
         self,
         request_id: str,
@@ -44,8 +52,9 @@ class CompressAttentionManager(FullAttentionManager):
         # speculative decoding (MTP/EAGLE) with linear attention.
         # assert isinstance(self.kv_cache_spec, (CompressAttentionSpec, C4IndexerSpec))
 
-        num_tokens //= self.compress_ratio
-        num_tokens_main_model //= self.compress_ratio
+        num_tokens = self._num_storage_tokens(num_tokens)
+        num_tokens_main_model = self._num_storage_tokens(
+            num_tokens_main_model)
 
         return super().get_num_blocks_to_allocate(request_id, num_tokens,
                                                   new_computed_blocks, total_computed_tokens, num_tokens_main_model)
@@ -85,7 +94,8 @@ class CompressAttentionManager(FullAttentionManager):
         num_total_computed_tokens = (
             num_local_computed_tokens + num_external_computed_tokens
         )
-        num_total_computed_tokens //= self.compress_ratio
+        num_total_computed_tokens = self._num_storage_tokens(
+            num_total_computed_tokens)
         num_skipped_tokens = self.get_num_skipped_tokens(num_total_computed_tokens)
         num_skipped_blocks = num_skipped_tokens // self.block_size
         if num_skipped_blocks > 0:
@@ -121,8 +131,7 @@ class CompressAttentionManager(FullAttentionManager):
                 cdiv(num_total_computed_tokens, self.block_size) - len(req_blocks)
             )
             req_blocks.extend(allocated_blocks)
-            if type(self.kv_cache_spec) is FullAttentionSpec:
-                self.new_block_ids.extend(b.block_id for b in allocated_blocks)
+            self.new_block_ids.extend(b.block_id for b in allocated_blocks)
 
 
     def allocate_new_blocks(self, request_id: str,
@@ -139,9 +148,10 @@ class CompressAttentionManager(FullAttentionManager):
         Returns:
             The new allocated blocks.
         """
-        num_tokens //= self.compress_ratio
+        num_tokens = self._num_storage_tokens(num_tokens)
         ## TODO: check spec decode
-        num_tokens_main_model //= self.compress_ratio
+        num_tokens_main_model = self._num_storage_tokens(
+            num_tokens_main_model)
 
         req_blocks = self.req_to_blocks[request_id]
         num_required_blocks = cdiv(num_tokens, self.block_size)
@@ -152,6 +162,7 @@ class CompressAttentionManager(FullAttentionManager):
             new_blocks = self.block_pool.get_new_blocks(
                 num_new_blocks)
             req_blocks.extend(new_blocks)
+            self.new_block_ids.extend(b.block_id for b in new_blocks)
             return new_blocks
 
     def cache_blocks(self, request: Request, num_tokens: int) -> None:
@@ -163,7 +174,7 @@ class CompressAttentionManager(FullAttentionManager):
             num_tokens: The total number of tokens that need to be cached
                 (including tokens that are already cached).
         """
-        num_tokens //= self.compress_ratio
+        num_tokens = self._num_complete_tokens(num_tokens)
 
         return super().cache_blocks(request, num_tokens)
 

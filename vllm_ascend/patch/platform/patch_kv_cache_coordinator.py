@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM projectx
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import sys
 from collections.abc import Sequence
+from math import lcm
 
 import vllm
 from vllm.v1.core.block_pool import BlockPool
@@ -22,7 +23,9 @@ from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec, FullAttention
 
 from vllm_ascend.core.single_type_kv_cache_manager import \
     get_manager_for_kv_cache_spec
-from math import lcm
+from vllm_ascend import envs
+
+USE_MULTI_GROUPS_KV_CACHE = envs.VLLM_ASCEND_USE_MULTI_GROUPS_KV_CACHE
 
 
 class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
@@ -58,6 +61,8 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
             enable_kv_cache_events,
             metrics_collector,
         )
+        self.block_pool._ascend_reuse_freed_blocks_first = (
+            kv_cache_config.needs_kv_cache_zeroing)
 
         # KV cache group indices that get the EAGLE last-block drop.
         self.eagle_group_ids: set[int] = {

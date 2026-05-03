@@ -15,13 +15,16 @@
 
 import math
 import os
+from types import SimpleNamespace
 from threading import Lock
 from unittest import mock
 
+import numpy as np
 import pytest
 import torch
 from vllm.config import (CompilationConfig, ModelConfig, ParallelConfig,
                          VllmConfig)
+from vllm.v1.kv_cache_interface import MLAAttentionSpec
 
 from tests.ut.base import TestBase
 from vllm_ascend import utils
@@ -155,6 +158,36 @@ class TestUtils(TestBase):
         utils.vllm_version_is("1.0.0")
         hits = utils.vllm_version_is.cache_info().hits
         self.assertEqual(hits, 1)
+
+    def test_get_compressed_pos_counts_complete_windows_only(self):
+        kv_cache_spec = MLAAttentionSpec(block_size=128,
+                                         num_kv_heads=1,
+                                         head_size=8,
+                                         dtype=torch.float32,
+                                         compress_ratio=4,
+                                         model_version="svf")
+        kv_cache_groups = [SimpleNamespace(kv_cache_spec=kv_cache_spec)]
+        num_computed_tokens = np.array([0, 3, 4, 7, 240], dtype=np.int32)
+        num_scheduled_tokens = np.array([3, 1, 1, 5, 40], dtype=np.int32)
+        arrange_np = np.arange(num_computed_tokens.shape[0], dtype=np.int32)
+
+        positions, req_indices, counts = utils.get_compressed_pos_and_indices(
+            num_computed_tokens,
+            num_scheduled_tokens,
+            arrange_np,
+            True,
+            kv_cache_groups,
+        )
+
+        np.testing.assert_array_equal(counts[0],
+                                      np.array([0, 1, 0, 2, 10],
+                                               dtype=np.int32))
+        np.testing.assert_array_equal(
+            positions[0],
+            np.array([0, 1, 2, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69]))
+        np.testing.assert_array_equal(
+            req_indices[0],
+            np.array([1, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]))
 
     def test_get_max_hidden_layers(self):
         from transformers import PretrainedConfig

@@ -591,14 +591,16 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             pad_positions = F.pad(input_positions, (0, pad_right), value=0.0)
             return pad_positions
 
-        def _get_cmp_seq_lens(prefill_seq_lens, compress_ratio):
+        def _get_cmp_seq_lens(seq_lens, compress_ratio):
             # Note(qcs): some models use compress_ratio=0 as non-compression tag.
             _cmp_seq_lens = (
-                prefill_seq_lens // compress_ratio if compress_ratio >= 1 
-                else prefill_seq_lens
+                seq_lens // compress_ratio if compress_ratio >= 1
+                else seq_lens
             )
             return torch.concat(
-                (torch.tensor([0], device=_cmp_seq_lens.device),
+                (torch.zeros(1,
+                             dtype=_cmp_seq_lens.dtype,
+                             device=_cmp_seq_lens.device),
                  torch.cumsum(_cmp_seq_lens, -1)),
                 dim=-1)
 
@@ -612,10 +614,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             mask = ((decode_input_positions + 1) % compress_ratio) == 0
             compressed_decode_num = mask.sum()
 
-            end = min(
-                self.num_prefill_tokens,
-                self.num_prefill_tokens // compress_ratio + self.num_prefills)
-            return compressed_decode_num, end
+            prefill_mask = ((prefill_input_positions + 1) %
+                            compress_ratio) == 0
+            prefill_compressed_num = prefill_mask.sum()
+            return compressed_decode_num, prefill_compressed_num
 
         if self.prefill_ratio_to_sas_metadata.get(f"c{self.compressor_ratio}_cos", None) is None:
             compress_cos, compress_sin = get_cos_and_sin_dsa(
@@ -680,6 +682,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     device=str(self.seqused_q.device))
             sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
         elif self.compressor_ratio == 4:
+            cu_c4_cmp_seqlen_list = _get_cmp_seq_lens(prefill_seq_lens, 4)
             if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
                 self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
@@ -707,6 +710,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     device=str(self.seqused_q.device))
             sas_metadata = self.prefill_ratio_to_sas_metadata[layer_name]
         else:
+            cu_c128_cmp_seqlen_list = _get_cmp_seq_lens(
+                prefill_seq_lens, 128)
             if self.prefill_ratio_to_sas_metadata.get(layer_name) is None:
                 self.prefill_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
@@ -875,6 +880,17 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             compressed_decode_num = mask.sum().item()
             return compressed_decode_num
 
+        def _get_decode_cmp_seq_lens(seq_lens, compress_ratio):
+            if compress_ratio <= 1:
+                return self.cu_seqlens_cmp_kv
+            cmp_seq_lens = seq_lens // compress_ratio
+            return torch.concat(
+                (torch.zeros(1,
+                             dtype=cmp_seq_lens.dtype,
+                             device=cmp_seq_lens.device),
+                 torch.cumsum(cmp_seq_lens, -1)),
+                dim=-1)
+
         if self.decode_ratio_to_sas_metadata.get("compressed_tokens_start_" + str(self.compressor_ratio), None) is None:
             compressed_tokens_start = _get_compressed_decode_token_start(
                 decode_input_positions, self.compressor_ratio)
@@ -923,6 +939,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     device=str(self.seqused_q.device))
             self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
         elif self.compressor_ratio == 4:
+            cu_seqlens_cmp_kv = _get_decode_cmp_seq_lens(
+                self.seq_lens[:self.num_decodes], 4)
             if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
                 self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
@@ -930,7 +948,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     head_dim=self.model_config.get_head_size(),
                     cu_seqlens_q=query_start_loc,  # cached
                     cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                    cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                    cu_seqlens_cmp_kv=cu_seqlens_cmp_kv,
                     seqused_q=self.seqused_q,
                     seqused_kv=self.seq_lens[:self.num_decodes],  # cached
                     max_seqlen_q=max_seqlen_q,
@@ -950,6 +968,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     device=str(self.seqused_q.device))
             self.decode_sas_metadata[:1024] = self.decode_ratio_to_sas_metadata[layer_name]
         else:
+            cu_seqlens_cmp_kv = _get_decode_cmp_seq_lens(
+                self.seq_lens[:self.num_decodes], 128)
             if self.decode_ratio_to_sas_metadata.get(layer_name) is None:
                 self.decode_ratio_to_sas_metadata[layer_name] = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
                     num_heads_q=n_local_heads,
@@ -957,7 +977,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                     head_dim=self.model_config.get_head_size(),
                     cu_seqlens_q=query_start_loc,
                     cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                    cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                    cu_seqlens_cmp_kv=cu_seqlens_cmp_kv,
                     seqused_q=self.seqused_q,
                     seqused_kv=self.seq_lens[:self.num_decodes],
                     max_seqlen_q=max_seqlen_q,
@@ -1356,14 +1376,19 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode=2,
                 cache_mode=1)
 
-            if compressed_kv.numel() == 0:
+            num_compressed_slots = (
+                compressor_attn_metadata.prefill.slot_mapping.shape[0])
+            if compressed_kv.numel() == 0 or num_compressed_slots == 0:
                 compressed_kv = None
+            else:
+                compressed_kv = compressed_kv[:num_compressed_slots]
 
             # kv_compress_epilog
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                compress_kv_cache,
-                compressor_attn_metadata.prefill.slot_mapping,
-                compressed_kv)
+            if compressed_kv is not None:
+                torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                    compress_kv_cache,
+                    compressor_attn_metadata.prefill.slot_mapping,
+                    compressed_kv)
 
         if self.compress_ratio <= 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
@@ -1562,10 +1587,14 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode=2,
                 cache_mode=1)
             # kv_compress_epilog
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                compress_kv_cache,
-                compressor_attn_metadata.decode.slot_mapping,
-                compressed_kv)
+            num_compressed_slots = (
+                compressor_attn_metadata.decode.slot_mapping.shape[0])
+            if compressed_kv.numel() > 0 and num_compressed_slots > 0:
+                compressed_kv = compressed_kv[:num_compressed_slots]
+                torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                    compress_kv_cache,
+                    compressor_attn_metadata.decode.slot_mapping,
+                    compressed_kv)
         if self.compress_ratio <= 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1726,33 +1755,35 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
-
-                # if torch.distributed.get_rank() == 0:
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compress_kv_cache=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv is_contiguous: {compress_kv_cache.is_contiguous()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv stride: {compress_kv_cache.stride()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressor_attn_metadata.decode.slot_mapping.unsqueeze(-1)=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressed_kv=}")
-
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_k_cache,
-                    indexer_kv_scale_metadata.prefill.slot_mapping,
-                    kv)
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_scale_cache,
-                    indexer_kv_scale_metadata.prefill.slot_mapping,
-                    kv_scale)
+                num_compressed_slots = (
+                    indexer_kv_scale_metadata.prefill.slot_mapping.shape[0])
+                if num_compressed_slots > 0:
+                    kv = kv[:num_compressed_slots]
+                    kv_scale = kv_scale[:num_compressed_slots]
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_k_cache,
+                        indexer_kv_scale_metadata.prefill.slot_mapping,
+                        kv)
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_scale_cache,
+                        indexer_kv_scale_metadata.prefill.slot_mapping,
+                        kv_scale)
         else:
             assert indexer_kv_scale_metadata.decode is not None
             if kv is not None:
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_k_cache,
-                    indexer_kv_scale_metadata.decode.slot_mapping,
-                    kv)
-                torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                    indexer_scale_cache,
-                    indexer_kv_scale_metadata.decode.slot_mapping,
-                    kv_scale)
+                num_compressed_slots = (
+                    indexer_kv_scale_metadata.decode.slot_mapping.shape[0])
+                if num_compressed_slots > 0:
+                    kv = kv[:num_compressed_slots]
+                    kv_scale = kv_scale[:num_compressed_slots]
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_k_cache,
+                        indexer_kv_scale_metadata.decode.slot_mapping,
+                        kv)
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_scale_cache,
+                        indexer_kv_scale_metadata.decode.slot_mapping,
+                        kv_scale)
 
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None

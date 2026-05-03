@@ -5,8 +5,29 @@ import torch
 from vllm.distributed import get_dcp_group, get_pcp_group
 from vllm.utils.math_utils import cdiv
 from vllm.v1.utils import CpuGpuBuffer
-from vllm.v1.kv_cache_interface import KVCacheGroupSpec
+from vllm.v1.kv_cache_interface import KVCacheGroupSpec, UniformTypeKVCacheSpecs
 from vllm.v1.worker.cp_utils import get_total_cp_world_size
+
+
+def _get_kv_cache_group_compress_ratio(
+    kv_cache_group: KVCacheGroupSpec | None,
+) -> int:
+    if kv_cache_group is None or not hasattr(kv_cache_group, "kv_cache_spec"):
+        return 1
+
+    kv_cache_spec = kv_cache_group.kv_cache_spec
+    if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
+        compress_ratios = {
+            getattr(spec, "compress_ratio", 1) or 1
+            for spec in kv_cache_spec.kv_cache_specs.values()
+        }
+        if len(compress_ratios) != 1:
+            raise ValueError(
+                "All specs in one UniformTypeKVCacheSpecs group must use "
+                f"the same compress_ratio, got {sorted(compress_ratios)}")
+        return compress_ratios.pop()
+
+    return getattr(kv_cache_spec, "compress_ratio", 1) or 1
 
 
 class BlockTable:
@@ -24,11 +45,7 @@ class BlockTable:
         kv_cache_group: KVCacheGroupSpec = None,
     ):
         self.max_num_reqs = max_num_reqs
-        compress_ratio = 1
-        if kv_cache_group is not None and \
-                hasattr(kv_cache_group, "kv_cache_spec") and \
-                hasattr(kv_cache_group.kv_cache_spec, "compress_ratio"):
-            compress_ratio = kv_cache_group.kv_cache_spec.compress_ratio
+        compress_ratio = _get_kv_cache_group_compress_ratio(kv_cache_group)
         self.max_num_blocks_per_req = max(
             cdiv(max_num_blocks_per_req, compress_ratio), 1)
         self.max_num_batched_tokens = max_num_batched_tokens
@@ -114,11 +131,13 @@ class BlockTable:
 
     def add_row(self, block_ids: list[int], row_idx: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
+        self.block_table.np[row_idx].fill(0)
         self.append_row(block_ids, row_idx)
 
     def move_row(self, src: int, tgt: int) -> None:
         num_blocks = self.num_blocks_per_row[src]
         self.block_table.np[tgt, :num_blocks] = self.block_table.np[src, :num_blocks]
+        self.block_table.np[tgt, num_blocks:].fill(0)
         self.num_blocks_per_row[tgt] = num_blocks
 
     def swap_row(self, src: int, tgt: int) -> None:

@@ -37,7 +37,8 @@ import vllm_ascend.patch.platform.patch_selector # noqa
 if envs.VLLM_ASCEND_BALANCE_SCHEDULING:
     import vllm_ascend.patch.platform.patch_balance_schedule  # noqa
 
-if envs.USE_MULTI_BLOCK_POOL:
+if (envs.USE_MULTI_BLOCK_POOL
+        or envs.VLLM_ASCEND_USE_MULTI_GROUPS_KV_CACHE):
     import vllm_ascend.patch.platform.patch_kv_cache_coordinator  # noqa
     import vllm_ascend.patch.platform.patch_speculative_config  # noqa
     # import vllm_ascend.patch.platform.patch_kv_cache_utils  # noqa

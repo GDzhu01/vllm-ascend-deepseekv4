@@ -458,6 +458,39 @@ class NPUModelRunner(GPUModelRunner):
         self.mamba_state_idx: dict[str, int] = {}
         self._mamba_copy_bufs: mamba_utils.MambaCopyBuffers | None = None
 
+    def _collect_new_block_ids_to_zero(
+        self,
+        scheduler_output: SchedulerOutput,
+    ) -> list[int]:
+        block_ids = set(scheduler_output.new_block_ids_to_zero or [])
+
+        if not (
+            getattr(self, "use_compress", False)
+            and self.kv_cache_config.needs_kv_cache_zeroing
+        ):
+            return sorted(block_ids)
+
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            if new_req_data.num_computed_tokens != 0:
+                continue
+            for group_block_ids in new_req_data.block_ids:
+                block_ids.update(group_block_ids)
+
+        for new_block_ids in scheduler_output.scheduled_cached_reqs.new_block_ids:
+            if new_block_ids is None:
+                continue
+            for group_block_ids in new_block_ids:
+                block_ids.update(group_block_ids)
+
+        return sorted(block_ids)
+
+    def _update_states(self, scheduler_output: SchedulerOutput) -> None:
+        block_ids = self._collect_new_block_ids_to_zero(scheduler_output)
+        if block_ids:
+            self._zero_block_ids(block_ids)
+            scheduler_output.new_block_ids_to_zero = []
+        super()._update_states(scheduler_output)
+
     @property
     def use_cp(self) -> bool:
         return self.pcp_size * self.dcp_size > 1
@@ -2709,6 +2742,9 @@ class NPUModelRunner(GPUModelRunner):
         if has_kv_transfer_group():
             get_kv_transfer_group().register_kv_caches(kv_caches)
 
+        if kv_cache_config.needs_kv_cache_zeroing:
+            self._init_kv_zero_meta()
+
         if self.model_config.enable_return_routed_experts:
             self.init_routed_experts_capturer()
 
@@ -2730,6 +2766,7 @@ class NPUModelRunner(GPUModelRunner):
         """
         # Initialize the memory buffer for KV cache
         kv_cache_raw_tensors = self._allocate_kv_cache_tensors(kv_cache_config)
+        self._kv_cache_raw_tensors_for_zero = kv_cache_raw_tensors
         # Change the memory buffer to the desired shape
         kv_caches = self._reshape_kv_cache_tensors(kv_cache_config, kv_cache_raw_tensors)
 
@@ -2756,6 +2793,59 @@ class NPUModelRunner(GPUModelRunner):
             num_attn_module = 2 if self.model_config.hf_text_config.model_type == "longcat_flash" else 1
             bind_kv_cache(kv_caches, self.compilation_config.static_forward_context, self.kv_caches, num_attn_module)
         return kv_caches
+
+    def _init_kv_zero_meta(self) -> None:
+        zero_tensors: list[torch.Tensor] = []
+        seen: set[tuple[int, int]] = set()
+        raw_tensors = getattr(self, "_kv_cache_raw_tensors_for_zero", {})
+        layer_kv_cache_spec = self._get_layer_kv_cache_specs(self.kv_cache_config)
+
+        def needs_zero(layer_name: str) -> bool:
+            spec = layer_kv_cache_spec[layer_name]
+            return self.use_compress and isinstance(spec, AttentionSpec)
+
+        for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
+            if not any(needs_zero(layer_name)
+                       for layer_name in kv_cache_tensor.shared_by):
+                continue
+
+            raw_tensor = None
+            for layer_name in kv_cache_tensor.shared_by:
+                candidate = raw_tensors.get(layer_name)
+                if isinstance(candidate, torch.Tensor):
+                    raw_tensor = candidate
+                    break
+            if raw_tensor is None:
+                continue
+
+            key = (raw_tensor.data_ptr(), raw_tensor.storage_offset())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            assert kv_cache_tensor.size % self.kv_cache_config.num_blocks == 0
+            page_size_bytes = kv_cache_tensor.size // self.kv_cache_config.num_blocks
+            zero_tensors.append(
+                raw_tensor[:kv_cache_tensor.size].view(
+                    self.kv_cache_config.num_blocks, page_size_bytes))
+
+        self._npu_kv_zero_tensors = zero_tensors
+        logger.debug("Initialized NPU raw KV block zeroing for %d tensors",
+                     len(zero_tensors))
+
+    def _zero_block_ids(self, block_ids: list[int]) -> None:
+        zero_tensors = getattr(self, "_npu_kv_zero_tensors", None)
+        if not block_ids or not zero_tensors:
+            return
+        block_ids = sorted(set(block_ids))
+        logger.debug("Zeroing NPU KV blocks: ids=%s tensors=%d", block_ids,
+                     len(zero_tensors))
+        torch.npu.synchronize()
+        with torch.no_grad():
+            for tensor in zero_tensors:
+                for block_id in block_ids:
+                    tensor[block_id:block_id + 1].zero_()
+        torch.npu.synchronize()
 
     def _get_layer_kv_cache_specs(self, kv_cache_config: KVCacheConfig) -> dict[str, KVCacheSpec]:
         layer_kv_cache_spec: dict[str, KVCacheSpec] = {}

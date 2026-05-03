@@ -14,11 +14,13 @@
 #
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import torch
 from vllm.distributed.parallel_state import GroupCoordinator
+from vllm.v1.kv_cache_interface import MLAAttentionSpec, UniformTypeKVCacheSpecs
 
 from tests.ut.base import TestBase
 
@@ -252,6 +254,54 @@ class TestBlockTableComputeSlotMapping(TestBase):
                                           pcp_world_size=2,
                                           cp_kv_cache_interleave_size=128,
                                           test_configs=test_configs)
+
+    def test_uniform_type_compress_ratio_resizes_block_table(self):
+        from vllm_ascend.worker.block_table import BlockTable
+
+        spec = UniformTypeKVCacheSpecs.from_specs({
+            "layer.0":
+            MLAAttentionSpec(block_size=128,
+                             num_kv_heads=1,
+                             head_size=8,
+                             dtype=torch.float32,
+                             compress_ratio=4,
+                             model_version="svf"),
+            "layer.1":
+            MLAAttentionSpec(block_size=128,
+                             num_kv_heads=1,
+                             head_size=16,
+                             dtype=torch.float32,
+                             compress_ratio=4,
+                             model_version="svf"),
+        })
+        assert spec is not None
+        block_table = BlockTable(
+            block_size=128,
+            max_num_reqs=2,
+            max_num_blocks_per_req=64,
+            max_num_batched_tokens=16,
+            pin_memory=False,
+            device=torch.device("cpu"),
+            kernel_sizes=[128],
+            kv_cache_group=SimpleNamespace(kv_cache_spec=spec),
+        )
+
+        self.assertEqual(block_table.max_num_blocks_per_req, 16)
+        self.assertEqual(block_table.block_table.np.shape, (2, 16))
+
+    def test_add_row_clears_stale_block_ids(self):
+        block_table = self.create_block_table(dcp_world_size=1,
+                                              dcp_rank=0,
+                                              pcp_world_size=1,
+                                              pcp_rank=0,
+                                              cp_kv_cache_interleave_size=1)
+        block_table.add_row([11, 12, 13, 14], 0)
+        block_table.add_row([21], 0)
+
+        np.testing.assert_array_equal(block_table.block_table.np[0, :4],
+                                      np.array([21, 0, 0, 0],
+                                               dtype=np.int32))
+        self.assertEqual(block_table.num_blocks_per_row[0], 1)
 
 
 if __name__ == '__main__':

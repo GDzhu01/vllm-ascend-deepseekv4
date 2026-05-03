@@ -1471,7 +1471,9 @@ def get_compressed_pos_and_indices(
             compressed_historical_len = num_computed_tokens
             compressed_total_len = (num_computed_tokens + num_scheduled_tokens)
  
-        # The number of new compressed position ids for each request
+        # The number of new compressed position ids for each request. A
+        # compressed KV is produced only when a complete compression window is
+        # available, i.e. floor(total / ratio) - floor(history / ratio).
         num_new_compressed_pos = compressed_total_len - compressed_historical_len
 
         # Core vectorized calculation (no for-loop)

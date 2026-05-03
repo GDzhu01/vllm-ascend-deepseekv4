@@ -12,7 +12,7 @@ from vllm.v1.kv_cache_interface import (KVCacheConfig, KVCacheGroupSpec,
                                         UniformTypeKVCacheSpecs)
 
 from vllm_ascend import envs
-USE_MULTI_GROUPS_KV_CACHE = envs.USE_MULTI_GROUPS_KV_CACHE
+USE_MULTI_GROUPS_KV_CACHE = envs.VLLM_ASCEND_USE_MULTI_GROUPS_KV_CACHE
 
 def _get_kv_cache_groups_uniform_block_size(
     kv_cache_spec: dict[str, KVCacheSpec], ) -> list[KVCacheGroupSpec]:
