@@ -78,6 +78,7 @@ class FusedExpertsResult:
     # For dynamic_eplb
     group_list_type: int = 1
     expert_tokens: torch.Tensor | None = None
+    swiglu_limit: int = 0
 
 
 class MoECommMethod(ABC):
@@ -157,6 +158,7 @@ class MoECommMethod(ABC):
             before_combine_evt=before_combine_evt,
             group_list_type=token_dispatch_output.group_list_type,
             expert_tokens=token_dispatch_output.group_list,
+            swiglu_limit=fused_experts_input.swiglu_limit
         )
 
     def _apply_mlp(self, mlp_compute_input: MoEMlpComputeInput) -> torch.Tensor:
@@ -328,4 +330,4 @@ class FusedMC2CommImpl(MoECommMethod):
             )
         else:
             raise ValueError(f"Wrong value of {envs_ascend.VLLM_ASCEND_ENABLE_FUSED_MC2=}")
-        return FusedExpertsResult(routed_out=out, expert_tokens=expert_tokens)
+        return FusedExpertsResult(routed_out=out, expert_tokens=expert_tokens, swiglu_limit=fused_experts_input.swiglu_limit)
