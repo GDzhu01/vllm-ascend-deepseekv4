@@ -730,7 +730,8 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
                 torch.npu.current_stream().wait_event(evt)
 
         with npu_stream_switch(shared_experts_calculation_stream(), enabled=self.multistream_overlap_shared_expert):
-            if self.quant_type == QuantType.W8A8:
+            # Only used for int quantization
+            if self.quant_type == QuantType.W8A8 or self.quant_type == QuantType.W4A8:
                 original_dtype = hidden_states.dtype
                 # Execute dynamic quant concurrently with MoE gate.
                 torch.npu.current_stream().wait_event(fused_moe_evts.before_routed_experts)
