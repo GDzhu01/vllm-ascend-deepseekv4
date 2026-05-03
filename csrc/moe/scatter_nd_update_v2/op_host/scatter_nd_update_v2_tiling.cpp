@@ -336,7 +336,7 @@ ge::graphStatus ScatterNdUpdateV2Tiling::Init()
         isSort_ = false;
         isLinearIndex_ = false;
     } else {
-        isSort_ = IsSort(totalLength, indexRow);
+        isSort_ = false;
         isLinearIndex_ = IsLinearIndex(totalLength);
     }
     coreNum_ = std::min(compileInfo->totalCoreNum,
@@ -345,13 +345,16 @@ ge::graphStatus ScatterNdUpdateV2Tiling::Init()
     ubSize_ = compileInfo->ubSizePlatForm;
     GetDtypeSize();
     Tiling4LinearIndex(indexRow, indexDim_);
-    SetTilingKeyMode();
-    tilingContext_->SetScheduleMode(1);
     uint64_t maxPhysicalOffset = 0;
     for (uint64_t i = 0; i < indexDim_; ++i) {
         maxPhysicalOffset += (varRefShape.GetDim(i) - 1) * indicesMask_[i];
     }
     uint64_t totalPhysicalRange = maxPhysicalOffset + scatterLength_;
+    if (!needLargeIndexKernel_) {
+        isSort_ = IsSort(totalPhysicalRange, indexRow);
+    }
+    SetTilingKeyMode();
+    tilingContext_->SetScheduleMode(1);
     Tiling4Scatter(totalPhysicalRange, indexRow);
     size_t* currentWorkSpace = tilingContext_->GetWorkspaceSizes(1);
     currentWorkSpace[0] = CalcWorkSpaceSize(indexRow);
