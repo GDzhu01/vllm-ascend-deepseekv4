@@ -229,7 +229,9 @@ __aicore__ inline void DispatchFFNCombineW4A8<TemplateMMA2ACFunc>::Process()
     using TileCopyMmad =
         Gemm::Tile::QuantTileCopy<ArchTag, AType, BType, CType, void, ScaleGranularity::PER_CHANNEL>;
     using BlockMmad = Gemm::Block::BlockMmad<DispatchPolicy, L1TileShape, L0TileShape, AType, BType, CType, void, TileCopyMmad>;
-    constexpr uint32_t ubStages = 2;
+    // W4A8 SwiGLU needs extra UB buffers for int4 packing. A double-buffered
+    // epilogue overflows UB for 6144-wide gate/up projections.
+    constexpr uint32_t ubStages = 1;
 
     using EpilogueDispatchPolicy1 = Epilogue::EpilogueAtlasA2W4A8PostPerTokenDequantSwigluQuant<ubStages>;
 

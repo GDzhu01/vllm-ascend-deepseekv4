@@ -111,19 +111,25 @@ class TestDispatchFFNCombine:
                                    dtype=torch.int32).npu()
         scale1 = torch.randint(0, 1, (e, n), dtype=torch.int64).npu()
         scale2 = torch.randint(0, 1, (e, n2), dtype=torch.int64).npu()
+        bias1 = torch.zeros((e, n), dtype=torch.float32).npu()
+        bias2 = torch.zeros((e, n2), dtype=torch.float32).npu()
         probs = torch.randn(size=(m, topk), dtype=torch.float32).npu()
 
         weight1_nz_npu = []
         weight2_nz_npu = []
         scale1_npu = []
         scale2_npu = []
+        bias1_npu = []
+        bias2_npu = []
         for i in range(e):
             weight1_nz_npu.append(
-                torch_npu.npu_format_cast(weight1[i].npu(), 29))
+                torch_npu.npu_format_cast(weight1[i].npu(), 29).view(torch.int32))
             scale1_npu.append(scale1[i].npu())
+            bias1_npu.append(bias1[i].npu())
             weight2_nz_npu.append(
-                torch_npu.npu_format_cast(weight2[i].npu(), 29))
+                torch_npu.npu_format_cast(weight2[i].npu(), 29).view(torch.int32))
             scale2_npu.append(scale2[i].npu())
+            bias2_npu.append(bias2[i].npu())
 
         out = self.generate_random_tensor((m, k), dtype=torch.bfloat16).npu()
         expert_token_nums = self.generate_random_tensor((1, e), dtype=torch.int32).npu()
@@ -135,9 +141,12 @@ class TestDispatchFFNCombine:
             expert_idx=expert_idx,
             scale1=scale1_npu,
             scale2=scale2_npu,
+            bias1=bias1_npu,
+            bias2=bias2_npu,
             probs=probs,
             group=self.hcomm_info,
             max_output_size=512,
+            swiglu_limit=0.0,
             out=out,
             expert_token_nums=expert_token_nums,
         )
@@ -167,16 +176,22 @@ class TestDispatchFFNCombine:
                                    dtype=torch.int32).npu()
         scale1 = torch.randint(0, 1, (e, n), dtype=torch.int64).npu()
         scale2 = torch.randint(0, 1, (e, n2), dtype=torch.int64).npu()
+        bias1 = torch.zeros((e, n), dtype=torch.float32).npu()
+        bias2 = torch.zeros((e, n2), dtype=torch.float32).npu()
         probs = torch.randn(size=(m, topk), dtype=torch.float32).npu()
 
         weight1_nz_npu = []
         weight2_nz_npu = []
         scale1_npu = []
         scale2_npu = []
-        weight1_nz_npu.append(torch_npu.npu_format_cast(weight1.npu(), 29))
+        bias1_npu = []
+        bias2_npu = []
+        weight1_nz_npu.append(torch_npu.npu_format_cast(weight1.npu(), 29).view(torch.int32))
         scale1_npu.append(scale1.npu())
-        weight2_nz_npu.append(torch_npu.npu_format_cast(weight2.npu(), 29))
+        bias1_npu.append(bias1.npu())
+        weight2_nz_npu.append(torch_npu.npu_format_cast(weight2.npu(), 29).view(torch.int32))
         scale2_npu.append(scale2.npu())
+        bias2_npu.append(bias2.npu())
 
         out = self.generate_random_tensor((m, k), dtype=torch.bfloat16).npu()
         expert_token_nums = self.generate_random_tensor((1, e), dtype=torch.int32).npu()
@@ -188,9 +203,12 @@ class TestDispatchFFNCombine:
             expert_idx=expert_idx,
             scale1=scale1_npu,
             scale2=scale2_npu,
+            bias1=bias1_npu,
+            bias2=bias2_npu,
             probs=probs,
             group=self.hcomm_info,
             max_output_size=512,
+            swiglu_limit=0.0,
             out=out,
             expert_token_nums=expert_token_nums,
         )
