@@ -236,7 +236,6 @@ KVCacheConfig.needs_kv_cache_zeroing = property(_needs_kv_cache_zeroing)
 
 
 _ORIG_BLOCK_POOL_GET_NEW_BLOCKS = BlockPool.get_new_blocks
-_ORIG_BLOCK_POOL_FREE_BLOCKS = BlockPool.free_blocks
 _ORIG_KV_CACHE_MANAGER_INIT = KVCacheManager.__init__
 _ORIG_KV_CACHE_MANAGER_TAKE_NEW_BLOCK_IDS = KVCacheManager.take_new_block_ids
 
@@ -250,42 +249,6 @@ def _get_new_blocks_with_zero_tracking(self: BlockPool, num_blocks: int):
             self._ascend_new_block_ids_to_zero = block_ids
         block_ids.extend(block.block_id for block in blocks)
     return blocks
-
-
-def _prepend_free_blocks(free_block_queue, blocks) -> None:
-    if not blocks:
-        return
-
-    old_first_block = free_block_queue.fake_free_list_head.next_free_block
-    if old_first_block is None:
-        raise RuntimeError(
-            "next_free_block of fake_free_list_head should always exist")
-
-    last_block = free_block_queue.fake_free_list_head
-    for block in blocks:
-        block.prev_free_block = last_block
-        last_block.next_free_block = block
-        last_block = block
-
-    last_block.next_free_block = old_first_block
-    old_first_block.prev_free_block = last_block
-    free_block_queue.num_free_blocks += len(blocks)
-
-
-def _free_blocks_with_reuse_first(self: BlockPool, ordered_blocks) -> None:
-    if not getattr(self, "_ascend_reuse_freed_blocks_first", False):
-        return _ORIG_BLOCK_POOL_FREE_BLOCKS(self, ordered_blocks)
-
-    blocks_list = list(ordered_blocks)
-    for block in blocks_list:
-        block.ref_cnt -= 1
-
-    free_blocks = [
-        block for block in blocks_list
-        if block.ref_cnt == 0 and not block.is_null
-    ]
-    free_blocks.sort(key=lambda block: block.block_id)
-    _prepend_free_blocks(self.free_block_queue, free_blocks)
 
 
 def _take_new_block_ids_from_pool(self: BlockPool) -> list[int]:
@@ -313,7 +276,6 @@ def _take_new_block_ids_with_block_pool(self: KVCacheManager) -> list[int]:
 
 
 BlockPool.get_new_blocks = _get_new_blocks_with_zero_tracking
-BlockPool.free_blocks = _free_blocks_with_reuse_first
 BlockPool.take_new_block_ids = _take_new_block_ids_from_pool
 KVCacheManager.__init__ = _kv_cache_manager_init_with_block_pool_tracking
 KVCacheManager.take_new_block_ids = _take_new_block_ids_with_block_pool

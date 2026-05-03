@@ -61,8 +61,6 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
             enable_kv_cache_events,
             metrics_collector,
         )
-        self.block_pool._ascend_reuse_freed_blocks_first = (
-            kv_cache_config.needs_kv_cache_zeroing)
 
         # KV cache group indices that get the EAGLE last-block drop.
         self.eagle_group_ids: set[int] = {
