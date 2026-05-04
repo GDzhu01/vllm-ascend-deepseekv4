@@ -48,6 +48,7 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.logger import init_logger
 from vllm.reasoning import ReasoningParserManager
+from vllm.reasoning.deepseek_v3_reasoning_parser import DeepSeekV3ReasoningParser
 from vllm.renderers.base import BaseRenderer
 from vllm.renderers.inputs import DictPrompt
 from vllm.renderers.inputs.preprocess import parse_dec_only_prompt
@@ -1122,6 +1123,24 @@ class DeepSeekV4ToolParser(ToolParser):
         return None
 
 
+class DeepSeekV4ReasoningParser(DeepSeekV3ReasoningParser):
+
+    def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
+        parser = getattr(self, "_parser", None)
+        start_token_id = getattr(parser, "start_token_id", None)
+        end_token_id = getattr(parser, "end_token_id", None)
+        if start_token_id is None or end_token_id is None:
+            return 0
+
+        if start_token_id in token_ids:
+            return parser.count_reasoning_tokens(token_ids)
+
+        for idx, token_id in enumerate(token_ids):
+            if token_id == end_token_id:
+                return idx
+        return len(token_ids)
+
+
 _patch_chat_completion_reasoning_effort()
 TokenizerRegistry.register(
     "deepseek_v4",
@@ -1140,8 +1159,8 @@ ToolParserManager.register_lazy_module(
 )
 ReasoningParserManager.register_lazy_module(
     "deepseek_v4",
-    "vllm.reasoning.deepseek_v3_reasoning_parser",
-    "DeepSeekV3ReasoningParser",
+    "vllm_ascend.patch.platform.patch_deepseek_v4_agentic",
+    "DeepSeekV4ReasoningParser",
 )
 
 sys.modules.setdefault("vllm.tokenizers.deepseek_v4", sys.modules[__name__])

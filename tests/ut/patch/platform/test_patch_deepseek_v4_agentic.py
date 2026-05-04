@@ -41,6 +41,9 @@ class FakeHfTokenizer:
     def get_added_vocab(self) -> dict[str, int]:
         return {"</think>": 100}
 
+    def get_vocab(self) -> dict[str, int]:
+        return {"<think>": 99, "</think>": 100}
+
     def encode(
         self,
         text: str,
@@ -59,6 +62,13 @@ def _parser():
     tokenizer = MagicMock()
     tokenizer.get_vocab.return_value = {}
     return patch.DeepSeekV4ToolParser(tokenizer)
+
+
+def _reasoning_parser(**chat_template_kwargs):
+    return patch.DeepSeekV4ReasoningParser(
+        FakeHfTokenizer(),
+        chat_template_kwargs=chat_template_kwargs,
+    )
 
 
 def _request(tools=None):
@@ -99,7 +109,7 @@ def test_deepseek_v4_registries_are_available():
         "DeepSeekV4ToolParser"
     )
     assert ReasoningParserManager.get_reasoning_parser("deepseek_v4").__name__ == (
-        "DeepSeekV3ReasoningParser"
+        "DeepSeekV4ReasoningParser"
     )
 
 
@@ -225,6 +235,25 @@ def test_tokenizer_escapes_arguments_history_tool_call_name():
 
     assert 'parameter name="__vllm_param_arguments__" string="true">hello' in prompt
     assert 'parameter name="arguments"' not in prompt
+
+
+def test_reasoning_parser_counts_generated_thinking_tokens_without_start_token():
+    parser = _reasoning_parser(enable_thinking=True)
+
+    assert parser.count_reasoning_tokens([11, 12, 100, 13]) == 2
+    assert parser.count_reasoning_tokens([11, 12, 13]) == 3
+
+
+def test_reasoning_parser_counts_explicit_thinking_span_tokens():
+    parser = _reasoning_parser(enable_thinking=True)
+
+    assert parser.count_reasoning_tokens([99, 11, 12, 100, 13]) == 2
+
+
+def test_reasoning_parser_counts_zero_tokens_when_thinking_is_disabled():
+    parser = _reasoning_parser(thinking=False)
+
+    assert parser.count_reasoning_tokens([11, 12, 100, 13]) == 0
 
 
 def test_parser_preserves_typed_arguments():
