@@ -185,6 +185,14 @@ def _compute_remaining_tool_args(
     return ""
 
 
+def _make_tool_parsers(
+    tool_parser_factory,
+    tokenizer: TokenizerLike,
+    num_choices: int,
+) -> list[ToolParser | None]:
+    return [tool_parser_factory(tokenizer) for _ in range(num_choices)]
+
+
 async def _patched_chat_completion_stream_generator(
     self,
     request: ChatCompletionRequest,
@@ -243,7 +251,11 @@ async def _patched_chat_completion_stream_generator(
             if tokenizer is None:
                 raise ValueError("Tokenizer not available when `skip_tokenizer_init=True`")
 
-            tool_parsers: list[ToolParser | None] = [self.tool_parser(tokenizer)] * num_choices
+            tool_parsers = _make_tool_parsers(
+                self.tool_parser,
+                tokenizer,
+                num_choices,
+            )
         else:
             tool_parsers = [None] * num_choices
     except Exception as e:
@@ -635,6 +647,99 @@ async def _patched_chat_completion_stream_generator(
                 else:
                     self._raise_if_error(output.finish_reason, request_id)
 
+                    final_logprobs = logprobs
+                    final_token_ids = as_list(output.token_ids) if request.return_token_ids else None
+                    drain_pending_tool_call_deltas = (
+                        getattr(tool_parser, "drain_pending_tool_call_deltas", None)
+                        if tool_parser
+                        else None
+                    )
+                    if callable(drain_pending_tool_call_deltas):
+                        pending_delta_messages: list[DeltaMessage] = []
+                        if delta_message and delta_message.tool_calls:
+                            pending_delta_messages.append(
+                                DeltaMessage(tool_calls=delta_message.tool_calls)
+                            )
+                            delta_message = DeltaMessage(
+                                content=delta_message.content,
+                                reasoning=delta_message.reasoning,
+                            )
+                        pending_delta_messages.extend(drain_pending_tool_call_deltas())
+
+                        if pending_delta_messages and (
+                            delta_message.content or delta_message.reasoning
+                        ):
+                            content_choice_data = ChatCompletionResponseStreamChoice(
+                                index=i,
+                                delta=delta_message,
+                                logprobs=final_logprobs,
+                                finish_reason=None,
+                                token_ids=final_token_ids,
+                            )
+                            content_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                object=chunk_object_type,
+                                created=created_time,
+                                choices=[content_choice_data],
+                                model=model_name,
+                            )
+                            if include_continuous_usage:
+                                completion_tokens = previous_num_tokens[i]
+                                content_chunk.usage = self._make_usage_info(
+                                    prompt_tokens=num_prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    reasoning_tokens=self._count_reasoning_tokens_for_usage(
+                                        raw_output_token_ids[i], reasoning_parser
+                                    ),
+                                )
+
+                            content_data = content_chunk.model_dump_json(exclude_unset=True)
+                            yield f"data: {content_data}\n\n"
+                            delta_message = DeltaMessage(content="")
+                            final_logprobs = None
+                            final_token_ids = None
+
+                        for pending_delta_message in pending_delta_messages:
+                            pending_choice_data = ChatCompletionResponseStreamChoice(
+                                index=i,
+                                delta=pending_delta_message,
+                                logprobs=None,
+                                finish_reason=None,
+                            )
+                            pending_choice_data = maybe_filter_parallel_tool_calls(
+                                pending_choice_data, request
+                            )
+                            self._record_streamed_tool_args(
+                                pending_choice_data.delta,
+                                streamed_tool_args[i],
+                            )
+                            pending_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                object=chunk_object_type,
+                                created=created_time,
+                                choices=[pending_choice_data],
+                                model=model_name,
+                            )
+                            if include_continuous_usage:
+                                completion_tokens = previous_num_tokens[i]
+                                pending_chunk.usage = self._make_usage_info(
+                                    prompt_tokens=num_prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    reasoning_tokens=self._count_reasoning_tokens_for_usage(
+                                        raw_output_token_ids[i], reasoning_parser
+                                    ),
+                                )
+
+                            pending_data = pending_chunk.model_dump_json(exclude_unset=True)
+                            yield f"data: {pending_data}\n\n"
+
+                        if (
+                            pending_delta_messages
+                            and not delta_message.content
+                            and not delta_message.reasoning
+                        ):
+                            delta_message = DeltaMessage(content="")
+
                     auto_tools_called = False
                     if tool_parser:
                         auto_tools_called = len(tool_parser.prev_tool_call_arr) > 0
@@ -692,10 +797,10 @@ async def _patched_chat_completion_stream_generator(
                     choice_data = ChatCompletionResponseStreamChoice(
                         index=i,
                         delta=delta_message,
-                        logprobs=logprobs,
+                        logprobs=final_logprobs,
                         finish_reason=finish_reason_,
                         stop_reason=output.stop_reason,
-                        token_ids=(as_list(output.token_ids) if request.return_token_ids else None),
+                        token_ids=final_token_ids,
                     )
 
                     finish_reason_sent[i] = True
@@ -725,6 +830,47 @@ async def _patched_chat_completion_stream_generator(
 
                 data = chunk.model_dump_json(exclude_unset=True)
                 yield f"data: {data}\n\n"
+
+                if output.finish_reason is None:
+                    drain_pending_tool_call_deltas = (
+                        getattr(tool_parser, "drain_pending_tool_call_deltas", None)
+                        if tool_parser
+                        else None
+                    )
+                    if callable(drain_pending_tool_call_deltas):
+                        for pending_delta_message in drain_pending_tool_call_deltas():
+                            pending_choice_data = ChatCompletionResponseStreamChoice(
+                                index=i,
+                                delta=pending_delta_message,
+                                logprobs=None,
+                                finish_reason=None,
+                            )
+                            pending_choice_data = maybe_filter_parallel_tool_calls(
+                                pending_choice_data, request
+                            )
+                            self._record_streamed_tool_args(
+                                pending_choice_data.delta,
+                                streamed_tool_args[i],
+                            )
+                            pending_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                object=chunk_object_type,
+                                created=created_time,
+                                choices=[pending_choice_data],
+                                model=model_name,
+                            )
+                            if include_continuous_usage:
+                                completion_tokens = previous_num_tokens[i]
+                                pending_chunk.usage = self._make_usage_info(
+                                    prompt_tokens=num_prompt_tokens,
+                                    completion_tokens=completion_tokens,
+                                    reasoning_tokens=self._count_reasoning_tokens_for_usage(
+                                        raw_output_token_ids[i], reasoning_parser
+                                    ),
+                                )
+
+                            pending_data = pending_chunk.model_dump_json(exclude_unset=True)
+                            yield f"data: {pending_data}\n\n"
 
         if include_usage:
             completion_tokens = sum(previous_num_tokens)

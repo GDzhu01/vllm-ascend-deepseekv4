@@ -344,10 +344,202 @@ def test_streaming_split_start_token_does_not_leak_dsml_markers():
         previous_text = current_text
         if delta is not None:
             deltas.append(delta)
+            deltas.extend(parser.drain_pending_tool_call_deltas())
 
     content = "".join(delta.content or "" for delta in deltas)
-    tool_delta = next(delta for delta in deltas if delta.tool_calls)
+    tool_deltas = [
+        tool_call
+        for delta in deltas
+        for tool_call in (delta.tool_calls or [])
+    ]
+    argument_pieces = [
+        tool_call.function.arguments
+        for tool_call in tool_deltas
+        if tool_call.function and tool_call.function.arguments is not None
+    ]
 
     assert content == "I will check."
     assert "DSML" not in content
-    assert json.loads(tool_delta.tool_calls[0].function.arguments) == {"query": "vllm"}
+    assert sum(tool_call.id is not None for tool_call in tool_deltas) == 1
+    assert sum(tool_call.type is not None for tool_call in tool_deltas) == 1
+    assert sum(bool(tool_call.function.name) for tool_call in tool_deltas) == 1
+    assert json.loads("".join(argument_pieces)) == {"query": "vllm"}
+
+
+def test_streaming_tool_arguments_emit_before_invoke_is_complete():
+    parser = _parser()
+    request = _request()
+    prefix = (
+        f"{TC_START}{INV_START}search\">"
+        f'{PARAM_START}query" string="true">'
+    )
+    suffix = f"{PARAM_END}{INV_END}{TC_END}"
+    previous_text = ""
+    deltas = []
+
+    for delta_text in [prefix, "partial value", suffix]:
+        current_text = previous_text + delta_text
+        delta = parser.extract_tool_calls_streaming(
+            previous_text=previous_text,
+            current_text=current_text,
+            delta_text=delta_text,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[1],
+            request=request,
+        )
+        previous_text = current_text
+        if delta is not None:
+            deltas.append(delta)
+            deltas.extend(parser.drain_pending_tool_call_deltas())
+
+    tool_deltas = [
+        tool_call
+        for delta in deltas
+        for tool_call in (delta.tool_calls or [])
+    ]
+    argument_pieces = [
+        tool_call.function.arguments
+        for tool_call in tool_deltas
+        if tool_call.function and tool_call.function.arguments is not None
+    ]
+
+    assert '"partial value' in "".join(argument_pieces[:-1])
+    assert json.loads("".join(argument_pieces)) == {"query": "partial value"}
+
+
+def test_streaming_content_and_tool_call_in_same_delta_are_both_emitted():
+    parser = _parser()
+    request = _request()
+    delta_text = "I will check." + (
+        f"{TC_START}{INV_START}search\">"
+        f'{PARAM_START}query" string="true">vllm'
+        f"{PARAM_END}{INV_END}{TC_END}"
+    )
+
+    delta = parser.extract_tool_calls_streaming(
+        previous_text="",
+        current_text=delta_text,
+        delta_text=delta_text,
+        previous_token_ids=[],
+        current_token_ids=[],
+        delta_token_ids=[1],
+        request=request,
+    )
+    deltas = [delta]
+    deltas.extend(parser.drain_pending_tool_call_deltas())
+
+    tool_deltas = [
+        tool_call
+        for item in deltas
+        if item is not None
+        for tool_call in (item.tool_calls or [])
+    ]
+    argument_pieces = [
+        tool_call.function.arguments
+        for tool_call in tool_deltas
+        if tool_call.function and tool_call.function.arguments is not None
+    ]
+
+    assert deltas[0].content == "I will check."
+    assert json.loads("".join(argument_pieces)) == {"query": "vllm"}
+
+
+def test_streaming_repairs_wrapped_input_arguments():
+    parser = _parser()
+    request = _request([_tool("get_weather", {"location": {"type": "string"}})])
+    full_text = (
+        f"{TC_START}{INV_START}get_weather\">"
+        f'{PARAM_START}input" string="true">{{"location": "Beijing"}}'
+        f"{PARAM_END}{INV_END}{TC_END}"
+    )
+    previous_text = ""
+    deltas = []
+
+    for start in range(0, len(full_text), 7):
+        delta_text = full_text[start : start + 7]
+        current_text = previous_text + delta_text
+        delta = parser.extract_tool_calls_streaming(
+            previous_text=previous_text,
+            current_text=current_text,
+            delta_text=delta_text,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[1],
+            request=request,
+        )
+        previous_text = current_text
+        if delta is not None:
+            deltas.append(delta)
+            deltas.extend(parser.drain_pending_tool_call_deltas())
+
+    argument_pieces = [
+        tool_call.function.arguments
+        for delta in deltas
+        for tool_call in (delta.tool_calls or [])
+        if tool_call.function and tool_call.function.arguments is not None
+    ]
+
+    assert json.loads("".join(argument_pieces)) == {"location": "Beijing"}
+
+
+def test_streaming_parser_state_is_isolated_between_choices():
+    request = _request()
+    parser0 = _parser()
+    parser1 = _parser()
+
+    first_part = (
+        f"{TC_START}{INV_START}search\">"
+        f'{PARAM_START}query" string="true">abc'
+    )
+    first_delta = parser0.extract_tool_calls_streaming(
+        previous_text="",
+        current_text=first_part,
+        delta_text=first_part,
+        previous_token_ids=[],
+        current_token_ids=[],
+        delta_token_ids=[1],
+        request=request,
+    )
+    first_deltas = [first_delta]
+    first_deltas.extend(parser0.drain_pending_tool_call_deltas())
+
+    second_delta = parser1.extract_tool_calls_streaming(
+        previous_text="",
+        current_text="plain choice",
+        delta_text="plain choice",
+        previous_token_ids=[],
+        current_token_ids=[],
+        delta_token_ids=[1],
+        request=request,
+    )
+
+    final_part = f"def{PARAM_END}{INV_END}{TC_END}"
+    final_delta = parser0.extract_tool_calls_streaming(
+        previous_text=first_part,
+        current_text=first_part + final_part,
+        delta_text=final_part,
+        previous_token_ids=[],
+        current_token_ids=[],
+        delta_token_ids=[1],
+        request=request,
+    )
+    first_deltas.append(final_delta)
+    first_deltas.extend(parser0.drain_pending_tool_call_deltas())
+
+    content = "".join(delta.content or "" for delta in first_deltas if delta is not None)
+    tool_deltas = [
+        tool_call
+        for delta in first_deltas
+        if delta is not None
+        for tool_call in (delta.tool_calls or [])
+    ]
+    argument_pieces = [
+        tool_call.function.arguments
+        for tool_call in tool_deltas
+        if tool_call.function and tool_call.function.arguments is not None
+    ]
+
+    assert second_delta.content == "plain choice"
+    assert "DSML" not in content
+    assert json.loads("".join(argument_pieces)) == {"query": "abcdef"}
