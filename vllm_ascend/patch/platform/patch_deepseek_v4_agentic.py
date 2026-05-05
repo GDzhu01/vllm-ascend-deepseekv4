@@ -107,6 +107,14 @@ REASONING_EFFORT_NOOP_VALUES = frozenset({"high", None})
 
 tool_output_template: str = "<tool_result>{content}</tool_result>"
 
+
+def _normalize_thinking_kwargs(chat_template_kwargs: dict | None) -> dict:
+    chat_kwargs = dict(chat_template_kwargs or {})
+    if "thinking" in chat_kwargs and chat_kwargs["thinking"] is not None:
+        chat_kwargs["enable_thinking"] = bool(chat_kwargs["thinking"])
+    return chat_kwargs
+
+
 REASONING_EFFORT_MAX = (
     "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
     "You MUST be very thorough in your thinking and comprehensively decompose "
@@ -849,6 +857,13 @@ class DeepSeekV4ToolParser(ToolParser):
         logger.debug("vLLM Successfully import tool parser %s !", self.__class__.__name__)
 
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        chat_kwargs = _normalize_thinking_kwargs(request.chat_template_kwargs)
+        if request.tool_choice == "required" and chat_kwargs.get("enable_thinking"):
+            raise ValueError(
+                "DeepSeek V4 thinking mode does not support tool_choice='required'. "
+                "Use tool_choice='auto' or disable thinking."
+            )
+
         request = super().adjust_request(request)
         if request.tools and request.tool_choice != "none":
             request.skip_special_tokens = False
@@ -1358,6 +1373,12 @@ class DeepSeekV4ToolParser(ToolParser):
 
 
 class DeepSeekV4ReasoningParser(DeepSeekV3ReasoningParser):
+
+    def __init__(self, tokenizer: TokenizerLike, *args, **kwargs):
+        kwargs["chat_template_kwargs"] = _normalize_thinking_kwargs(
+            kwargs.get("chat_template_kwargs")
+        )
+        super().__init__(tokenizer, *args, **kwargs)
 
     def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
         parser = getattr(self, "_parser", None)

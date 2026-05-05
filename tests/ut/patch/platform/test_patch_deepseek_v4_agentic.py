@@ -71,11 +71,40 @@ def _reasoning_parser(**chat_template_kwargs):
     )
 
 
-def _request(tools=None):
+def _request(tools=None, tool_choice="auto", chat_template_kwargs=None):
     request = MagicMock()
     request.tools = tools or []
-    request.tool_choice = "auto"
+    request.tool_choice = tool_choice
+    request.chat_template_kwargs = chat_template_kwargs
     return request
+
+
+def _chat_request(tool_choice, chat_template_kwargs):
+    return ChatCompletionRequest.model_validate(
+        {
+            "model": "dsv4",
+            "messages": [{"role": "user", "content": "Run bash."}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                },
+                            },
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+            "tool_choice": tool_choice,
+            "chat_template_kwargs": chat_template_kwargs,
+        }
+    )
 
 
 def _tool(name: str, properties: dict[str, dict]):
@@ -237,6 +266,40 @@ def test_tokenizer_escapes_arguments_history_tool_call_name():
     assert 'parameter name="arguments"' not in prompt
 
 
+def test_parser_rejects_required_tool_choice_with_thinking():
+    parser = _parser()
+    request = _chat_request("required", {"enable_thinking": True})
+
+    with pytest.raises(ValueError, match="tool_choice='required'"):
+        parser.adjust_request(request)
+
+
+def test_parser_rejects_required_tool_choice_when_thinking_overrides_enable_false():
+    parser = _parser()
+    request = _chat_request("required", {"thinking": True, "enable_thinking": False})
+
+    with pytest.raises(ValueError, match="tool_choice='required'"):
+        parser.adjust_request(request)
+
+
+def test_parser_allows_required_tool_choice_without_thinking():
+    parser = _parser()
+    request = _chat_request("required", {"thinking": False, "enable_thinking": True})
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request.skip_special_tokens is False
+
+
+def test_parser_allows_auto_tool_choice_with_thinking():
+    parser = _parser()
+    request = _chat_request("auto", {"enable_thinking": True})
+
+    adjusted_request = parser.adjust_request(request)
+
+    assert adjusted_request.skip_special_tokens is False
+
+
 def test_reasoning_parser_counts_generated_thinking_tokens_without_start_token():
     parser = _reasoning_parser(enable_thinking=True)
 
@@ -253,6 +316,16 @@ def test_reasoning_parser_counts_explicit_thinking_span_tokens():
 def test_reasoning_parser_counts_zero_tokens_when_thinking_is_disabled():
     parser = _reasoning_parser(thinking=False)
 
+    assert parser.count_reasoning_tokens([11, 12, 100, 13]) == 0
+
+
+def test_reasoning_parser_uses_thinking_over_enable_thinking():
+    parser = _reasoning_parser(thinking=False, enable_thinking=True)
+
+    reasoning, content = parser.extract_reasoning("42", _request())
+
+    assert reasoning is None
+    assert content == "42"
     assert parser.count_reasoning_tokens([11, 12, 100, 13]) == 0
 
 
