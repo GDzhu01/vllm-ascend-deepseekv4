@@ -1,15 +1,21 @@
 import gc
+
 import pytest
 import torch
-from vllm.v1.sample.rejection_sampler import \
-    rejection_random_sample_kernel as original_rejection_random_sample_kernel
+from vllm.triton_utils import triton
+from vllm.v1.sample.rejection_sampler import rejection_random_sample_kernel as original_rejection_random_sample_kernel
 
 from vllm_ascend.ops.triton.reject_sample import (
-    cal_grid_and_block_size, rejection_random_sample_block_verify_kernel,
-    rejection_random_sample_kernel)
+    cal_grid_and_block_size,
+    rejection_random_sample_block_verify_kernel,
+    rejection_random_sample_kernel,
+    sample_recovered_tokens_kernel,
+)
 from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
-from vllm_ascend.sample.rejection_sampler import \
-    rejection_random_sample_block_verify_pytorch
+from vllm_ascend.sample.rejection_sampler import (
+    rejection_random_sample_block_verify_pytorch,
+    sample_recovered_tokens_pytorch,
+)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -233,3 +239,118 @@ def test_rejection_sampler_block_verify_triton_kernel(
     gc.collect()
     torch.npu.empty_cache()
     torch.npu.reset_peak_memory_stats()
+
+
+@pytest.mark.parametrize("is_ngram", [False, True])
+@torch.inference_mode()
+def test_sample_recovered_tokens_triton_ignores_invalid_q(is_ngram):
+    device = 'npu'
+    batch_size = 2
+    max_spec_len = 1
+    vocab_size = 16
+    cu_num_draft_tokens = torch.tensor([1, 2],
+                                       dtype=torch.int32,
+                                       device=device)
+    draft_token_ids = torch.tensor([0, 1], dtype=torch.int64, device=device)
+    target_probs = torch.zeros((2, vocab_size),
+                               dtype=torch.float32,
+                               device=device)
+    draft_probs = None
+    if not is_ngram:
+        draft_probs = torch.zeros((2, vocab_size),
+                                  dtype=torch.float32,
+                                  device=device)
+
+    q = torch.ones((batch_size, vocab_size),
+                   dtype=torch.float32,
+                   device=device)
+    target_probs[0, 3] = 0.1
+    target_probs[0, 7] = 0.9
+    target_probs[1, 4] = 0.9
+    target_probs[1, 8] = 0.2
+    q[0, 3] = 0
+    q[1, 4] = float("inf")
+    inv_q = q.reciprocal()
+    inv_q.masked_fill_(torch.isinf(inv_q), 0)
+
+    output_token_ids_ref = torch.empty_like(draft_token_ids)
+    output_token_ids_triton = torch.empty_like(draft_token_ids)
+    sample_recovered_tokens_pytorch(output_token_ids_ref,
+                                    cu_num_draft_tokens,
+                                    draft_token_ids,
+                                    draft_probs,
+                                    target_probs,
+                                    q,
+                                    vocab_size,
+                                    IS_NGRAM=is_ngram)
+
+    sample_recovered_tokens_kernel[(batch_size, max_spec_len)](
+        output_token_ids_triton,
+        cu_num_draft_tokens,
+        draft_token_ids,
+        draft_probs,
+        target_probs,
+        inv_q,
+        vocab_size,
+        triton.next_power_of_2(vocab_size),
+        NO_DRAFT_PROBS=is_ngram,
+        SUB_BLOCK=4 * 1024,
+        multibuffer=False)
+    torch.npu.synchronize()
+    assert torch.equal(output_token_ids_ref,
+                       torch.tensor([7, 8],
+                                    dtype=torch.int64,
+                                    device=device))
+    assert torch.equal(output_token_ids_ref, output_token_ids_triton)
+
+
+@torch.inference_mode()
+def test_sample_recovered_tokens_triton_matches_ngram_negative_draft_id():
+    device = 'npu'
+    batch_size = 1
+    max_spec_len = 1
+    vocab_size = 8
+    cu_num_draft_tokens = torch.tensor([1],
+                                       dtype=torch.int32,
+                                       device=device)
+    draft_token_ids = torch.tensor([-1], dtype=torch.int64, device=device)
+    target_probs = torch.zeros((1, vocab_size),
+                               dtype=torch.float32,
+                               device=device)
+    target_probs[0, -1] = 10
+    target_probs[0, 3] = 1
+
+    q = torch.ones((batch_size, vocab_size),
+                   dtype=torch.float32,
+                   device=device)
+    inv_q = q.reciprocal()
+
+    output_token_ids_ref = torch.empty_like(draft_token_ids)
+    output_token_ids_triton = torch.empty_like(draft_token_ids)
+    sample_recovered_tokens_pytorch(output_token_ids_ref,
+                                    cu_num_draft_tokens,
+                                    draft_token_ids,
+                                    None,
+                                    target_probs,
+                                    q,
+                                    vocab_size,
+                                    IS_NGRAM=True)
+
+    sample_recovered_tokens_kernel[(batch_size, max_spec_len)](
+        output_token_ids_triton,
+        cu_num_draft_tokens,
+        draft_token_ids,
+        None,
+        target_probs,
+        inv_q,
+        vocab_size,
+        triton.next_power_of_2(vocab_size),
+        NO_DRAFT_PROBS=True,
+        SUB_BLOCK=4 * 1024,
+        multibuffer=False)
+    torch.npu.synchronize()
+    assert torch.equal(output_token_ids_ref,
+                       torch.tensor([3],
+                                    dtype=torch.int64,
+                                    device=device))
+    assert torch.equal(output_token_ids_ref, output_token_ids_triton)
