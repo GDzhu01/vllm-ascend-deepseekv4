@@ -981,6 +981,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 slot_mapping = F.pad(slot_mapping, (0, pad_size), value=-1)
             else:
                 slot_mapping = F.pad(slot_mapping, (0, 0, 0, pad_size), value=-1)
+        else:
+            slot_mapping = slot_mapping[:target_shape]
 
         assert self.start_pos_decode is not None
         self.start_pos_decode.fill_(0)
