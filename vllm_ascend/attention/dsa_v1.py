@@ -329,10 +329,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.query_lens: torch.Tensor = None
         self.seq_lens: torch.Tensor = None
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
-
+        
+        self.compressor_ratio = getattr(kv_cache_spec, 'compress_ratio', 0)
         hf_config = self.model_config.hf_config
-        layer_idx = extract_dsv4_layer_index(hf_config, layer_names[0])
-        self.compressor_ratio = get_dsv4_compress_ratio(hf_config, layer_idx)
 
         if AscendDSAMetadataBuilder.hadamard is None:
             if hf_config.model_type == 'deepseek_v4':
@@ -1433,19 +1432,17 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
-            # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.indexer_state_cache']
-            (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
-            # (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata)
-            # (indexer_kv_scale_metadata, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, indexer_kv_state_metadata) 
+            # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
-            # ['attn', 'swa_cache', 'compressor.state_cache']
-            (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (_, swa_kv_cache, _, _, _, _, _, ) = kv_cache
-            # ['swa_cache']
+            (_, swa_kv_cache, _, _, _, _, _) = kv_cache
+            # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
 
@@ -1562,7 +1559,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     compressed_kv)
 
         if get_ascend_device_type() in {AscendDeviceType.A5}:         
-            if self.compress_ratio == 1:
+            if self.compress_ratio <= 1:
                 attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
                     q,
                     ori_kv=swa_kv_cache,
@@ -1575,7 +1572,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     tile_size=64,
                     rope_head_dim=64,
                     softmax_scale=self.softmax_scale,
-                    cmp_ratio=self.compress_ratio,
+                    cmp_ratio=1,
                     ori_mask_mode=4,
                     ori_win_left=self.window_size - 1,
                     ori_win_right=0,
@@ -1641,7 +1638,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     sinks=self.attn_sink,
                     metadata=compress_common_attn_metadata.prefill.sas_metadata,
                     softmax_scale=self.softmax_scale,
-                    cmp_ratio=self.compress_ratio,
+                    cmp_ratio=1,
                     ori_mask_mode=4,
                     ori_win_left=self.window_size - 1,
                     ori_win_right=0,
@@ -1706,17 +1703,17 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         if self.compress_ratio == 4:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
-            # ['indexer.k_cache', 'attn', 'swa_cache', 'compressor.state_cache', 'indexer.compressor.state_cache']
-            (_, compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, _) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, _, _, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (compress_kv_cache, swa_kv_cache, state_cache, _, _, _, _) = kv_cache
-            # ['attn', 'swa_cache', 'compressor.state_cache']
-            (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata) = attn_metadata
+            # sorted keys: [attn, compressor.state_cache, swa_cache]
+            (compressor_attn_metadata, compressor_kv_state_metadata, swa_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (_, swa_kv_cache, _, _, _, _, _) = kv_cache
-            # ['swa_cache']
+            # sorted keys: [swa_cache]
             (swa_metadata,) = attn_metadata
             compress_common_attn_metadata = swa_metadata
         cos = compress_common_attn_metadata.decode.cos[layer_name]
@@ -1858,7 +1855,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     compressed_kv)
 
         if get_ascend_device_type() in {AscendDeviceType.A5}:
-            if self.compress_ratio == 1:
+            if self.compress_ratio <= 1:
                 attn_output = torch.ops._C_ascend.npu_kv_quant_sparse_attn_sharedkv(
                     q,
                     ori_kv=swa_kv_cache,
@@ -1868,7 +1865,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     sinks=self.attn_sink,
                     metadata=swa_metadata.decode.sas_metadata,
                     kv_quant_mode=1,
-                    cmp_ratio=self.compress_ratio,
+                    cmp_ratio=1,
                     tile_size=64,
                     rope_head_dim=64,
                     softmax_scale=self.softmax_scale,
@@ -1936,7 +1933,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                     sinks=self.attn_sink,
                     metadata=swa_metadata.decode.sas_metadata,
                     softmax_scale=self.softmax_scale,
-                    cmp_ratio=self.compress_ratio,
+                    cmp_ratio=1,
                     ori_mask_mode=4,
                     ori_win_left=self.window_size - 1,
                     ori_win_right=0,
@@ -1999,7 +1996,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr_pertoken_scale: torch.Tensor = None,
     ):
         (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache, indexer_full_cache) = kv_cache
-        (indexer_kv_scale_metadata, _, _, _, indexer_kv_state_metadata) = attn_metadata
+        # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
+        (_, _, indexer_kv_state_metadata, indexer_kv_scale_metadata, _) = attn_metadata
 
         if (not isinstance(self.inderxer_wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
             isinstance(self.inderxer_wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod) and \
