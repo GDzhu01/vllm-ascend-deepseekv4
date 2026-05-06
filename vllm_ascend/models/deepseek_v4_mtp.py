@@ -294,6 +294,13 @@ class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
                 continue
+            
+            if name == "embed.weight":
+                name = "mtp.0.emb.tok_emb.weight"
+                
+            if name == "head.weight":
+                name = "mtp.0.head.weight"
+            
             spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
             if spec_layer is None:
                 continue
