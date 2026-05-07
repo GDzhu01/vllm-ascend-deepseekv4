@@ -212,10 +212,13 @@ class SpecDecodeBaseProposer(EagleProposer):
         } - all_indexer_layer_names
 
         self.attn_layer_names = list(sorted(self._draft_attn_layer_names))
-        draft_attn_layers_dict = get_layers_from_vllm_config(self.vllm_config, AttentionLayerBase)
-        self.kernel_block_size = (
-            draft_attn_layers_dict[self.attn_layer_names[0]].get_attn_backend().get_supported_kernel_block_sizes()[0]
-        )
+        # NOTE: The kernel block size must match what the BlockTable uses
+        # (determined by select_common_block_size in model_runner).
+        # Taking get_supported_kernel_block_sizes()[0] can give 2 when the
+        # actual kernel block size is 128 (from --block-size 128), which
+        # would cause incorrect slot_mapping computation for MTP draft steps,
+        # leading to out-of-bounds KV cache access in kv_compress_epilog.
+        self.kernel_block_size = self.runner.cache_config.block_size
 
         self.piece_all_attn_layer_name = []
         for _ in range(self.num_speculative_tokens):
@@ -368,12 +371,42 @@ class SpecDecodeBaseProposer(EagleProposer):
         # when update. So we can use the shallow copy.
         return copy.copy(attn_metadata)
 
+    #def _freeze_draft_step_attn_metadata(self, attn_metadata):
+    #    decode_metadata = getattr(attn_metadata, "decode", None)
+    #    if decode_metadata is not None:
+    #        if decode_metadata.sas_metadata is not None:
+    #            decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
+    #    return attn_metadata
+
     def _freeze_draft_step_attn_metadata(self, attn_metadata):
+        """Detach per-step metadata from builder scratch buffers.
+
+        Draft MTP constructs all speculative steps' metadata before running the
+        first draft forward. DSA metadata builders reuse decode scratch buffers
+        such as `slot_mapping`, `start_pos`, `sas_metadata` and
+        `qli_metadata`. If later steps overwrite those buffers, the first step
+        can observe `cu_seqlens_q` from one step and operator metadata from a
+        different step.
+        """
         decode_metadata = getattr(attn_metadata, "decode", None)
         if decode_metadata is not None:
+            if decode_metadata.slot_mapping is not None:
+                decode_metadata.slot_mapping = decode_metadata.slot_mapping.clone()
+            if decode_metadata.start_pos is not None:
+                decode_metadata.start_pos = decode_metadata.start_pos.clone()
             if decode_metadata.sas_metadata is not None:
                 decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
-        return attn_metadata
+            if decode_metadata.qli_metadata is not None:
+                decode_metadata.qli_metadata = decode_metadata.qli_metadata.clone()
+
+        prefill_metadata = getattr(attn_metadata, "prefill", None)
+        if prefill_metadata is not None:
+            if prefill_metadata.slot_mapping is not None:
+                prefill_metadata.slot_mapping = prefill_metadata.slot_mapping.clone()
+            if prefill_metadata.start_pos is not None:
+                prefill_metadata.start_pos = prefill_metadata.start_pos.clone()
+
+        return attn_metadata 
 
     @torch.inference_mode()
     def dummy_run(
