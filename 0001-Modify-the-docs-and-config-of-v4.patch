@@ -1,0 +1,852 @@
+From 3676573100a781009ee6be3816f420148d141921 Mon Sep 17 00:00:00 2001
+From: GDzhu01 <809721801@qq.com>
+Date: Fri, 24 Apr 2026 11:26:03 +0800
+Subject: [PATCH] Modify the docs and config of v4
+
+Signed-off-by: GDzhu01 <809721801@qq.com>
+---
+ docs/source/tutorials/DeepSeek-V4.md          | 632 ++++++++++++++++++
+ vllm_ascend/attention/dsa_v1.py               |   2 +-
+ vllm_ascend/models/__init__.py                |   4 +-
+ .../patch/platform/patch_model_config.py      |  29 +-
+ .../platform/patch_speculative_config.py      |   4 +-
+ .../patch/platform/patch_transformers.py      |   9 +-
+ vllm_ascend/quantization/quant_config.py      |   8 +-
+ .../transformers_utils/configs/deepseek_v4.py |   2 +-
+ vllm_ascend/worker/model_runner_v1.py         |   2 +-
+ vllm_ascend/worker/worker.py                  |   2 +-
+ 10 files changed, 663 insertions(+), 31 deletions(-)
+ create mode 100644 docs/source/tutorials/DeepSeek-V4.md
+
+diff --git a/docs/source/tutorials/DeepSeek-V4.md b/docs/source/tutorials/DeepSeek-V4.md
+new file mode 100644
+index 00000000..007be0f4
+--- /dev/null
++++ b/docs/source/tutorials/DeepSeek-V4.md
+@@ -0,0 +1,632 @@
++# DeepSeek-V4
++
++## Introduction
++
++DeepSeek-V4 is introducing several key upgrades over DeepSeek-V3. (Currently, vllm-ascend temporarily only supports DeepSeek-V4-FLASH)
++
++- The Manifold-Constrained Hyper-Connections (mHC) to strengthen conventional residual connections;
++- A hybrid attention architecture, which greatly improves long-context efficiency through Compress-4-Attention and Compress-128-Attention. For the Mixture-of Experts (MoE) components, it still adopt the DeepSeekMoE architecture, with only minor adjustments.
++
++This document will show the main verification steps of the model, including supported features, feature configuration, environment preparation, single-node and multi-node deployment, accuracy and performance evaluation.
++
++## Environment Preparation
++
++### Model Weight
++- `DeepSeek-V4-FLASH-W8A8`(Quantized version): require 1 Atlas 800 A3 (64G × 16) node or 1 Atlas 800 A2 (64G × 8) node. [Download model weight](https://modelers.cn/) ( Model weights are being refreshed. )
++
++It is recommended to download the model weight to the shared directory of multiple nodes, such as `/root/.cache/`
++
++### Verify Multi-node Communication(Optional)
++
++If you want to deploy multi-node environment, you need to verify multi-node communication according to [verify multi-node communication environment](../installation.md#verify-multi-node-communication).
++
++### Installation
++
++You can using our official docker image to run `DeepSeek-V4` directly. Currently, `DeepSeek-V4` is integrated in image `v0.13.0rc3`.
++
++:::::{tab-set}
++:sync-group: install
++
++::::{tab-item} A2 series
++:sync: A2
++
++Start the docker image on your each node.
++
++```{code-block} bash
++   :substitutions:
++
++export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3
++docker run --rm \
++    --name vllm-ascend \
++    --shm-size=1g \
++    --net=host \
++    --device /dev/davinci0 \
++    --device /dev/davinci1 \
++    --device /dev/davinci2 \
++    --device /dev/davinci3 \
++    --device /dev/davinci4 \
++    --device /dev/davinci5 \
++    --device /dev/davinci6 \
++    --device /dev/davinci7 \
++    --device /dev/davinci_manager \
++    --device /dev/devmm_svm \
++    --device /dev/hisi_hdc \
++    -v /usr/local/dcmi:/usr/local/dcmi \
++    -v /usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool \
++    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
++    -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
++    -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
++    -v /etc/ascend_install.info:/etc/ascend_install.info \
++    -v /root/.cache:/root/.cache \
++    -it $IMAGE bash
++```
++::::
++
++::::{tab-item} A3 series
++:sync: A3
++
++Start the docker image on your each node.
++
++```{code-block} bash
++   :substitutions:
++
++export IMAGE=quay.io/ascend/vllm-ascend:v0.13.0rc3-a3
++docker run --rm \
++    --name vllm-ascend \
++    --shm-size=1g \
++    --net=host \
++    --device /dev/davinci0 \
++    --device /dev/davinci1 \
++    --device /dev/davinci2 \
++    --device /dev/davinci3 \
++    --device /dev/davinci4 \
++    --device /dev/davinci5 \
++    --device /dev/davinci6 \
++    --device /dev/davinci7 \
++    --device /dev/davinci8 \
++    --device /dev/davinci9 \
++    --device /dev/davinci10 \
++    --device /dev/davinci11 \
++    --device /dev/davinci12 \
++    --device /dev/davinci13 \
++    --device /dev/davinci14 \
++    --device /dev/davinci15 \
++    --device /dev/davinci_manager \
++    --device /dev/devmm_svm \
++    --device /dev/hisi_hdc \
++    -v /usr/local/dcmi:/usr/local/dcmi \
++    -v /usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool \
++    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
++    -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
++    -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
++    -v /etc/ascend_install.info:/etc/ascend_install.info \
++    -v /root/.cache:/root/.cache \
++    -it $IMAGE bash
++```
++::::
++
++:::::
++
++In addition, if you don't want to use the docker image as above, you can also build all from source:
++
++- Install `vllm-ascend` from source, refer to [installation](../installation.md).
++If you want to deploy multi-node environment, you need to set up environment on each node.
++
++:::{note}
++Please use the v0.13.0rc3 code to install vllm-ascend.
++:::
++
++## Deployment
++
++:::{note}
++In this tutorial, we suppose you downloaded the model weight to `/root/.cache/`. Feel free to change it to your own path.
++:::
++
++### Single-node Deployment
++
++- `DeepSeek-V4-w8a8`: can be deployed on 1 Atlas 800 A3 (64G × 16) or 1 Atlas 800 A2 (64G × 8).
++
++Run the following scripts on each node respectively. 
++
++:::::{tab-set}
++:sync-group: install
++
++::::{tab-item} A2 series
++:sync: A2
++
++Run the following script to execute online inference.
++
++```shell
++export USE_MULTI_BLOCK_POOL=1
++export OMP_PROC_BIND=false
++export OMP_NUM_THREADS=10
++export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
++export ACL_OP_INIT_MODE=1
++export TRITON_ALL_BLOCKS_PARALLEL=1
++
++vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
++  --host 0.0.0.0 \
++  --max_model_len 65536 \
++  --max-num-batched-tokens 8192 \
++  --served-model-name ds \
++  --gpu-memory-utilization 0.9 \
++  --max-num-seqs 16 \
++  --data-parallel-size 1 \
++  --tensor-parallel-size 8 \
++  --enable-expert-parallel \
++  --quantization ascend \
++  --port 8006 \
++  --block-size 128 \
++  --async-scheduling \
++  --additional-config '{"enable_cpu_binding": "true", "multistream_overlap_shared_expert": true}' \
++  --speculative-config '{"num_speculative_tokens": 1,"method": "deepseek_mtp"}' \
++  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
++```
++
++::::
++
++::::{tab-item} A3 series
++:sync: A3
++
++Run the following script to execute online inference.
++
++```shell
++export OMP_PROC_BIND=false
++export OMP_NUM_THREADS=10  
++export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True  
++export ACL_OP_INIT_MODE=1
++export ASCEND_A3_ENABLE=1
++export USE_MULTI_BLOCK_POOL=1
++export HCCL_BUFFSIZE=1024
++export VLLM_ASCEND_ENABLE_FUSED_MC2=1
++export VLLM_ASCEND_ENABLE_FLASHCOMM1=1
++
++vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
++    --host 0.0.0.0 \
++    --max_model_len 65536 \
++    --max-num-batched-tokens 8192 \
++    --served-model-name deepseek_v4 \
++    --gpu-memory-utilization 0.9 \
++    --max-num-seqs 16 \
++    --data-parallel-size 2 \
++    --tensor-parallel-size 8 \
++    --enable-expert-parallel \
++    --quantization ascend \
++    --port 8005 \
++    --block-size 128 \
++    --async-scheduling \
++    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY"}'\
++    --speculative-config '{"num_speculative_tokens": 1,"method": "deepseek_mtp"}' \
++    --additional-config '{"enable_cpu_binding": "true","multistream_overlap_shared_expert": false}'
++```
++::::
++:::::
++
++### Prefill-Decode Disaggregation
++
++We'd like to show the deployment guide of DeepSeek-V4 on Atlas 800 A3 (64G × 16) multi-node environment with 2P1D for better performance.
++
++Before you start, please
++
++1. prepare the script `launch_online_dp.py` on each node.
++
++    ```python
++    import argparse
++    import multiprocessing
++    import os
++    import subprocess
++    import sys
++
++    def parse_args():
++        parser = argparse.ArgumentParser()
++        parser.add_argument(
++            "--dp-size",
++            type=int,
++            required=True,
++            help="Data parallel size."
++        )
++        parser.add_argument(
++            "--tp-size",
++            type=int,
++            default=1,
++            help="Tensor parallel size."
++        )
++        parser.add_argument(
++            "--dp-size-local",
++            type=int,
++            default=-1,
++            help="Local data parallel size."
++        )
++        parser.add_argument(
++            "--dp-rank-start",
++            type=int,
++            default=0,
++            help="Starting rank for data parallel."
++        )
++        parser.add_argument(
++            "--dp-address",
++            type=str,
++            required=True,
++            help="IP address for data parallel master node."
++        )
++        parser.add_argument(
++            "--dp-rpc-port",
++            type=str,
++            default=12345,
++            help="Port for data parallel master node."
++        )
++        parser.add_argument(
++            "--vllm-start-port",
++            type=int,
++            default=9000,
++            help="Starting port for the engine."
++        )
++        return parser.parse_args()
++
++    args = parse_args()
++    dp_size = args.dp_size
++    tp_size = args.tp_size
++    dp_size_local = args.dp_size_local
++    if dp_size_local == -1:
++        dp_size_local = dp_size
++    dp_rank_start = args.dp_rank_start
++    dp_address = args.dp_address
++    dp_rpc_port = args.dp_rpc_port
++    vllm_start_port = args.vllm_start_port
++
++    def run_command(visiable_devices, dp_rank, vllm_engine_port):
++        command = [
++            "bash",
++            "./run_dp_template.sh",
++            visiable_devices,
++            str(vllm_engine_port),
++            str(dp_size),
++            str(dp_rank),
++            dp_address,
++            dp_rpc_port,
++            str(tp_size),
++        ]
++        subprocess.run(command, check=True)
++
++    if __name__ == "__main__":
++        template_path = "./run_dp_template.sh"
++        if not os.path.exists(template_path):
++            print(f"Template file {template_path} does not exist.")
++            sys.exit(1)
++
++        processes = []
++        num_cards = dp_size_local * tp_size
++        for i in range(dp_size_local):
++            dp_rank = dp_rank_start + i
++            vllm_engine_port = vllm_start_port + i
++            visiable_devices = ",".join(str(x) for x in range(i * tp_size, (i + 1) * tp_size))
++            process = multiprocessing.Process(target=run_command,
++                                            args=(visiable_devices, dp_rank,
++                                                    vllm_engine_port))
++            processes.append(process)
++            process.start()
++
++        for process in processes:
++            process.join()
++
++    ```
++
++2. prepare the script `run_dp_template.sh` on each node.
++
++    1. Prefill node 1
++
++        ```shell
++        nic_name="xxxx" # change to your own nic name
++        local_ip=xx.xx.xx.1 # change to your own ip
++
++        export HCCL_OP_EXPANSION_MODE="AIV"
++
++        export HCCL_IF_IP=$local_ip
++        export GLOO_SOCKET_IFNAME=$nic_name
++        export TP_SOCKET_IFNAME=$nic_name
++        export HCCL_SOCKET_IFNAME=$nic_name
++
++        export VLLM_RPC_TIMEOUT=3600000
++        export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=30000
++        export HCCL_EXEC_TIMEOUT=204
++        export HCCL_CONNECT_TIMEOUT=120
++
++        export OMP_PROC_BIND=false
++        export OMP_NUM_THREADS=10
++        export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
++        export HCCL_BUFFSIZE=2560
++        export TASK_QUEUE_ENABLE=1
++
++        export ASCEND_BUFFER_POOL=4:8
++        export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:$LD_PRELOAD
++        export USE_MULTI_BLOCK_POOL=1
++
++        export ASCEND_RT_VISIBLE_DEVICES=$1
++
++        vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
++            --host 0.0.0.0 \
++            --port $2 \
++            --data-parallel-size $3 \
++            --data-parallel-rank $4 \
++            --data-parallel-address $5 \
++            --data-parallel-rpc-port $6 \
++            --tensor-parallel-size $7 \
++            --enable-expert-parallel \
++            --seed 1024 \
++            --served-model-name deepseek_v4 \
++            --max-model-len 65536 \
++            --max-num-batched-tokens 8192 \
++            --max-num-seqs 4 \
++            --no-disable-hybrid-kv-cache-manager \
++            --no-enable-prefix-caching \
++            --trust-remote-code \
++            --gpu-memory-utilization 0.85 \
++            --quantization ascend \
++            --speculative-config '{"num_speculative_tokens": 1, "method":"deepseek_mtp"}' \
++            --enforce-eager \
++            --additional_config '{"enable_cpu_binding": "true"}' \
++            --kv-transfer-config \
++            '{"kv_connector": "MooncakeConnectorV1",
++            "kv_role": "kv_producer",
++            "kv_port": "30000",
++            "engine_id": "0",
++            "kv_connector_module_path": "vllm_ascend.distributed.mooncake_connector",
++            "kv_connector_extra_config": {
++                        "prefill": {
++                                "dp_size": 16,
++                                "tp_size": 1
++                        },
++                        "decode": {
++                                "dp_size": 32,
++                                "tp_size": 1
++                        }
++                }
++            }'
++        ```
++
++    1. Prefill node 2
++
++        ```shell
++        nic_name="xxxx" # change to your own nic name
++        local_ip=xx.xx.xx.2 # change to your own ip
++
++        export HCCL_OP_EXPANSION_MODE="AIV"
++
++        export HCCL_IF_IP=$local_ip
++        export GLOO_SOCKET_IFNAME=$nic_name
++        export TP_SOCKET_IFNAME=$nic_name
++        export HCCL_SOCKET_IFNAME=$nic_name
++
++        export VLLM_RPC_TIMEOUT=3600000
++        export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=30000
++        export HCCL_EXEC_TIMEOUT=204
++        export HCCL_CONNECT_TIMEOUT=120
++
++        export OMP_PROC_BIND=false
++        export OMP_NUM_THREADS=10
++        export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
++        export HCCL_BUFFSIZE=2560
++        export TASK_QUEUE_ENABLE=1
++
++        export ASCEND_BUFFER_POOL=4:8
++        export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:$LD_PRELOAD
++        export USE_MULTI_BLOCK_POOL=1
++
++        export ASCEND_RT_VISIBLE_DEVICES=$1
++
++        vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
++            --host 0.0.0.0 \
++            --port $2 \
++            --data-parallel-size $3 \
++            --data-parallel-rank $4 \
++            --data-parallel-address $5 \
++            --data-parallel-rpc-port $6 \
++            --tensor-parallel-size $7 \
++            --enable-expert-parallel \
++            --seed 1024 \
++            --served-model-name deepseek_v4 \
++            --max-model-len 65536 \
++            --max-num-batched-tokens 8192 \
++            --max-num-seqs 4 \
++            --no-disable-hybrid-kv-cache-manager \
++            --no-enable-prefix-caching \
++            --trust-remote-code \
++            --gpu-memory-utilization 0.85 \
++            --quantization ascend \
++            --speculative-config '{"num_speculative_tokens": 1, "method":"deepseek_mtp"}' \
++            --enforce-eager \
++            --additional_config '{"enable_cpu_binding": "true"}' \
++            --kv-transfer-config \
++            '{"kv_connector": "MooncakeConnectorV1",
++            "kv_role": "kv_producer",
++            "kv_port": "30100",
++            "engine_id": "1",
++            "kv_connector_module_path": "vllm_ascend.distributed.mooncake_connector",
++            "kv_connector_extra_config": {
++                        "prefill": {
++                                "dp_size": 16,
++                                "tp_size": 1
++                        },
++                        "decode": {
++                                "dp_size": 32,
++                                "tp_size": 1
++                        }
++                }
++            }'
++        ```
++
++    2. Decode node (Same as another D node)
++
++        ```shell
++        nic_name="xxxx" # change to your own nic name
++        local_ip=xx.xx.xx.xx # change to your own ip
++
++        export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2:$LD_PRELOAD
++        export HCCL_OP_EXPANSION_MODE="AIV"
++        export TASK_QUEUE_ENABLE=1
++
++        export VLLM_RPC_TIMEOUT=3600000
++        export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=30000
++        export HCCL_EXEC_TIMEOUT=2000
++        export HCCL_CONNECT_TIMEOUT=1200
++
++        export HCCL_IF_IP=$local_ip
++        export GLOO_SOCKET_IFNAME=$nic_name
++        export TP_SOCKET_IFNAME=$nic_name
++        export HCCL_SOCKET_IFNAME=$nic_name
++
++        export OMP_PROC_BIND=false
++        export OMP_NUM_THREADS=10
++        export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
++        export HCCL_BUFFSIZE=1024
++        export ASCEND_BUFFER_POOL=4:8
++
++        export USE_MULTI_BLOCK_POOL=1
++        export VLLM_ASCEND_ENABLE_FUSED_MC2=1
++        export ASCEND_RT_VISIBLE_DEVICES=$1
++
++        vllm serve /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8 \
++            --host 0.0.0.0 \
++            --port $2 \
++            --data-parallel-size $3 \
++            --data-parallel-rank $4 \
++            --data-parallel-address $5 \
++            --data-parallel-rpc-port $6 \
++            --tensor-parallel-size $7 \
++            --enable-expert-parallel \
++            --seed 1024 \
++            --served-model-name deepseek_v4 \
++            --max-model-len 65536 \
++            --max-num-batched-tokens 144 \
++            --max-num-seqs 48 \
++            --async-scheduling \
++            --no-disable-hybrid-kv-cache-manager \
++            --no-enable-prefix-caching \
++            --trust-remote-code \
++            --gpu-memory-utilization 0.88 \
++            --quantization ascend \
++            --speculative-config '{"num_speculative_tokens": 2, "method":"deepseek_mtp"}' \
++            --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY","cudagraph_capture_sizes":[144]}' \
++            --kv-transfer-config \
++            '{"kv_connector": "MooncakeConnectorV1",
++            "kv_role": "kv_consumer",
++            "kv_port": "30200",
++            "engine_id": "2",
++            "kv_connector_module_path": "vllm_ascend.distributed.mooncake_connector",
++            "kv_connector_extra_config": {
++                        "prefill": {
++                                "dp_size": 16,
++                                "tp_size": 1
++                        },
++                        "decode": {
++                                "dp_size": 32,
++                                "tp_size": 1
++                        }
++                }
++            }' \
++            --additional_config '{"enable_cpu_binding": "true", "multistream_overlap_shared_expert": false, "multistream_dsa_preprocess": false}'
++        ```
++
++Once the preparation is done, you can start the server with the following command on each node:
++
++1. Prefill node 0
++
++```shell
++# change ip to your own
++python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.1 --dp-rpc-port 12321 --vllm-start-port 7100
++```
++
++2. Prefill node 1
++
++```shell
++# change ip to your own
++python launch_online_dp.py --dp-size 16 --tp-size 1 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.2 --dp-rpc-port 12321 --vllm-start-port 7100
++```
++
++3. Decode node 0
++
++```shell
++# change ip to your own
++python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 0 --dp-address xx.xx.xx.3 --dp-rpc-port 12321 --vllm-start-port 7100
++```
++
++4. Decode node 1
++
++```shell
++# change ip to your own
++python launch_online_dp.py --dp-size 32 --dp-size-local 16 --dp-rank-start 16 --dp-address xx.xx.xx.3 --dp-rpc-port 12321 --vllm-start-port 7100
++```
++
++Finally, Refer to [Prefill-Decode Disaggregation (Deepseek)](./pd_disaggregation_mooncake_multi_node.md) to deploy the P-D disaggregation proxy.
++
++## Functional Verification
++
++Once your server is started, you can query the model with input prompts:
++
++```shell
++curl http://<node0_ip>:<port>/v1/chat/completions \
++    -H "Content-Type: application/json" \
++    -d '{
++        "model": "deepseek_v4",
++        "messages": [
++            {
++                "role": "user",
++                "content": "Who are you?"
++            }
++        ],
++        "max_tokens": 256,
++        "temperature": 0
++    }'
++```
++
++## Accuracy Evaluation
++
++Here are two accuracy evaluation methods.
++
++### Using AISBench
++
++1. Refer to [Using AISBench](../developer_guide/evaluation/using_ais_bench.md) for details.
++
++2. After execution, you can get the result.
++
++### Using Language Model Evaluation Harness
++
++As an example, take the `gsm8k` dataset as a test dataset, and run accuracy evaluation of `DeepSeek-V4` in online mode.
++
++1. Refer to [Using lm_eval](../developer_guide/evaluation/using_lm_eval.md) for `lm_eval` installation.
++
++2. Run `lm_eval` to execute the accuracy evaluation.
++
++```shell
++lm_eval \
++  --model local-completions \
++  --model_args model=/root/.cache/Eco-Tech/DeepSeek-V4-w8a8,base_url=http://127.0.0.1:8006/v1/completions,tokenized_requests=False,trust_remote_code=True \
++  --tasks gsm8k \
++  --output_path ./
++```
++
++3. After execution, you can get the result.
++
++## Performance
++
++### Using AISBench
++
++Refer to [Using AISBench for performance evaluation](../developer_guide/evaluation/using_ais_bench.md#execute-performance-evaluation) for details.
++
++### Using vLLM Benchmark
++
++Run performance evaluation of `DeepSeek-V4-W8A8` as an example.
++
++Refer to [vllm benchmark](https://docs.vllm.ai/en/latest/contributing/benchmarks.html) for more details.
++
++There are three `vllm bench` subcommand:
++- `latency`: Benchmark the latency of a single batch of requests.
++- `serve`: Benchmark the online serving throughput.
++- `throughput`: Benchmark offline inference throughput.
++
++Take the `serve` as an example. Run the code as follows.
++
++```shell
++export VLLM_USE_MODELSCOPE=true
++vllm bench serve --model /root/.cache/modelscope/hub/models/vllm-ascend/DeepSeek-V4-W8A8  --dataset-name random --random-input 200 --num-prompt 200 --request-rate 1 --save-result --result-dir ./
++```
+diff --git a/vllm_ascend/attention/dsa_v1.py b/vllm_ascend/attention/dsa_v1.py
+index 4a6e4966..a9636146 100644
+--- a/vllm_ascend/attention/dsa_v1.py
++++ b/vllm_ascend/attention/dsa_v1.py
+@@ -444,7 +444,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
+ 
+         if AscendDSAMetadataBuilder.hadamard is None:
+             hf_config = self.model_config.hf_config
+-            if hf_config.model_type == 'deepseek_xyz':
++            if hf_config.model_type == 'deepseek_v4':
+                 indexer_head_dim = hf_config.index_head_dim
+                 try:
+                     from scipy.linalg import hadamard
+diff --git a/vllm_ascend/models/__init__.py b/vllm_ascend/models/__init__.py
+index 320d36d6..5997879b 100644
+--- a/vllm_ascend/models/__init__.py
++++ b/vllm_ascend/models/__init__.py
+@@ -3,8 +3,8 @@ from vllm import ModelRegistry
+ 
+ def register_model():
+     ModelRegistry.register_model(
+-        "DeepseekXYZForCausalLM",
+-        "vllm_ascend.models.deepseek_v4:AscendDeepseekV4ForCausalLM")
++    "DeepseekV4ForCausalLM",
++    "vllm_ascend.models.deepseek_v4:AscendDeepseekV4ForCausalLM")
+ 
+     ModelRegistry.register_model(
+         "DeepSeekV4MTPModel",
+diff --git a/vllm_ascend/patch/platform/patch_model_config.py b/vllm_ascend/patch/platform/patch_model_config.py
+index 72ce65ee..4e50cecd 100644
+--- a/vllm_ascend/patch/platform/patch_model_config.py
++++ b/vllm_ascend/patch/platform/patch_model_config.py
+@@ -8,25 +8,26 @@ def is_deepseek_mla(self) -> bool:
+     if not hasattr(self.hf_text_config, "model_type"):
+         return False
+     elif self.hf_text_config.model_type in (
+-            "deepseek_v2",
+-            "deepseek_v3",
+-            "deepseek_v32",
+-            "deepseek_xyz",
+-            "deepseek_mtp",
+-            "kimi_k2",
+-            "kimi_linear",
+-            "longcat_flash",
+-            "pangu_ultra_moe",
+-            "pangu_ultra_moe_mtp",
++        "deepseek_v2",
++        "deepseek_v3",
++        "deepseek_v32",
++        "deepseek_v4",
++        "deepseek_mtp",
++        "kimi_k2",
++        "kimi_linear",
++        "longcat_flash",
++        "pangu_ultra_moe",
++        "pangu_ultra_moe_mtp",
+     ):
+         return self.hf_text_config.kv_lora_rank is not None
+     elif self.hf_text_config.model_type == "eagle":
+         # if the model is an EAGLE module, check for the
+         # underlying architecture
+-        return (self.hf_text_config.model.model_type
+-                in ("deepseek_v2", "deepseek_v3", "deepseek_v32",
+-                    "deepseek_xyz")
+-                and self.hf_text_config.kv_lora_rank is not None)
++        return (
++            self.hf_text_config.model.model_type
++            in ("deepseek_v2", "deepseek_v3", "deepseek_v32", "deepseek_v4")
++            and self.hf_text_config.kv_lora_rank is not None
++        )
+     return False
+ 
+ 
+diff --git a/vllm_ascend/patch/platform/patch_speculative_config.py b/vllm_ascend/patch/platform/patch_speculative_config.py
+index b55c4d96..8981a005 100644
+--- a/vllm_ascend/patch/platform/patch_speculative_config.py
++++ b/vllm_ascend/patch/platform/patch_speculative_config.py
+@@ -15,11 +15,11 @@ else:
+ 
+ def hf_config_override(hf_config: PretrainedConfig) -> PretrainedConfig:
+     initial_architecture = hf_config.architectures[0]
+-    if hf_config.model_type in ("deepseek_v3", "deepseek_v32", "deepseek_xyz"):
++    if hf_config.model_type in ("deepseek_v3", "deepseek_v32", "deepseek_v4"):
+         target_model_type = hf_config.model_type
+         hf_config.model_type = "deepseek_mtp"
+     if hf_config.model_type == "deepseek_mtp":
+-        if target_model_type == "deepseek_xyz":
++        if target_model_type == "deepseek_v4":
+             hf_config.update({"architectures": ["DeepSeekV4MTPModel"]})
+         else:
+             n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
+diff --git a/vllm_ascend/patch/platform/patch_transformers.py b/vllm_ascend/patch/platform/patch_transformers.py
+index 4c5d6f82..23f056da 100644
+--- a/vllm_ascend/patch/platform/patch_transformers.py
++++ b/vllm_ascend/patch/platform/patch_transformers.py
+@@ -6,8 +6,7 @@ import importlib
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ from transformers import AutoConfig
+ from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
+-
+-AutoConfig.register("deepseek_xyz", DeepseekV4Config)
++AutoConfig.register("deepseek_v4", DeepseekV4Config)
+ 
+ import vllm  # noqa: E402
+ from vllm.transformers_utils.config import _CONFIG_REGISTRY  # noqa: E402
+@@ -73,9 +72,9 @@ class HFConfigParser(ConfigParserBase):
+         # Allow hf_overrides to override model_type before checking _CONFIG_REGISTRY
+         if (hf_overrides := kwargs.pop("hf_overrides", None)) is not None:
+             model_type = hf_overrides.get("model_type", model_type)
+-
+-        if "deepseek_xyz" not in _CONFIG_REGISTRY:
+-            _CONFIG_REGISTRY.update(deepseek_xyz="DeepseekV4Config")
++        
++        if  "deepseek_v4" not in _CONFIG_REGISTRY:
++            _CONFIG_REGISTRY.update(deepseek_v4="DeepseekV4Config")
+ 
+         if model_type in _CONFIG_REGISTRY:
+             config_class = _CONFIG_REGISTRY[model_type]
+diff --git a/vllm_ascend/quantization/quant_config.py b/vllm_ascend/quantization/quant_config.py
+index abdc0f87..ff835f09 100644
+--- a/vllm_ascend/quantization/quant_config.py
++++ b/vllm_ascend/quantization/quant_config.py
+@@ -265,7 +265,7 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
+         "language_model.lm_head.": "lm_head.",
+         "language_model.model.": "model.language_model.",
+     },
+-    "deepseek_xyz": {
++    "deepseek_v4": {
+         "layers.": "model.layers.",
+         "embed.": "model.embed_tokens.",
+         "head.": "lm_head.",
+@@ -273,8 +273,8 @@ QUANT_MODEL_PREFIX_MAPPINGS = {
+ }
+ 
+ QUANT_MODEL_SUBSTR_MAPPINGS = {
+-    "deepseek_xyz": {
+-        ".attn.": ".self_attn.",
++    "deepseek_v4": {
++        ".attn.": ".sefl_attn.",
+         ".w1.": ".gate_proj.",
+         ".w2.": ".down_proj.",
+         ".w3.": ".up_proj.",
+@@ -328,7 +328,7 @@ packed_modules_model_mapping = {
+         ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"],
+         "fused_qkv_a_proj": ["q_a_proj", "kv_a_proj_with_mqa"]
+     },
+-    "deepseek_xyz": {
++    "deepseek_v4": {
+         "gate_up_proj": ["gate_proj", "up_proj"],
+         "experts":
+         ["experts.0.gate_proj", "experts.0.up_proj", "experts.0.down_proj"]
+diff --git a/vllm_ascend/transformers_utils/configs/deepseek_v4.py b/vllm_ascend/transformers_utils/configs/deepseek_v4.py
+index 2164848a..855afb9d 100644
+--- a/vllm_ascend/transformers_utils/configs/deepseek_v4.py
++++ b/vllm_ascend/transformers_utils/configs/deepseek_v4.py
+@@ -111,7 +111,7 @@ class DeepseekV4Config(PretrainedConfig):
+     >>> configuration = model.config
+     ```"""
+ 
+-    model_type = "deepseek_xyz"
++    model_type = "deepseek_v4"
+     keys_to_ignore_at_inference = ["past_key_values"]
+     base_model_tp_plan = {  # TODO: only replicate attention layers when > first_k_dense_replace
+         "layers.*.mlp.experts.*.gate_proj": "local_colwise",
+diff --git a/vllm_ascend/worker/model_runner_v1.py b/vllm_ascend/worker/model_runner_v1.py
+index a5c70714..327fc587 100644
+--- a/vllm_ascend/worker/model_runner_v1.py
++++ b/vllm_ascend/worker/model_runner_v1.py
+@@ -2614,7 +2614,7 @@ class NPUModelRunner(GPUModelRunner):
+ 
+     def initialize_kv_state(self):
+         hf_config = self.model_config.hf_config
+-        if hf_config.model_type != 'deepseek_xyz':
++        if hf_config.model_type != 'deepseek_v4':
+             return
+         kv_states: Dict[str, tuple[torch.Tensor]] = {}
+         compress_ratio_to_layers = {}
+diff --git a/vllm_ascend/worker/worker.py b/vllm_ascend/worker/worker.py
+index 689dbc79..2d6a127a 100644
+--- a/vllm_ascend/worker/worker.py
++++ b/vllm_ascend/worker/worker.py
+@@ -268,7 +268,7 @@ class NPUWorker(WorkerBase):
+     @torch.inference_mode()
+     def get_fix_memory(self) -> int:
+         hf_config = self.vllm_config.model_config.hf_text_config
+-        if hf_config.model_type != 'deepseek_xyz':
++        if hf_config.model_type != 'deepseek_v4':
+             return 0
+         max_num_reqs = self.scheduler_config.max_num_seqs
+         head_dim = hf_config.head_dim
+-- 
+2.50.1 (Apple Git-155)
+
+

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--   Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+       This file is a part of the CANN Open Software.
+       Licensed under CANN Open Software License Agreement Version 2.0 (the "License").
+       Please refer to the License for details. You may not use this file except in compliance with the License.
+       THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+       INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+       See LICENSE in the root of the software repository for the full text of the License.
+-->
+
+<configuration>
+    <oatconfig>
+        <licensefile></licensefile>
+        <policylist>
+            <policy name="projectPolicy" desc="">
+                <policyitem type="license" name="cann License" path=".*" desc="CANN 协议"/>
+                <policyitem type="copyright" name="*" path=".*" rule="may" group="defaultGroup" filefilter="copyrightPolicyFilter" desc=""/>
+            </policy>
+        </policylist>
+        <filefilterlist>
+            <filefilter name="defaultFilter" desc="Files not to check">
+                <filteritem type="filepath" name="OWNERS" desc="CATLASS仓管理成员"/>
+                <filteritem type="filepath" name="Third_Party_Open_Source_Software_Notice" desc="第三方使用"/>
+                <filteritem type="filepath" name="LICENSE" desc="无需License头检测"/>
+            </filefilter>
+            <filefilter name="defaultPolicyFilter" desc="Filters for compatibility，license header policies">
+                <!--Void/-->
+            </filefilter>
+            <filefilter name="copyrightPolicyFilter" desc="Filters for copyright header policies">
+                <filteritem type="filepath" name="OWNERS" desc="CATLASS仓管理成员，无需添加版权头"/>
+                <filteritem type="filepath" name=".clang-format|.gitignore|Third_Party_Open_Source_Software_Notice" desc="无需添加版权头"/>
+                <filteritem type="filepath" name=".gitcode/ISSUE_TEMPLATE/*.yml" desc="Issue 模板无需添加版权头"/>
+                <filteritem type="filepath" name="*.md" desc="Markdown文档无需添加版权头"/>
+            </filefilter>
+            <filefilter name="licenseFileNamePolicyFilter" desc="Filters for LICENSE file policies">
+                <!--Void/-->
+            </filefilter>
+            <filefilter name="readmeFileNamePolicyFilter" desc="Filters for README file policies">
+                <!--Void/-->
+            </filefilter>
+            <filefilter name="readmeOpenSourcefileNamePolicyFilter" desc="Filters for README.OpenSource file policies">
+                <filteritem type="filepath" name="examples/[0-9]+_[a-zA-Z0-9_]+/README.OpenSource" desc="算子样例目录，不包含第三方(NO 3RD-PARTY CODE IN EXAMPLES SAMPLES!)"/>
+            </filefilter>
+            <filefilter name="binaryFileTypePolicyFilter" desc="Filters for binary file policies">
+                <filteritem type="filepath" name="docs/images/[a-zA-Z0-9\_]*/*.png" desc="排除docs/images/目录(及其子目录)下对图片(.png)的二进制检查"/>
+            </filefilter>
+
+        </filefilterlist>
+        <licensematcherlist>
+            <licensematcher name="cann License" desc="If the scanning result is InvalidLicense, you can define matching rules here. Note that quotation marks must be escaped.">
+                <licensetext name="
+                    This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+                    CANN Open Software License Agreement Version 2.0 (the &quot;License&quot;).
+                    Please refer to the License for details. You may not use this file except in compliance with the License.
+                    THIS SOFTWARE IS PROVIDED ON AN &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+                    INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+                    See LICENSE in the root of the software repository for the full text of the License.
+                 " desc=""/>
+            </licensematcher>
+        </licensematcherlist>
+    </oatconfig>
+</configuration>

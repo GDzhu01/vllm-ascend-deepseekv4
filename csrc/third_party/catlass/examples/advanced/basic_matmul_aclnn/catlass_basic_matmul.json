@@ -1,0 +1,45 @@
+[
+    {
+        "op": "CatlassBasicMatmul",
+        "input_desc": [
+            {
+                "name": "self",
+                "param_type": "required",
+                "format": [
+                    "ND",
+                    "ND"
+                ],
+                "type": [
+                    "float16",
+                    "int8"
+                ]
+            },
+            {
+                "name": "mat2",
+                "param_type": "required",
+                "format": [
+                    "ND",
+                    "ND"
+                ],
+                "type": [
+                    "float16",
+                    "int8"
+                ]
+            }
+        ],
+        "output_desc": [
+            {
+                "name": "out",
+                "param_type": "required",
+                "format": [
+                    "ND",
+                    "ND"
+                ],
+                "type": [
+                    "float16",
+                    "int32"
+                ]
+            }
+        ]
+    }
+]
