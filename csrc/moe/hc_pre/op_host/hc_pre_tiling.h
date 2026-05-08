@@ -95,6 +95,8 @@ TILING_DATA_FIELD_DEF(int64_t, rowInnerFactor);
 
 TILING_DATA_FIELD_DEF(int64_t, cubeCoreNum);
 TILING_DATA_FIELD_DEF(int64_t, stage1MFactor);
+TILING_DATA_FIELD_DEF(int64_t, cvLoopsPerCore);
+TILING_DATA_FIELD_DEF(int64_t, totalKSlots);
 
 TILING_DATA_FIELD_DEF(int64_t, bufferPool0Size);
 TILING_DATA_FIELD_DEF(int64_t, bufferPool1Size);

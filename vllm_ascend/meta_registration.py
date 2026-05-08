@@ -89,3 +89,39 @@ def sgmv_expand_meta(
 register_meta_if_necessary("_C_ascend", "get_masked_input_and_mask", get_masked_input_and_mask_meta)
 register_meta_if_necessary("_C_ascend", "bgmv_expand", bgmv_expand_meta)
 register_meta_if_necessary("_C_ascend", "sgmv_expand", sgmv_expand_meta)
+
+
+def npu_hc_pre_v2_meta(
+    x: torch.Tensor,
+    hc_fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    hc_mult: int,
+    hc_sinkhorn_iters: int,
+    norm_eps: float,
+    hc_eps: float,
+):
+    if x.dim() == 4:
+        bs, seq, _, d = x.shape
+        y = torch.empty(bs, seq, d, dtype=torch.bfloat16, device=x.device)
+        post = torch.empty(bs, seq, hc_mult, dtype=torch.float32, device=x.device)
+        comb = torch.empty(bs, seq, hc_mult, hc_mult, dtype=torch.float32, device=x.device)
+    else:
+        bs, _, d = x.shape
+        y = torch.empty(bs, d, dtype=torch.bfloat16, device=x.device)
+        post = torch.empty(bs, hc_mult, dtype=torch.float32, device=x.device)
+        comb = torch.empty(bs, hc_mult, hc_mult, dtype=torch.float32, device=x.device)
+    return y, post, comb
+
+
+def npu_hc_post_meta(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    post: torch.Tensor,
+    comb: torch.Tensor,
+):
+    return torch.empty_like(residual)
+
+
+register_meta_if_necessary("_C_ascend", "npu_hc_pre_v2", npu_hc_pre_v2_meta)
+register_meta_if_necessary("_C_ascend", "npu_hc_post", npu_hc_post_meta)

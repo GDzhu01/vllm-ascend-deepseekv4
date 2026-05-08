@@ -148,7 +148,7 @@ ge::graphStatus HcPreTiling::CalcMKSplitCoreMembasePart2Tiling()
 
     int64_t minRowPerCore = 1;
     int64_t rowOnceLoop = std::min(rowOfFormerBlock_, minRowPerCore);
-    int64_t kBlockNum = tilingData_.get_cubeBlockDimK();
+    int64_t kBlockNum = tilingData_.get_totalKSlots();
 
     hcMultAlign_ = RoundUp(hcMult_, BLOCK_SIZE / sizeof(float));
     int64_t mix0OriginSize = kBlockNum * rowOnceLoop * hcMultAlign_ * sizeof(float) * DOUBLE_BUFFER;     
@@ -383,20 +383,27 @@ ge::graphStatus HcPreTiling::CalcMembaseOpTiling()
 ge::graphStatus HcPreTiling::CalcOpTiling() {
     uint64_t kSize = hcMult_ * d_;
     tilingData_.set_k(kSize);
+    uint64_t cvLoopKSize = 1024;
     // 计算bs_轴切核
     uint64_t mDimNum = std::min(aicCoreNum_, static_cast<uint64_t>(CeilDiv(bs_, M_L1_MAX_SIZE)));
     uint64_t singleCoreM = RoundUp(CeilDiv(bs_, mDimNum), AscendC::BLOCK_CUBE);
     uint64_t kDimNum = aicCoreNum_ / mDimNum;
-    uint64_t splitKSize = RoundUp(CeilDiv(kSize, kDimNum), K_MULIT_CORE_SPLIT_BASE_SIZE);
+    // Align splitKSize to cvLoopKSize so every core has the same number of iterations
+    uint64_t splitKSize = RoundUp(CeilDiv(kSize, kDimNum), cvLoopKSize);
+    uint64_t cvLoopsPerCore = splitKSize / cvLoopKSize;
+    uint64_t realKDimNum = CeilDiv(kSize, splitKSize);
+    uint64_t totalKSlots = realKDimNum * cvLoopsPerCore;
     
     tilingData_.set_cubeBlockDimM(mDimNum);
-    tilingData_.set_cubeBlockDimK(CeilDiv(kSize, splitKSize));
+    tilingData_.set_cubeBlockDimK(realKDimNum);
     tilingData_.set_multCoreSplitMSize(singleCoreM);
     tilingData_.set_mL1Size(std::min(M_L1_MAX_SIZE, singleCoreM));
     tilingData_.set_multCoreSplitKSize(splitKSize);
     tilingData_.set_kL1Size(std::min(A_L1_SIZE / singleCoreM, static_cast<uint64_t>(K_L1_MAX_SIZE)) / 128 * 128);
     
-    tilingData_.set_cvLoopKSize(1024);
+    tilingData_.set_cvLoopKSize(cvLoopKSize);
+    tilingData_.set_cvLoopsPerCore(cvLoopsPerCore);
+    tilingData_.set_totalKSlots(totalKSlots);
 
     // vector stage1 tiling
     tilingData_.set_cubeCoreNum(static_cast<int64_t>(aicCoreNum_));

@@ -355,7 +355,7 @@ __aicore__ inline void HC_PRE_CUBE_COMPUTE_TEMPLATE_CLASS::ComputeDecode(
     }
     SetFlag<HardEvent::MTE1_MTE2>(X_MTE1_MTE2_EVENT + l1aLoopIdx_ % L1_BUF_NUM);
     l1aLoopIdx_++;
-    Fixp(workspaceGlobalA2, workspaceGlobalAB, mmParams);  // l0cLoopIdx_++;
+    Fixp(workspaceGlobalA2, workspaceGlobalAB, mmParams);
 }
 
 HC_PRE_CUBE_COMPUTE_TEMPLATE_PARAM

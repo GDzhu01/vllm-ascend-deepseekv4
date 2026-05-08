@@ -46,15 +46,15 @@ public:
         }
         // uint64_t wsOffset = 0;
         // xCastFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
-        xCastFp32BufSize_ = tilingData->mL1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float)) * sizeof(float);
-        int64_t SingleCubeCoreXCastSize = xCastFp32BufSize_ * DOUBLE_BUFFER / sizeof(float);
+        xCastFp32BufSize_ = tilingData->mL1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float));
+        int64_t SingleCubeCoreXCastSize = xCastFp32BufSize_ * DOUBLE_BUFFER;
         xCastFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + curCubeBlockIdx * SingleCubeCoreXCastSize);
         // wsOffset += DOUBLE_BUFFER * xCastFp32BufSize_;
         uint64_t wsOffset = tilingData->cubeCoreNum * SingleCubeCoreXCastSize; //TODO need change to real value
         mmOutFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
         mmOuterInnerSize_ = CeilAlign(N_SIZE, MM_CACHE_LINE_BYTES / sizeof(float));
         mmOutFp32BufSize_ = tilingData->bs * mmOuterInnerSize_;
-        wsOffset += tilingData->cubeBlockDimK / tilingData->cubeBlockDimM * mmOutFp32BufSize_;
+        wsOffset += tilingData->totalKSlots * mmOutFp32BufSize_;
         squareSumFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
         squareSumFp32BufSize_ = CeilAlign(tilingData->bs, BLOCK_CUBE) * BLOCK_CUBE;
 
@@ -95,8 +95,10 @@ public:
         for (uint64_t mGmOffset = mBlkDimIdx * tilingData->mL1Size; mGmOffset < tilingData->bs;
                 mGmOffset += tilingData->cubeBlockDimM * tilingData->mL1Size) {
             uint64_t realMSize = mGmOffset + tilingData->mL1Size > tilingData->bs ? tilingData->bs - mGmOffset : tilingData->mL1Size;
+            uint64_t localIterIdx = 0;
             for (uint64_t kGmBaseOffset = kGmStartOffset; kGmBaseOffset < kGmEndOffset; kGmBaseOffset += tilingData->cvLoopKSize) {
                 uint64_t realKGmSize = kGmBaseOffset + tilingData->cvLoopKSize > kGmEndOffset ? kGmEndOffset - kGmBaseOffset : tilingData->cvLoopKSize;
+                uint64_t kSlotIdx = kBlkDimIdx * tilingData->cvLoopsPerCore + localIterIdx;
                 if ASCEND_IS_AIC{
                     MmParams mmParams;
                     mmParams.curML1 = realMSize;
@@ -108,16 +110,16 @@ public:
                     mmParams.kGmBaseOffset = kGmBaseOffset;
                     mmParams.nGmSize = N_SIZE;
                     mmParams.kGmSize = tilingData->k;
-                    mmParams.isLastK = kGmBaseOffset + tilingData->cvLoopKSize > kGmEndOffset;
-                    mmParams.isFirstK = kGmBaseOffset == kGmStartOffset;
+                    mmParams.isLastK = true;
+                    mmParams.isFirstK = true;
 
                     cubeCompute_.WaitBL1Mte1ToMte2Flag();
-                    cubeCompute_.CopyInB1(mGmOffset, kGmBaseOffset, realKGmSize, mmParams);
+                    cubeCompute_.CopyInB1(0, kGmBaseOffset, realKGmSize, mmParams);
 
                     CrossCoreWaitFlag(SYNC_AIV_TO_AIC_FLAG);
                     cubeCompute_.ComputeDecode(xCastFp32WsGm[cvLoopIdx_ % DOUBLE_BUFFER * xCastFp32BufSize_],
-                        squareSumFp32WsGm[kBlkDimIdx * squareSumFp32BufSize_ + mGmOffset * BLOCK_CUBE],
-                        mmOutFp32WsGm[kBlkDimIdx * mmOutFp32BufSize_ + mGmOffset * mmOuterInnerSize_],
+                        squareSumFp32WsGm[kSlotIdx * squareSumFp32BufSize_ + mGmOffset * BLOCK_CUBE],
+                        mmOutFp32WsGm[kSlotIdx * mmOutFp32BufSize_ + mGmOffset * mmOuterInnerSize_],
                         mmParams);
                     cubeCompute_.SetBL1Mte1ToMte2Flag();
                     CrossCoreSetFlag<SYNC_MODE2, PIPE_FIX>(SYNC_AIC_TO_AIV_FLAG);
@@ -125,9 +127,11 @@ public:
                     CrossCoreWaitFlag(SYNC_AIC_TO_AIV_FLAG);
                     // vec.compute();
                     int64_t mVectorOffset = mGmOffset;
+                    int64_t mRelativeOffset = 0;
                     int64_t mVectorLength = (realMSize + 1) / NUM_TWO;
                     if ((curVectorBlockIdx % NUM_TWO) == 1) {
                         mVectorOffset = mGmOffset + (realMSize + 1) / NUM_TWO;
+                        mRelativeOffset = (realMSize + 1) / NUM_TWO;
                         mVectorLength = realMSize - mVectorLength;
                     }
                     int64_t curUbLoops = (mVectorLength + tilingData->stage1MFactor - 1) / tilingData->stage1MFactor;
@@ -144,13 +148,14 @@ public:
                         xQue.template FreeTensor(xLocal);
                         mmInQue.template EnQue(xCastLocal);
                         xCastLocal = mmInQue.template DeQue<float>();
-                        int64_t cutMmInOffset = cvLoopIdx_ % DOUBLE_BUFFER * xCastFp32BufSize_ + (i * tilingData->stage1MFactor + mVectorOffset) * tilingData->cvLoopKSize;
+                        int64_t cutMmInOffset = cvLoopIdx_ % DOUBLE_BUFFER * xCastFp32BufSize_ + (i * tilingData->stage1MFactor + mRelativeOffset) * tilingData->cvLoopKSize;
                         CopyOut(xCastLocal, xCastFp32WsGm[cutMmInOffset], curUbMFactor, realKGmSize, tilingData->cvLoopKSize - realKGmSize);
                         mmInQue.FreeTensor(xCastLocal);
                     }
                     CrossCoreSetFlag<SYNC_MODE2, PIPE_MTE3>(SYNC_AIV_TO_AIC_FLAG);
                 }
                 cvLoopIdx_++;
+                localIterIdx++;
             }
         }
         if ASCEND_IS_AIC {
@@ -268,7 +273,7 @@ public:
     __aicore__ inline void Process() 
     {
         if ASCEND_IS_AIV {
-            int64_t stage1UsedCoreNum = tilingData->cubeBlockDimK;// todo check 此处不应该写死32
+            int64_t stage1UsedCoreNum = tilingData->totalKSlots;
             int64_t stage2BlockIdx = GetBlockIdx();
             int64_t stage2UsedCoreNum = tilingData->secondUsedCoreNum;
             if (stage2BlockIdx >= stage2UsedCoreNum) {
