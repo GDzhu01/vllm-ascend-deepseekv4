@@ -80,7 +80,6 @@ from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
-
 logger = init_logger(__name__)
 
 
@@ -372,12 +371,16 @@ class DeepseekV4MoE(nn.Module):
             if not self.is_rocm_aiter_moe_enabled:
                 if self.shared_experts is not None:
                     assert shared_output is not None
-                    final_hidden_states = final_hidden_states * self.routed_scaling_factor + shared_output
+                    final_hidden_states = muls_add_triton(
+                        final_hidden_states, shared_output,
+                        self.routed_scaling_factor)
                 else:
                     final_hidden_states *= self.routed_scaling_factor
         elif self.shared_experts is not None:
             assert shared_output is not None
-            final_hidden_states = shared_output * (1.0 / self.routed_scaling_factor) + final_hidden_states
+            final_hidden_states = muls_add_triton(
+                shared_output, final_hidden_states,
+                1.0 / self.routed_scaling_factor)
 
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
@@ -826,9 +829,9 @@ class DeepseekV2DecoderLayer(nn.Module):
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor,
                hc_scale: torch.Tensor, hc_base: torch.Tensor):
         y = torch.ops._C_ascend.npu_hc_pre_v2(x, hc_fn, hc_scale, hc_base,
-                                            self.hc_mult,
-                                            self.hc_sinkhorn_iters,
-                                            self.norm_eps, self.hc_eps)
+                                           self.hc_mult,
+                                           self.hc_sinkhorn_iters,
+                                           self.norm_eps, self.hc_eps)
         return y
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor,
@@ -849,9 +852,12 @@ class DeepseekV2DecoderLayer(nn.Module):
                                                 self.hc_attn_scale,
                                                 self.hc_attn_base)
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(positions=positions,
-                                       hidden_states=hidden_states,
-                                       llama_4_scaling=llama_4_scaling)
+        attn_kwargs = {
+            "positions": positions,
+            "hidden_states": hidden_states,
+            "llama_4_scaling": llama_4_scaling
+        }
+        hidden_states = self.self_attn(**attn_kwargs)
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
         residual = hidden_states.clone()
         hidden_states, post, comb = self.hc_pre(hidden_states, self.hc_ffn_fn,
