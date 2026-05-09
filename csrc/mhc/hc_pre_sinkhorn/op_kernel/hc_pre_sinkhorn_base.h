@@ -517,8 +517,10 @@ __aicore__ inline void SoftmaxFP32Perf(const LocalTensor<float> &output, const L
     Exp(output, output, curRowNum * curColNumAlign);
     PipeBarrier<PIPE_V>();
     LastDimReduceSumPerf(tmpReduceBuffer, output, curRowNum, curColNum);
+    // Adds eps to the denominator (sum) rather than the output to preserve
+    // the probability normalization property of softmax.
+    Adds(tmpReduceBuffer, tmpReduceBuffer, eps, curRowNum);
     DivABLastDimBrcInline<float, true>(output, output, tmpReduceBuffer, tmpBrcbBuffer, curRowNum, curColNum);
-    Adds(output, output, eps, curRowNum * curColNumAlign);
     PipeBarrier<PIPE_V>();
 }
 
