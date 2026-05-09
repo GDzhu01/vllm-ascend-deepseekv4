@@ -36,6 +36,7 @@
 #include "mc2/dispatch_gmm_combine_decode/dispatch_gmm_combine_decode_torch_adpt.h"
 #include "mc2/dispatch_layout/dispatch_layout_torch_adpt.h"
 #include "gmm/grouped_matmul_swiglu_quant_weight_nz_tensor_list/grouped_matmul_swiglu_quant_torch_adpt.h"
+#include "gmm/grouped_matmul_swiglu_quant_v2/grouped_matmul_swiglu_quant_v2_torch_adpt.h"
 #include "attention/lightning_indexer_vllm/lightning_indexer_vllm_torch_adpt.h"
 #include "mc2/matmul_allreduce_add_rmsnorm/matmul_allreduce_add_rmsnorm_torch_adpt.h"
 #include "mla_preprocess/mla_preprocess_torch_adpt.h"
@@ -138,7 +139,7 @@ void swap_blocks_impl(torch::Tensor& src, torch::Tensor& dst,
     char* dst_ptr = static_cast<char*>(dst.data_ptr());
 
     const int64_t block_size_in_bytes = src.element_size() * src.stride(0);
-    
+
     const int64_t num_blocks = block_mapping.size(0);
     const int64_t max_src_block = src.size(0);
     const int64_t max_dst_block = dst.size(0);
@@ -149,7 +150,7 @@ void swap_blocks_impl(torch::Tensor& src, torch::Tensor& dst,
                     "src block index ", src_block_number, " out of range (max: ", max_src_block, ")");
         TORCH_CHECK(dst_block_number >= 0 && dst_block_number <= max_dst_block,
                     "dst block index ", dst_block_number, " out of range (max: ", max_dst_block, ")");
-        
+
         int64_t src_offset = src_block_number * block_size_in_bytes;
         int64_t dst_offset = dst_block_number * block_size_in_bytes;
 
@@ -160,13 +161,13 @@ void swap_blocks_impl(torch::Tensor& src, torch::Tensor& dst,
 }
 
 void swap_blocks(torch::Tensor &x, torch::Tensor &y, const torch::Tensor &z)
-{    
-  
+{
+
     const c10_npu::OptionalNPUGuard npuGuard(
         (!x.device().is_cpu()) ? x.device() : y.device()
     );
-    aclrtStream stream = c10_npu::getCurrentNPUStream().stream();                       
-    swap_blocks_impl(x, y, z, stream);           
+    aclrtStream stream = c10_npu::getCurrentNPUStream().stream();
+    swap_blocks_impl(x, y, z, stream);
     return;
 }
 
@@ -510,7 +511,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> dispatch_prefill(
 
     EXEC_NPU_CMD(aclnnNotifyDispatch,
         send_data,
-        num_tokens_per_expert, 
+        num_tokens_per_expert,
         send_count,
         num_tokens,
         group_ep_ptr,  // commGroup
@@ -773,7 +774,7 @@ at::Tensor npu_causal_conv1d_custom(
 
     return output;
 }
-  
+
 // It is expected that further improvements will be made after it is incorporated into CANN on June 30th.
 std::vector<at::Tensor> moe_grouped_matmul(
     at::Tensor x,
@@ -1745,6 +1746,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                                                  (Tensor output, Tensor output_scale, Tensor output_offset)"
     );
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_weight_nz_tensor_list);
+    ops.def(
+        "grouped_matmul_swiglu_quant_v2(Tensor x, Tensor[] weight, Tensor[] weight_scale, Tensor x_scale,  Tensor group_list,  Tensor? smooth_scale=None,"
+        "                                                   Tensor[]? weight_assist_matrix=None, Tensor? bias=None, int? dequant_mode=0, int? dequant_dtype=0, int? quant_mode=0,"
+        "                                                 int? quant_dtype=0, bool transpose_weight=False, int group_list_type=0, int[2] tuning_config=[],float swiglu_limit=-1000000.0) ->"
+        "                                                  (Tensor output, Tensor output_scale)"
+    );
+    ops.impl("grouped_matmul_swiglu_quant_v2", torch::kPrivateUse1, &vllm_ascend::grouped_matmul_swiglu_quant_v2);
 
     ops.def(
         "npu_lightning_indexer(Tensor query, Tensor key, Tensor weights, *,"
