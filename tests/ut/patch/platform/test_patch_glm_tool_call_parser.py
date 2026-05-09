@@ -13,6 +13,7 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.tool_parsers.glm4_moe_tool_parser import Glm4MoeModelToolParser
 from vllm.tool_parsers.glm47_moe_tool_parser import Glm47MoeModelToolParser
+from vllm_ascend.patch.platform.patch_glm_tool_call_parser import _make_tool_parsers
 
 
 class FakeTokenizer:
@@ -25,6 +26,16 @@ class FakeTokenizer:
             "<arg_value>": 5,
             "</arg_value>": 6,
         }
+
+
+def test_stream_generator_allocates_distinct_tool_parser_per_choice():
+    class Parser:
+        pass
+
+    parsers = _make_tool_parsers(lambda tokenizer: Parser(), FakeTokenizer(), 2)
+
+    assert len(parsers) == 2
+    assert parsers[0] is not parsers[1]
 
 
 def _reset_streaming_state(parser):

@@ -337,6 +337,8 @@ def sample_recovered_tokens(
 
     recovered_token_ids = torch.empty_like(draft_token_ids)
     if HAS_TRITON:
+        q.reciprocal_()
+        q.masked_fill_(torch.isinf(q), 0)
         sample_recovered_tokens_kernel[(batch_size, max_spec_len)](
             recovered_token_ids,
             cu_num_draft_tokens,

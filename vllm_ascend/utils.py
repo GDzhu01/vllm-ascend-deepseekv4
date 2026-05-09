@@ -1229,13 +1229,29 @@ def refresh_block_size(vllm_config):
         return
 
     if cache_config.block_size is None:
+        if model_config.hf_config.model_type == "deepseek_v4":
+            # NOTE(cmq): cache_config.block_size is set to 32 due to the hash_block_size
+            # is set according to the scheduler_block_size, which is equal to cache_config.block_size.
+            # To make sure the prefix cahe works, we need to set cache_config.block_size
+            # to 32, which is the minimum block size among all the kvcache specs. Actually the
+            # block size of mla and swa is 128.
+            cache_config.block_size = 32
+            return
         cache_config.block_size = 128
 
-    if model_config.hf_config.model_type == "deepseek_v4":
-        # TODO(qcs): generalize the block_size
-        cache_config.block_size = 128
 
     if not scheduler_config or not model_config:
+        return
+
+    if model_config.hf_config.model_type == "deepseek_v4" and cache_config.block_size != 32:
+        # TODO(cmq): generalize the block_size
+        logger.info("Only support block size 32 with DeepSeek-V4, setting it to default value 32.")
+        # NOTE(cmq): cache_config.block_size is set to 32 due to the hash_block_size
+        # is set according to the scheduler_block_size, which is equal to cache_config.block_size.
+        # To make sure the prefix cahe works, we need to set cache_config.block_size
+        # to 32, which is the minimum block size among all the kvcache specs. Actually the
+        # block size of mla and swa is 128.
+        cache_config.block_size = 32
         return
 
     if model_config.is_hybrid:
@@ -1246,7 +1262,7 @@ def refresh_block_size(vllm_config):
     if cache_config.block_size != 128:
         if cache_config.enable_prefix_caching or scheduler_config.enable_chunked_prefill:
             logger.info("Block size is set to 128 if prefix cache or chunked prefill is enabled.")
-            cache_config.block_size = 32
+            cache_config.block_size = 128
 
 
 def dispose_layer(layer: Any):
