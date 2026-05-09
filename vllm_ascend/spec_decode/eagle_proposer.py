@@ -47,6 +47,7 @@ from vllm_ascend.compilation.acl_graph import ACLGraphWrapper, update_full_graph
 from vllm_ascend.ops.triton.spec_decode.utils import prepare_inputs_padded_kernel
 from vllm_ascend.ops.triton.triton_utils import get_vectorcore_num
 from vllm_ascend.utils import enable_sp, lmhead_tp_enable, shared_expert_dp_enabled
+from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
 
 # Currently we will fix block size to a small one since `num_reqs` can't be too large
 _PREPARE_INPUTS_BLOCK_SIZE = 4
@@ -218,7 +219,13 @@ class SpecDecodeBaseProposer(EagleProposer):
         # actual kernel block size is 128 (from --block-size 128), which
         # would cause incorrect slot_mapping computation for MTP draft steps,
         # leading to out-of-bounds KV cache access in kv_compress_epilog.
-        self.kernel_block_size = self.runner.cache_config.block_size
+        if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self.kernel_block_size = self.runner.cache_config.block_size
+        else:
+            draft_attn_layers_dict = get_layers_from_vllm_config(self.vllm_config, AttentionLayerBase)
+            self.kernel_block_size = (
+                draft_attn_layers_dict[self.attn_layer_names[0]].get_attn_backend().get_supported_kernel_block_sizes()[0]
+            )
 
         self.piece_all_attn_layer_name = []
         for _ in range(self.num_speculative_tokens):
