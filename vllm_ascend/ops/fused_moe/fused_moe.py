@@ -59,6 +59,7 @@ class FusedMoEResult:
     before_dispatch_evt: torch.npu.Event | None = None
     before_gmm2_evt: torch.npu.Event | None = None
     before_combine_evt: torch.npu.Event | None = None
+    swiglu_limit: int = 0
 
 
 @dataclass
@@ -67,6 +68,7 @@ class FusedMoEEvents:
     before_dispatch: torch.npu.Event | None = field(default=None)
     before_gmm2: torch.npu.Event | None = field(default=None)
     before_combine: torch.npu.Event | None = field(default=None)
+    swiglu_limit: int = 0
 
 
 class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
@@ -181,11 +183,15 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             w1_scale = [torch.tensor([], dtype=torch.int64)]
             w2 = [layer.w2_weight]
             w2_scale = [torch.tensor([], dtype=torch.int64)]
+            w1_scale_bias = [torch.tensor([], dtype=torch.float32)]
+            w2_scale_bias = [torch.tensor([], dtype=torch.float32)]
         else:
             w1 = layer.w13_weight
             w1_scale = None
             w2 = layer.w2_weight
             w2_scale = None
+            w1_scale_bias = None
+            w2_scale_bias = None
 
         final_hidden_states = moe_comm_method.fused_experts(
             fused_experts_input=build_fused_experts_input(
@@ -207,6 +213,8 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
                 activation=activation,
                 w1_scale=w1_scale,
                 w2_scale=w2_scale,
+                w1_scale_bias=w1_scale_bias,
+                w2_scale_bias=w2_scale_bias,
                 swiglu_limit=layer.swiglu_limit,
             )
         )
@@ -585,6 +593,7 @@ class AscendFusedMoE(FusedMoE):
                 before_dispatch_evt=fused_experts_results.before_dispatch_evt,
                 before_gmm2_evt=fused_experts_results.before_gmm2_evt,
                 before_combine_evt=fused_experts_results.before_combine_evt,
+                swiglu_limit=fused_experts_results.swiglu_limit
             )
         else:
             # The vLLM FusedMoE forward_impl does not return events.
@@ -738,8 +747,9 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
                     output_dtype=torch.int32
                 )
                 # Execute activation concurrently with gmm2.
+
                 maybe_wait_event(fused_moe_evts.before_gmm2)
-                quantized_x, swiglu_out_scale = torch_npu.npu_dequant_swiglu_quant(
+                quantized_x, swiglu_out_scale = torch.ops._C_ascend.npu_dequant_swiglu_quant(
                     x=hidden_states,
                     weight_scale=self._shared_experts.gate_up_proj.weight_scale_fp32,
                     activation_scale=pertoken_scale,
@@ -748,7 +758,9 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
                     quant_offset=None,
                     group_index=None,
                     activate_left=True,
-                    quant_mode=1
+                    quant_mode=1,
+                    swiglu_mode=1,
+                    clamp_limit=fused_moe_evts.swiglu_limit,
                 )
                 # Execute the down projection concurrently with the combine
                 # communication.
@@ -821,6 +833,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
                     before_dispatch=fused_moe_results.before_dispatch_evt,
                     before_gmm2=fused_moe_results.before_gmm2_evt,
                     before_combine=fused_moe_results.before_combine_evt,
+                    swiglu_limit=fused_moe_results.swiglu_limit
                 ),
             )
 

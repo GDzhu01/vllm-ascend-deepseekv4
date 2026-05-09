@@ -50,6 +50,7 @@
 #include <c10/core/Scalar.h>
 #include <c10/util/Exception.h>
 #include <c10/util/Logging.h>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -1490,6 +1491,69 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_npu(
     return std::make_tuple(y_out, scale_out);
 }
 
+std::tuple<at::Tensor, at::Tensor> npu_dequant_swiglu_quant(
+    const at::Tensor& x,
+    const c10::optional<at::Tensor>& weight_scale,
+    const c10::optional<at::Tensor>& activation_scale,
+    const c10::optional<at::Tensor>& bias,
+    const c10::optional<at::Tensor>& quant_scale,
+    const c10::optional<at::Tensor>& quant_offset,
+    const c10::optional<at::Tensor>& group_index,
+    bool activate_left,
+    int64_t quant_mode,
+    int64_t swiglu_mode,
+    double clamp_limit,
+    double glu_alpha,
+    double glu_bias)
+{
+    TORCH_CHECK(x.dim() > 1, "x dim should larger than 1");
+    TORCH_CHECK(quant_mode == 0 || quant_mode == 1, "quant_mode only support 0 or 1, but got ", quant_mode);
+    TORCH_CHECK(swiglu_mode == 0 || swiglu_mode == 1, "swiglu_mode only support 0 or 1, but got ", swiglu_mode);
+    TORCH_CHECK(std::isfinite(clamp_limit) && clamp_limit > 0.0, "clamp_limit should be positive finite");
+    TORCH_CHECK(std::isfinite(glu_alpha), "glu_alpha should be finite");
+    TORCH_CHECK(std::isfinite(glu_bias), "glu_bias should be finite");
+    TORCH_CHECK(x.size(x.dim() - 1) % 2 == 0, "x last dim should be even");
+
+    c10::SmallVector<int64_t, 8> y_size;
+    c10::SmallVector<int64_t, 8> scale_size;
+    for (int64_t i = 0; i < x.dim() - 1; ++i) {
+        y_size.push_back(x.size(i));
+        scale_size.push_back(x.size(i));
+    }
+    y_size.push_back(x.size(x.dim() - 1) / 2);
+
+    at::Tensor y = at::empty(y_size, x.options().dtype(c10::ScalarType::Char));
+    at::Tensor scale = at::empty(scale_size, x.options().dtype(c10::ScalarType::Float));
+
+    std::string quant_mode_str = quant_mode == 1 ? "dynamic" : "static";
+    char* quant_mode_ptr = const_cast<char*>(quant_mode_str.c_str());
+
+    const at::Tensor& weight_scale_opt = c10::value_or_else(weight_scale, [] { return at::Tensor(); });
+    const at::Tensor& activation_scale_opt = c10::value_or_else(activation_scale, [] { return at::Tensor(); });
+    const at::Tensor& bias_opt = c10::value_or_else(bias, [] { return at::Tensor(); });
+    const at::Tensor& quant_scale_opt = c10::value_or_else(quant_scale, [] { return at::Tensor(); });
+    const at::Tensor& quant_offset_opt = c10::value_or_else(quant_offset, [] { return at::Tensor(); });
+    const at::Tensor& group_index_opt = c10::value_or_else(group_index, [] { return at::Tensor(); });
+
+    static const bool is_v2_available =
+        GetOpApiFuncAddr("aclnnDequantSwigluQuantV2") != nullptr &&
+        GetOpApiFuncAddr("aclnnDequantSwigluQuantV2GetWorkspaceSize") != nullptr;
+
+    if (swiglu_mode == 0 && !is_v2_available) {
+        EXEC_NPU_CMD(aclnnDequantSwigluQuant, x, weight_scale_opt, activation_scale_opt, bias_opt, quant_scale_opt,
+                     quant_offset_opt, group_index_opt, activate_left, quant_mode_ptr, y, scale);
+    } else {
+        int64_t dst_type = 2;
+        char* round_mode = const_cast<char*>("rint");
+        int64_t activate_dim = -1;
+        EXEC_NPU_CMD(aclnnDequantSwigluQuantV2, x, weight_scale_opt, activation_scale_opt, bias_opt, quant_scale_opt,
+                     quant_offset_opt, group_index_opt, activate_left, quant_mode_ptr, dst_type, round_mode,
+                     activate_dim, swiglu_mode, clamp_limit, glu_alpha, glu_bias, y, scale);
+    }
+
+    return std::make_tuple(y, scale);
+}
+
 void npu_scatter_nd_update_v2(
     at::Tensor& var,
     const at::Tensor& indices,
@@ -1654,7 +1718,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     ops.def(
         "dispatch_ffn_combine(Tensor x, Tensor[] weight1, Tensor[] weight2, Tensor expert_idx,"
-        "                     Tensor[] scale1, Tensor[] scale2, Tensor[]? bias1, Tensor[]? bias2, Tensor probs, str group,"
+        "                     Tensor[] scale1, Tensor[] scale2, Tensor[] bias1, Tensor[] bias2, Tensor probs, str group,"
         "                     int max_output_size, float swiglu_limit, Tensor! out, Tensor! expert_token_nums) -> (Tensor out, Tensor expert_token_nums)"
     );
     ops.impl("dispatch_ffn_combine", torch::kPrivateUse1, &vllm_ascend::dispatch_ffn_combine);
@@ -1946,6 +2010,25 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         ") -> (Tensor y_out, Tensor scale_out)"
         );
     ops.impl("npu_rms_norm_dynamic_quant", torch::kPrivateUse1, &vllm_ascend::npu_rms_norm_dynamic_quant_npu);
+
+    ops.def(
+        "npu_dequant_swiglu_quant("
+            "Tensor x, *, "
+            "Tensor? weight_scale=None, "
+            "Tensor? activation_scale=None, "
+            "Tensor? bias=None, "
+            "Tensor? quant_scale=None, "
+            "Tensor? quant_offset=None, "
+            "Tensor? group_index=None, "
+            "bool activate_left=True, "
+            "int quant_mode=0, "
+            "int swiglu_mode=0, "
+            "float clamp_limit=7.0, "
+            "float glu_alpha=1.702, "
+            "float glu_bias=1.0"
+        ") -> (Tensor y, Tensor scale)"
+    );
+    ops.impl("npu_dequant_swiglu_quant", torch::kPrivateUse1, &vllm_ascend::npu_dequant_swiglu_quant);
 
     // This operator is planned to be integrated into PTA in the near future.
     // Once that happens, the implementation in csrc will be removed.

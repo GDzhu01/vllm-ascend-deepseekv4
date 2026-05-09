@@ -27,7 +27,7 @@ from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinearMethod
-from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream,
+from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream, extract_dsv4_layer_index, get_dsv4_compress_ratio, 
                                get_ascend_device_type, npu_stream_switch,
                                olora_tp_enable)
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
@@ -44,6 +44,10 @@ else:
 
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
+
+
+def _seq_lens_from_cu_seqlens(cu_seqlens: torch.Tensor) -> torch.Tensor:
+    return (cu_seqlens[1:] - cu_seqlens[:-1]).contiguous()
 
 
 def hadamard_transform_ref(x: torch.Tensor, hadamard: torch.Tensor, scale:int =1.0,):
@@ -329,6 +333,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         
         self.compressor_ratio = getattr(kv_cache_spec, 'compress_ratio', 0)
         hf_config = self.model_config.hf_config
+        layer_idx = extract_dsv4_layer_index(hf_config, layer_names[0])
+        self.layer_compressor_ratio = get_dsv4_compress_ratio(hf_config, layer_idx)
 
         if AscendDSAMetadataBuilder.hadamard is None:
             if hf_config.model_type == 'deepseek_v4':
@@ -607,15 +613,15 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 self.num_prefill_tokens // compress_ratio + self.num_prefills)
             return compressed_decode_num, end
 
-        if self.prefill_ratio_to_sas_metadata.get(f"c{self.compressor_ratio}_cos", None) is None:
+        if self.prefill_ratio_to_sas_metadata.get(f"c{self.layer_compressor_ratio}_cos", None) is None:
             compress_cos, compress_sin = get_cos_and_sin_dsa(
                 _get_padded_compressed_position(prefill_input_positions,
-                                                self.compressor_ratio))
-            self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_cos"] = compress_cos
-            self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_sin"] = compress_sin
+                                                self.layer_compressor_ratio))
+            self.prefill_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}_cos"] = compress_cos
+            self.prefill_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}_sin"] = compress_sin
         else:
-            compress_cos = self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_cos"]
-            compress_sin = self.prefill_ratio_to_sas_metadata[f"c{self.compressor_ratio}_sin"]
+            compress_cos = self.prefill_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}_cos"]
+            compress_sin = self.prefill_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}_sin"]
 
         if self.prefill_ratio_to_sas_metadata.get(f"compressed_c{self.compressor_ratio}_tokens_start", None) is None:
             decode_input_positions = input_positions[:tokens_start]
@@ -847,20 +853,20 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             return gpu_pad_positions
 
         layer_name = f"c{self.compressor_ratio}"
-        if self.decode_ratio_to_sas_metadata.get(layer_name + "_cos", None) is None:
+        if self.decode_ratio_to_sas_metadata.get(f"c{self.layer_compressor_ratio}" + "_cos", None) is None:
             compress_cos, compress_sin = get_cos_and_sin_dsa(
                 {
-                    layer_name:
+                    f"c{self.layer_compressor_ratio}":
                     _get_padded_compressed_position(decode_input_positions,
-                                                    self.compressor_ratio,
+                                                    self.layer_compressor_ratio,
                                                     input_positions.device)
                 },
                 use_cache=True)
-            self.decode_ratio_to_sas_metadata[layer_name + "_cos"] = compress_cos
-            self.decode_ratio_to_sas_metadata[layer_name + "_sin"] = compress_sin
+            self.decode_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}" + "_cos"] = compress_cos
+            self.decode_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}" + "_sin"] = compress_sin
         else:
-            compress_cos = self.decode_ratio_to_sas_metadata[layer_name + "_cos"]
-            compress_sin = self.decode_ratio_to_sas_metadata[layer_name + "_sin"]
+            compress_cos = self.decode_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}" + "_cos"]
+            compress_sin = self.decode_ratio_to_sas_metadata[f"c{self.layer_compressor_ratio}" + "_sin"]
 
         def _get_compressed_decode_token_start(decode_input_positions,
                                                compress_ratio):
@@ -1257,12 +1263,18 @@ class AscendDSAImpl(DSAAttentionImpl):
     ):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            # (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # print("c4", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
+            (compressor_attn_metadata, swa_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (swa_cache, compressor_attn_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # print("c128", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
             (swa_metadata, compressor_attn_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
+            # (compressor_attn_cache, swa_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (swa_cache,) = kv_cache
@@ -1340,7 +1352,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table=compressor_kv_state_metadata.prefill.block_table,
                 score_block_table=compressor_score_state_metadata.prefill.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=None,
+                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
                 start_pos=compress_common_attn_metadata.prefill.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1431,12 +1443,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         assert attn_metadata[0].decode is not None
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            # (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            # (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
+            (compressor_attn_metadata, swa_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
             (swa_cache, compressor_attn_cache, compressor_kv_state, compressor_score_state) = kv_cache
             (swa_metadata, compressor_attn_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
+            # (compressor_attn_cache, swa_cache, compressor_kv_state, compressor_score_state) = kv_cache
+            # (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
             (swa_cache,) = kv_cache
@@ -1545,7 +1561,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 kv_block_table=compressor_kv_state_metadata.decode.block_table,
                 score_block_table=compressor_score_state_metadata.decode.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=None,
+                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
                 start_pos=compress_common_attn_metadata.decode.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1686,7 +1702,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             kv_block_table=kv_block_table,
             score_block_table=score_block_table,
             cu_seqlens=actual_seq_lengths_query,
-            seqused=None,
+            seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
             start_pos=start_pos,
             rope_head_dim=self.rope_head_dim,
             cmp_ratio=self.compress_ratio,

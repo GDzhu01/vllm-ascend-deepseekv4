@@ -18,6 +18,10 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import kv_cache_dtype_str_to_dtype
 from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
+from vllm_ascend.core.kv_cache_spec import SWAAttentionSpec
+from vllm_ascend.utils import (
+    extract_dsv4_layer_index,
+)
 
 from vllm_ascend.attention.abstract import DSAAttentionImpl
 from vllm_ascend.patch.platform.patch_selector import get_attn_backend
@@ -162,12 +166,15 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         return self.attn_backend
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
-        kv_cache_dtype = kv_cache_dtype_str_to_dtype(self.kv_cache_dtype,
-                                                     vllm_config.model_config)
-        return MLAAttentionSpec(
-            block_size=vllm_config.cache_config.block_size,
-            num_kv_heads=1,
-            head_size=self.head_size,
-            dtype=kv_cache_dtype,
-            cache_dtype_str=vllm_config.cache_config.cache_dtype,
-        )
+        pad_size = 1024 * 1 * 1 * 2
+        layer_idx = extract_dsv4_layer_index(vllm_config.model_config.hf_config, self.layer_name)
+        assert layer_idx >= vllm_config.model_config.hf_config.num_hidden_layers, \
+            "Only mtp layers could get layer idx from this module."
+        return SWAAttentionSpec(
+                block_size=128,
+                num_kv_heads=1,
+                head_size=self.head_size,
+                dtype=torch.bfloat16,
+                sliding_window=128,
+                page_size_padded=pad_size,
+            )

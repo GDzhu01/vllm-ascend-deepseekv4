@@ -136,7 +136,7 @@ def test_tokenizer_renders_thinking_prompt_and_escapes_arguments_schema():
     assert '"arguments": {"type": "string"}' not in prompt
 
 
-@pytest.mark.parametrize("reasoning_effort", ["none", "low", "medium", "high", None])
+@pytest.mark.parametrize("reasoning_effort", ["high", None])
 def test_tokenizer_noop_reasoning_effort_values_do_not_add_max_prompt(
     reasoning_effort,
 ):
@@ -151,19 +151,31 @@ def test_tokenizer_noop_reasoning_effort_values_do_not_add_max_prompt(
     assert "Reasoning Effort: Absolute maximum" not in prompt
 
 
-@pytest.mark.parametrize("reasoning_effort", ["max", "xhigh"])
-def test_tokenizer_max_reasoning_effort_values_add_max_prompt(reasoning_effort):
+def test_tokenizer_max_reasoning_effort_adds_max_prompt():
     prompt = _tokenizer().apply_chat_template(
         [{"role": "user", "content": "Hello"}],
         tokenize=False,
         enable_thinking=True,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort="max",
     )
 
     assert prompt.startswith(
         "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum"
     )
     assert prompt.endswith("<｜User｜>Hello<｜Assistant｜><think>")
+
+
+def test_tokenizer_thinking_false_overrides_enable_thinking_and_max_effort():
+    prompt = _tokenizer().apply_chat_template(
+        [{"role": "user", "content": "Hello"}],
+        tokenize=False,
+        thinking=False,
+        enable_thinking=True,
+        reasoning_effort="max",
+    )
+
+    assert prompt == "<｜begin▁of▁sentence｜><｜User｜>Hello<｜Assistant｜></think>"
+    assert "Reasoning Effort: Absolute maximum" not in prompt
 
 
 @pytest.mark.parametrize("reasoning_effort", ["high", "max"])
@@ -176,6 +188,19 @@ def test_chat_completion_request_accepts_reasoning_effort_values(reasoning_effor
     )
 
     assert request.reasoning_effort == reasoning_effort
+
+
+@pytest.mark.parametrize("reasoning_effort", ["none", "low", "medium", "xhigh"])
+def test_chat_completion_request_rejects_unsupported_reasoning_effort_values(
+    reasoning_effort,
+):
+    with pytest.raises(ValueError):
+        ChatCompletionRequest.model_validate(
+            {
+                "messages": [{"role": "user", "content": "Hello"}],
+                "reasoning_effort": reasoning_effort,
+            }
+        )
 
 
 def test_tokenizer_escapes_arguments_history_tool_call_name():
