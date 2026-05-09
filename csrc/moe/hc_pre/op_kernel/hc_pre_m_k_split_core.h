@@ -108,7 +108,7 @@ public:
                     mmParams.kGmBaseOffset = kGmBaseOffset;
                     mmParams.nGmSize = N_SIZE;
                     mmParams.kGmSize = tilingData->k;
-                    mmParams.isLastK = kGmBaseOffset + tilingData->cvLoopKSize > kGmEndOffset;
+                    mmParams.isLastK = kGmBaseOffset + tilingData->cvLoopKSize >= kGmEndOffset;
                     mmParams.isFirstK = kGmBaseOffset == kGmStartOffset;
 
                     cubeCompute_.WaitBL1Mte1ToMte2Flag();
