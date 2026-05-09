@@ -265,6 +265,7 @@ __aicore__ inline void VFProcessCombFragRLessVL(
                 ReduceSum(sum, mix, pregLoop);
                 Duplicate(sum, sum, pregLoop);
                 Div(mix, mix, sum, pregLoop);
+                Adds(mix, mix, eps, pregLoop);
                 Add(sum1, sum1, mix, pregLoop);
                 StoreOutputData(combFragLocalAddr, mix, pregLoop, i * dim1 * dim2Align + j * dim2Align);
             }
@@ -353,6 +354,7 @@ __aicore__ inline void VFProcessCombFragRLessVLUseFourUnfold(
                 ReduceSum(sum, mix, pregLoop);
                 Duplicate(sum, sum, pregLoop);
                 Div(mix, mix, sum, pregLoop);
+                Adds(mix, mix, eps, pregLoop);
                 Add(sum1, sum1, mix, pregLoop);
                 StoreOutputData(combFragLocalAddr, mix, pregLoop, i * dim1 * dim2Align + j * dim2Align);
             }
