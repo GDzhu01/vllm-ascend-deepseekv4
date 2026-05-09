@@ -748,7 +748,7 @@ private:
             AscendC::GlobalTensor<int32_t> srcAddress;
             srcAddress.SetGlobalBuffer(reinterpret_cast<__gm__ int32_t *>(shmem() + localTokenPerExpertOffset));
             AscendC::GlobalTensor<int32_t> dstAddress;
-            __gm__ void *dstPeermemPtr = shmem(localTokenPerExpertOffset, coreIdx);
+            __gm__ void *dstPeermemPtr = shmem(localTokenPerExpertOffset, dstEpIdx);
             dstAddress.SetGlobalBuffer((__gm__ int32_t *)dstPeermemPtr);
 
             AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID0);
@@ -911,11 +911,6 @@ private:
         }
 
         uint32_t curGroupOffset = 0;
-        int32_t prevSumBeforeRank = 0;
-        int32_t prevSum = 0;
-        if (coreIdx < params.EP) {
-            prevSum = preSumBeforeRank(coreIdx * params.expertPerRank);
-        }
         AscendC::SyncAll<true>();
 
         AscendC::GlobalTensor<int32_t> ExpertTokenNums;
@@ -944,8 +939,7 @@ private:
                     if (rowStart + rows > params.maxOutputSize) {
                         rows = params.maxOutputSize - rowStart;
                     }
-                    uint32_t rowSrc = prevSum;
-                    prevSum += rows;
+                    uint32_t rowSrc = preSumBeforeRank(dstEpIdx * params.expertPerRank + groupIdx);
                     GM_ADDR otherRankPtr = shmem(0, dstEpIdx);
                     AscendC::GlobalTensor<ElementABefore> gmRemoteA;
                     gmRemoteA.SetGlobalBuffer(
