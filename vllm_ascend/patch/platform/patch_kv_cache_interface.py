@@ -258,9 +258,6 @@ class UniformTypeKVCacheSpecs(KVCacheSpec):
 
 
 if USE_MULTI_GROUPS_KV_CACHE:
-    # vllm.v1.kv_cache_interface.AttentionSpec = AttentionSpec
-    # logger.info(f">>>>>>>>>>>>>>>>>>>>>>>>>>> patched KV Cache Spec")
-    # vllm.v1.kv_cache_interface.KVCacheSpec = PatchedKVCacheSpec
     vllm.v1.kv_cache_interface.get_all_kvcache_specs_from_list = get_all_kvcache_specs_from_list
     vllm.v1.kv_cache_interface.UniformTypeKVCacheSpecs = UniformTypeKVCacheSpecs
 
