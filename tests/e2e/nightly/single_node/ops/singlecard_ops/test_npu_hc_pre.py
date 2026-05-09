@@ -1,6 +1,5 @@
 import gc
 
-import pytest
 import torch
 import torch_npu
 
@@ -15,6 +14,7 @@ HIDDEN_SIZE = 4096
 HC_SINKHORN_ITERS = 20
 NORM_EPS = 1e-6
 HC_EPS = 1e-6
+INPUT_SHAPES = [(16, HC_MULT, HIDDEN_SIZE), (1, 16, HC_MULT, HIDDEN_SIZE)]
 
 
 def _create_inputs(shape: tuple[int, ...]):
@@ -50,10 +50,13 @@ def _run_hc_pre(op, x, hc_fn, hc_scale, hc_base):
     )
 
 
-@pytest.mark.parametrize("shape", [(16, HC_MULT, HIDDEN_SIZE),
-                                   (1, 16, HC_MULT, HIDDEN_SIZE)])
 @torch.inference_mode()
-def test_npu_hc_pre_v1_v2_bf16_input_consistency(shape):
+def test_npu_hc_pre_v1_v2_bf16_input_consistency():
+    for shape in INPUT_SHAPES:
+        _compare_hc_pre_outputs(shape)
+
+
+def _compare_hc_pre_outputs(shape: tuple[int, ...]):
     x, hc_fn, hc_scale, hc_base = _create_inputs(shape)
 
     v1_outputs = _run_hc_pre(torch.ops._C_ascend.npu_hc_pre, x, hc_fn,
