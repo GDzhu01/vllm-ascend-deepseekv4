@@ -137,7 +137,37 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_weigh
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(output, output_scale, output_offset);
 }
+std::tuple<at::Tensor, at::Tensor> grouped_matmul_swiglu_quant_v2_meta(
+    const at::Tensor & x,
+    const at::TensorList &weight,
+    const at::TensorList &weight_scale,
+    const at::Tensor & x_scale,
+    const at::Tensor & group_list,
+    const c10::optional<at::Tensor> & smooth_scale,
+    const c10::optional<at::TensorList> weight_assist_matrix,
+    const c10::optional<at::Tensor> & bias,
+    c10::optional<int64_t> dequant_mode,
+    c10::optional<int64_t> dequant_dtype,
+    c10::optional<int64_t> quant_mode,
+    c10::optional<int64_t> quant_dtype,
+    bool transpose_weight,
+    int64_t group_list_type,
+    at::IntArrayRef tuning_config,
+    double swiglu_limit)
+{
 
+    auto x_size = x.sizes();
+    int n = weight_scale[0].sizes().back();
+    int m = x_size[0];
+    int k = x_size[1];
+
+    at::Tensor output =  at::empty({m, n/2}, x.options().dtype(at::kChar));
+    at::Tensor output_scale =  at::empty({m}, x.options().dtype(at::kFloat));
+
+
+
+    return std::tuple<at::Tensor, at::Tensor>(output, output_scale);
+}
 std::tuple<at::Tensor, at::Tensor> dispatch_gmm_combine_decode_meta(
     const at::Tensor &x,
     const at::Tensor &expert_ids,
@@ -1131,6 +1161,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("grouped_matmul_swiglu_quant_weight_nz", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz);
     // Grouped matmul swiglu quant weight nz tensor list
     ops.impl("grouped_matmul_swiglu_quant_weight_nz_tensor_list", &vllm_ascend::meta::grouped_matmul_swiglu_quant_weight_nz_tensor_list_meta);
+    // Grouped matmul swiglu quant v2
+    ops.impl("grouped_matmul_swiglu_quant_v2", &vllm_ascend::meta::grouped_matmul_swiglu_quant_v2_meta);
     // dispatch_gmm_combine_decode meta implementation
     ops.impl("dispatch_gmm_combine_decode", &vllm_ascend::meta::dispatch_gmm_combine_decode_meta);
     // batch_matmul_transpose
