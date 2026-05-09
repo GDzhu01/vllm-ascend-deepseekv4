@@ -172,7 +172,7 @@ public:
             AddBAFirstDimBrcInline<float>(mixes2Local, mixes2Local, hcBase2Local, curRowFactor,
                                           tilingData->hcMult * tilingData->hcMultAlign);
             SoftmaxFP32Perf(mixes2Local, mixes2Local, reduceLocal, hcBrcbLocal1, curRowFactor * tilingData->hcMult,
-                            tilingData->hcMult, tilingData->eps);
+                            tilingData->hcMult, 0.0f);
             ReduceSumARAPerf(reduceLocal, mixes2Local, curRowFactor, tilingData->hcMult, tilingData->hcMult);
             Adds(reduceLocal, reduceLocal, tilingData->eps, curRowFactor * tilingData->hcMult);
             PipeBarrier<PIPE_V>();
