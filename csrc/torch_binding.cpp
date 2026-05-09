@@ -1401,7 +1401,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_v2_npu(
     at::Tensor y = std::get<0>(output_tensors);
     at::Tensor post = std::get<1>(output_tensors);
     at::Tensor comb_frag = std::get<2>(output_tensors);
-    EXEC_NPU_CMD(aclnnHcPre, x, hc_fn, hc_scale, hc_base, hc_mult, hc_sinkhorn_iters, norm_eps, hc_eps,
+    EXEC_NPU_CMD(aclnnHcPre, x, hc_fn, hc_scale, hc_base, hc_mult, hc_sinkhorn_iters, hc_eps, norm_eps,
                     y, post, comb_frag);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
@@ -1704,10 +1704,10 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     //batch_matmul ops refer to sgl-kernel-npu
     ops.def(
-            "batch_matmul_transpose(Tensor tensor_a, Tensor tensor_b, Tensor tensor_c, str? format_mode=None, str? quant_mode=None) -> ()");    
+            "batch_matmul_transpose(Tensor tensor_a, Tensor tensor_b, Tensor tensor_c, str? format_mode=None, str? quant_mode=None) -> ()");
     ops.impl("batch_matmul_transpose", torch::kPrivateUse1, &vllm_ascend::batch_matmul_transpose);
 
-    ops.def("swap_blocks(Tensor! x, Tensor! y, Tensor z) -> ()");    
+    ops.def("swap_blocks(Tensor! x, Tensor! y, Tensor z) -> ()");
     ops.impl("swap_blocks", torch::kPrivateUse1, &vllm_ascend::swap_blocks);
 
     ops.def("device_print(str msg) -> ()");
@@ -1795,7 +1795,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "num_ranks) -> Tensor");
     ops.impl("combine_prefill", torch::kPrivateUse1,
              &vllm_ascend::combine_prefill);
-    
+
     ops.def(
         "npu_moe_init_routing_custom(Tensor x, Tensor expert_idx, *, Tensor? scale=None, Tensor? offset=None, int active_num=-1, "
         "                            int expert_capacity=-1, int expert_num=-1, int drop_pad_mode=0, int expert_tokens_num_type=0, "
@@ -1816,7 +1816,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
                             "float routed_scaling_factor, "
                             "float eps,"
                             "Tensor? bias_opt=None)"
-                            
+
         "-> (Tensor y ,Tensor expert_idx, Tensor out)"
         );
     ops.impl("moe_gating_top_k", torch::kPrivateUse1,&vllm_ascend::moe_gating_top_k);
