@@ -371,8 +371,22 @@ class SpecDecodeBaseProposer(EagleProposer):
     def _freeze_draft_step_attn_metadata(self, attn_metadata):
         decode_metadata = getattr(attn_metadata, "decode", None)
         if decode_metadata is not None:
+            if decode_metadata.slot_mapping is not None:
+                decode_metadata.slot_mapping = decode_metadata.slot_mapping.clone()
+            if decode_metadata.start_pos is not None:
+                decode_metadata.start_pos = decode_metadata.start_pos.clone()
             if decode_metadata.sas_metadata is not None:
                 decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
+            if decode_metadata.qli_metadata is not None:
+                decode_metadata.qli_metadata = decode_metadata.qli_metadata.clone()
+
+        prefill_metadata = getattr(attn_metadata, "prefill", None)
+        if prefill_metadata is not None:
+            if prefill_metadata.slot_mapping is not None:
+                prefill_metadata.slot_mapping = prefill_metadata.slot_mapping.clone()
+            if prefill_metadata.start_pos is not None:
+                prefill_metadata.start_pos = prefill_metadata.start_pos.clone()
+
         return attn_metadata
 
     @torch.inference_mode()
