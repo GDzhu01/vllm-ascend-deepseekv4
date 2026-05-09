@@ -345,7 +345,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 AscendDSAMetadataBuilder.hadamard = torch.tensor(
                     hadamard(dim_padded, dtype=float),
                     dtype=torch.float,
-                    device=self.device).to(torch.bfloat16)
+                    device=self.device)
         self.start_pos_prefill = torch.zeros(scheduler_config.max_num_seqs,
                                              dtype=torch.int32,
                                              device=self.device)

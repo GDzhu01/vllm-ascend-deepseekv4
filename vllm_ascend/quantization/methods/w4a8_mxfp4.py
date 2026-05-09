@@ -219,7 +219,7 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
             )
             topk_ids = torch.argsort(random_matrix, dim=1)[:, : topk_ids.size(1)].to(topk_ids.dtype)
 
-        topk_weights = topk_weights.to(x.dtype)
+        # topk_weights = topk_weights.to(x.dtype)
 
         moe_comm_method = get_forward_context().moe_comm_method
         return moe_comm_method.fused_experts(
