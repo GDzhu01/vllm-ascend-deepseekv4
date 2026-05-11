@@ -1336,6 +1336,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         return 0 if x is None else int(x.numel())
 
     @staticmethod
+    def _debug_tensor_shape(x: Optional[torch.Tensor]) -> str:
+        if x is None:
+            return "none"
+        return str(tuple(int(v) for v in x.shape))
+
+    @staticmethod
     def _debug_valid_slots(slot_mapping: Optional[torch.Tensor]) -> int:
         if slot_mapping is None or slot_mapping.numel() == 0:
             return 0
@@ -1362,6 +1368,7 @@ class AscendDSAImpl(DSAAttentionImpl):
     def _debug_log_cache_update(
         self,
         tag: str,
+        layer_name: str,
         slot_mapping: Optional[torch.Tensor],
         kv_tensor: Optional[torch.Tensor],
     ) -> None:
@@ -1369,6 +1376,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             return
         valid_slots = self._debug_valid_slots(slot_mapping)
         kv_numel = self._debug_tensor_numel(kv_tensor)
+        kv_shape = self._debug_tensor_shape(kv_tensor)
         slot_len = 0 if slot_mapping is None else int(slot_mapping.numel())
         status = "OK"
         reason = ""
@@ -1380,20 +1388,42 @@ class AscendDSAImpl(DSAAttentionImpl):
             reason = "valid_slot_without_kv_payload"
         log_fn = logger.warning if status == "WARN" else logger.info
         msg = (
-            "[DSA-DEBUG][%s] %s ratio=%s slot_len=%d valid_slots=%d "
-            "kv_numel=%d slot_sample=%s"
+            "[DSA-DEBUG][%s] %s layer=%s ratio=%s slot_len=%d valid_slots=%d "
+            "kv_numel=%d kv_shape=%s slot_sample=%s"
         )
         if reason:
             msg += " reason=%s"
-            log_fn(msg, status, tag, self.compress_ratio, slot_len, valid_slots,
-                   kv_numel, self._debug_slot_sample(slot_mapping), reason)
+            log_fn(
+                msg,
+                status,
+                tag,
+                layer_name,
+                self.compress_ratio,
+                slot_len,
+                valid_slots,
+                kv_numel,
+                kv_shape,
+                self._debug_slot_sample(slot_mapping),
+                reason,
+            )
         else:
-            log_fn(msg, status, tag, self.compress_ratio, slot_len, valid_slots,
-                   kv_numel, self._debug_slot_sample(slot_mapping))
+            log_fn(
+                msg,
+                status,
+                tag,
+                layer_name,
+                self.compress_ratio,
+                slot_len,
+                valid_slots,
+                kv_numel,
+                kv_shape,
+                self._debug_slot_sample(slot_mapping),
+            )
 
     def _debug_log_topk(
         self,
         tag: str,
+        layer_name: str,
         topk_idxs: Optional[torch.Tensor],
         slot_mapping: Optional[torch.Tensor],
     ) -> None:
@@ -1402,8 +1432,9 @@ class AscendDSAImpl(DSAAttentionImpl):
         valid_slots = self._debug_valid_slots(slot_mapping)
         topk_numel = self._debug_tensor_numel(topk_idxs)
         logger.info(
-            "[DSA-DEBUG][OK] %s ratio=%s valid_slots=%d topk_numel=%d topk_sample=%s",
+            "[DSA-DEBUG][OK] %s layer=%s ratio=%s valid_slots=%d topk_numel=%d topk_sample=%s",
             tag,
+            layer_name,
             self.compress_ratio,
             valid_slots,
             topk_numel,
@@ -1586,6 +1617,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             compress_topk_idxs = None
             if self.compress_ratio == 4:
                 compress_topk_idxs = self.indexer_select_qli(
+                    layer_name=layer_name,
                     x=hidden_states,
                     qr=qr,
                     kv_cache=kv_cache,
@@ -1630,6 +1662,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 self._debug_log_cache_update(
                     "compress_prefill_cache_write",
+                    layer_name,
                     compressor_attn_metadata.prefill.slot_mapping,
                     compressed_kv,
                 )
@@ -1891,6 +1924,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             compress_topk_idxs = None
             if self.compress_ratio == 4:
                 compress_topk_idxs = self.indexer_select_qli(
+                    layer_name=layer_name,
                     x=hidden_states,
                     qr=qr,
                     kv_cache=kv_cache,
@@ -1931,6 +1965,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 if len(compressor_attn_metadata.decode.slot_mapping):
                     self._debug_log_cache_update(
                         "compress_decode_cache_write",
+                        layer_name,
                         compressor_attn_metadata.decode.slot_mapping,
                         compressed_kv,
                     )
@@ -2077,6 +2112,7 @@ class AscendDSAImpl(DSAAttentionImpl):
 
     def indexer_select_qli(
         self,
+        layer_name: str,
         x: torch.Tensor,
         qr: torch.Tensor,
         kv_cache: tuple[torch.Tensor],
@@ -2181,6 +2217,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if kv is not None:
                 self._debug_log_cache_update(
                     "indexer_prefill_cache_write",
+                    layer_name,
                     indexer_kv_scale_metadata.prefill.slot_mapping,
                     kv,
                 )
@@ -2205,6 +2242,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if len(indexer_kv_scale_metadata.decode.slot_mapping):
                 self._debug_log_cache_update(
                     "indexer_decode_cache_write",
+                    layer_name,
                     indexer_kv_scale_metadata.decode.slot_mapping,
                     kv,
                 )
@@ -2263,6 +2301,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             return_value=False)
         self._debug_log_topk(
             "indexer_prefill_topk" if with_prefill else "indexer_decode_topk",
+            layer_name,
             topk_idxs,
             indexer_kv_scale_metadata.prefill.slot_mapping if with_prefill
             else indexer_kv_scale_metadata.decode.slot_mapping,
