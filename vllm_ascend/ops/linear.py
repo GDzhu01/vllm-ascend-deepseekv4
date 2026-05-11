@@ -51,6 +51,9 @@ class AscendUnquantizedLinearMethod(UnquantizedLinearMethod):
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         super().process_weights_after_loading(layer)
+        # must use fp32 to avoid accuracy degradation in dsv4.
+        if layer.prefix.endswith(".gate"):
+            layer.weight_fp32 = maybe_trans_nz(layer.weight.data.to(torch.float32))
         if "conv1d" not in layer.prefix:
             layer.weight.data = maybe_trans_nz(layer.weight.data)
 
