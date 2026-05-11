@@ -1,3 +1,4 @@
+import hashlib
 import math
 import os
 from dataclasses import dataclass
@@ -1360,6 +1361,10 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         self.dsa_debug_enabled = os.getenv("VLLM_ASCEND_DSA_DEBUG", "").lower() \
             not in {"", "0", "false", "off", "no"}
+        debug_layer_filters = os.getenv("VLLM_ASCEND_DSA_DEBUG_LAYERS", "")
+        self.dsa_debug_layer_filters = tuple(
+            item.strip() for item in debug_layer_filters.split(",") if item.strip()
+        )
 
     @staticmethod
     def _debug_tensor_numel(x: Optional[torch.Tensor]) -> int:
@@ -1370,6 +1375,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         if x is None:
             return "none"
         return str(tuple(int(v) for v in x.shape))
+
+    @staticmethod
+    def _debug_tensor_digest(x: Optional[torch.Tensor], limit: int = 256) -> str:
+        if x is None:
+            return "none"
+        if x.numel() == 0:
+            return "empty"
+        sample = x.detach().reshape(-1)[: min(limit, x.numel())]
+        if sample.is_floating_point():
+            sample = sample.to(torch.float32)
+        else:
+            sample = sample.to(torch.int64)
+        payload = sample.cpu().contiguous().numpy().tobytes()
+        return hashlib.sha1(payload).hexdigest()[:12]
 
     @staticmethod
     def _debug_valid_slots(slot_mapping: Optional[torch.Tensor]) -> int:
@@ -1402,11 +1421,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         slot_mapping: Optional[torch.Tensor],
         kv_tensor: Optional[torch.Tensor],
     ) -> None:
-        if not self.dsa_debug_enabled:
+        if not self._debug_layer_enabled(layer_name):
             return
         valid_slots = self._debug_valid_slots(slot_mapping)
         kv_numel = self._debug_tensor_numel(kv_tensor)
         kv_shape = self._debug_tensor_shape(kv_tensor)
+        kv_digest = self._debug_tensor_digest(kv_tensor)
         slot_len = 0 if slot_mapping is None else int(slot_mapping.numel())
         status = "OK"
         reason = ""
@@ -1419,7 +1439,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         log_fn = logger.warning if status == "WARN" else logger.info
         msg = (
             "[DSA-DEBUG][%s] %s layer=%s ratio=%s slot_len=%d valid_slots=%d "
-            "kv_numel=%d kv_shape=%s slot_sample=%s"
+            "kv_numel=%d kv_shape=%s kv_digest=%s slot_sample=%s"
         )
         if reason:
             msg += " reason=%s"
@@ -1433,6 +1453,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 valid_slots,
                 kv_numel,
                 kv_shape,
+                kv_digest,
                 self._debug_slot_sample(slot_mapping),
                 reason,
             )
@@ -1447,6 +1468,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 valid_slots,
                 kv_numel,
                 kv_shape,
+                kv_digest,
                 self._debug_slot_sample(slot_mapping),
             )
 
@@ -1457,18 +1479,44 @@ class AscendDSAImpl(DSAAttentionImpl):
         topk_idxs: Optional[torch.Tensor],
         slot_mapping: Optional[torch.Tensor],
     ) -> None:
-        if not self.dsa_debug_enabled:
+        if not self._debug_layer_enabled(layer_name):
             return
         valid_slots = self._debug_valid_slots(slot_mapping)
         topk_numel = self._debug_tensor_numel(topk_idxs)
+        topk_digest = self._debug_tensor_digest(topk_idxs)
         logger.info(
-            "[DSA-DEBUG][OK] %s layer=%s ratio=%s valid_slots=%d topk_numel=%d topk_sample=%s",
+            "[DSA-DEBUG][OK] %s layer=%s ratio=%s valid_slots=%d topk_numel=%d topk_digest=%s topk_sample=%s",
             tag,
             layer_name,
             self.compress_ratio,
             valid_slots,
             topk_numel,
+            topk_digest,
             self._debug_topk_summary(topk_idxs),
+        )
+
+    def _debug_layer_enabled(self, layer_name: str) -> bool:
+        if not self.dsa_debug_enabled:
+            return False
+        if not self.dsa_debug_layer_filters:
+            return True
+        return any(token in layer_name for token in self.dsa_debug_layer_filters)
+
+    def _debug_log_attn_output(
+        self,
+        tag: str,
+        layer_name: str,
+        attn_output: Optional[torch.Tensor],
+    ) -> None:
+        if not self._debug_layer_enabled(layer_name):
+            return
+        logger.info(
+            "[DSA-DEBUG][OK] %s layer=%s ratio=%s out_shape=%s out_digest=%s",
+            tag,
+            layer_name,
+            self.compress_ratio,
+            self._debug_tensor_shape(attn_output),
+            self._debug_tensor_digest(attn_output),
         )
 
     @staticmethod
@@ -1650,6 +1698,12 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # swa exec kv
         if get_ascend_device_type() in {AscendDeviceType.A5}:
+            self._debug_log_cache_update(
+                "swa_prefill_cache_write",
+                layer_name,
+                swa_metadata.prefill.slot_mapping,
+                kv.view(-1, kv.shape[-1]),
+            )
             torch.ops._C_ascend.kv_compress_epilog(
                 swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
                 x=kv.view(-1, kv.shape[-1]),
@@ -1870,6 +1924,11 @@ class AscendDSAImpl(DSAAttentionImpl):
                     layout_q="TND",
                     layout_kv="PA_ND")[0]
 
+        self._debug_log_attn_output(
+            "prefill_attn_output",
+            layer_name,
+            attn_output,
+        )
         return attn_output
 
     def _forward_decode(
@@ -1956,6 +2015,12 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # swa exec kv
             if get_ascend_device_type() in {AscendDeviceType.A5}:
+                self._debug_log_cache_update(
+                    "swa_decode_cache_write",
+                    layer_name,
+                    swa_metadata.decode.slot_mapping,
+                    kv.view(-1, kv.shape[-1]),
+                )
                 torch.ops._C_ascend.kv_compress_epilog(
                     swa_kv_cache.view(-1, 1, swa_kv_cache.shape[-1]),
                     x=kv.view(-1, kv.shape[-1]),
@@ -2172,6 +2237,11 @@ class AscendDSAImpl(DSAAttentionImpl):
                     ori_win_right=0,
                     layout_q="TND",
                     layout_kv="PA_ND")[0]
+        self._debug_log_attn_output(
+            "decode_attn_output",
+            layer_name,
+            attn_output,
+        )
         return attn_output
 
     def indexer_select_qli(
