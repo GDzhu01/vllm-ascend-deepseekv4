@@ -22,6 +22,9 @@ from vllm_ascend.sample.sampler import apply_top_k_top_p
 
 
 FORCED_TOKEN_ACCEPTANCE_RATE: float | None = None
+FORCED_TOKEN_ACCEPTANCE_RATE_SCALE = 1000
+FORCED_TOKEN_ACCEPTANCE_RATE_STRIDE = 997
+_forced_token_acceptance_offset = 0
 
 
 def force_token_acceptance_sample(
@@ -34,6 +37,7 @@ def force_token_acceptance_sample(
     bonus_token_ids: torch.Tensor,
     acceptance_rate: float,
 ) -> torch.Tensor:
+    global _forced_token_acceptance_offset
     batch_size = len(num_draft_tokens)
     device = output_token_ids.device
     cu_num_draft_tokens = cu_num_draft_tokens.to(dtype=torch.long)
@@ -44,12 +48,30 @@ def force_token_acceptance_sample(
     num_draft_tokens_tensor = cu_num_draft_tokens - cu_start
 
     positions = torch.arange(max_spec_len, device=device)[None, :]
-    valid_mask = positions < num_draft_tokens_tensor[:, None]
-    accept_mask = torch.rand(
-        (batch_size, max_spec_len),
-        device=device,
-    ) < acceptance_rate
-    num_accepted_tokens = (accept_mask & valid_mask).sum(dim=1)
+    acceptance_rate_units = round(
+        acceptance_rate * FORCED_TOKEN_ACCEPTANCE_RATE_SCALE)
+    acceptance_rate_units = max(
+        0, min(FORCED_TOKEN_ACCEPTANCE_RATE_SCALE, acceptance_rate_units))
+    scaled_accepted_tokens = num_draft_tokens_tensor * acceptance_rate_units
+    num_accepted_tokens = (
+        scaled_accepted_tokens // FORCED_TOKEN_ACCEPTANCE_RATE_SCALE)
+    fractional_acceptance = (
+        scaled_accepted_tokens
+        - num_accepted_tokens * FORCED_TOKEN_ACCEPTANCE_RATE_SCALE)
+    row_offsets = (
+        torch.arange(batch_size, device=device)
+        + _forced_token_acceptance_offset)
+    deterministic_slots = (
+        row_offsets * FORCED_TOKEN_ACCEPTANCE_RATE_STRIDE
+    ) % FORCED_TOKEN_ACCEPTANCE_RATE_SCALE
+    add_fractional_token = (
+        deterministic_slots < fractional_acceptance)
+    num_accepted_tokens += (
+        add_fractional_token
+        & (num_accepted_tokens < num_draft_tokens_tensor)).to(torch.long)
+    _forced_token_acceptance_offset = (
+        _forced_token_acceptance_offset + batch_size
+    ) % FORCED_TOKEN_ACCEPTANCE_RATE_SCALE
 
     if draft_token_ids.numel() > 0 and max_spec_len > 0:
         global_token_indices = cu_start[:, None] + positions
@@ -59,7 +81,7 @@ def force_token_acceptance_sample(
         draft_tokens = draft_token_ids[global_token_indices]
         accepted_prefix_mask = positions < num_accepted_tokens[:, None]
         output_token_ids[:, :max_spec_len] = torch.where(
-            accepted_prefix_mask & valid_mask,
+            accepted_prefix_mask,
             draft_tokens.to(output_token_ids.dtype),
             output_token_ids[:, :max_spec_len],
         )
