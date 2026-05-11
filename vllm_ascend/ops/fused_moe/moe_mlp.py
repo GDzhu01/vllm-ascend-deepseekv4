@@ -80,6 +80,48 @@ def _require_single_tensor_for_swiglu_quant(
     return tensor_or_list
 
 
+def _as_tensor_list_for_swiglu_quant(tensor_or_list: list[torch.Tensor] | torch.Tensor) -> list[torch.Tensor]:
+    if isinstance(tensor_or_list, list):
+        return tensor_or_list
+    return [tensor_or_list]
+
+
+def _has_non_empty_tensor(tensor_or_list: list[torch.Tensor] | torch.Tensor | None) -> bool:
+    if tensor_or_list is None:
+        return False
+    tensor_list = _as_tensor_list_for_swiglu_quant(tensor_or_list)
+    return bool(tensor_list) and tensor_list[0].numel() > 0
+
+
+def _get_gmm_swiglu_quant_v2_dequant_mode(weight_scale: list[torch.Tensor] | torch.Tensor) -> int:
+    weight_scale_list = _as_tensor_list_for_swiglu_quant(weight_scale)
+    per_group_scale_dim = 2 if len(weight_scale_list) > 1 else 3
+    return 1 if weight_scale_list[0].dim() == per_group_scale_dim else 0
+
+
+def _grouped_matmul_swiglu_quant_v2(
+    hidden_states: torch.Tensor,
+    w1: list[torch.Tensor] | torch.Tensor,
+    w1_scale: list[torch.Tensor] | torch.Tensor,
+    pertoken_scale: torch.Tensor,
+    group_list: torch.Tensor,
+    group_list_type: int,
+    swiglu_limit: float,
+    weight_assist_matrix: list[torch.Tensor] | torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # WeightNzV2 consumes W4 asymmetric correction as weight_assist_matrix.
+    return torch.ops._C_ascend.grouped_matmul_swiglu_quant_v2(
+        x=hidden_states,
+        weight=_as_tensor_list_for_swiglu_quant(w1),
+        weight_scale=_as_tensor_list_for_swiglu_quant(w1_scale),
+        x_scale=pertoken_scale,
+        group_list=cumsum_group_list(group_list, group_list_type, 0),
+        weight_assist_matrix=_as_tensor_list_for_swiglu_quant(weight_assist_matrix),
+        dequant_mode=_get_gmm_swiglu_quant_v2_dequant_mode(w1_scale),
+        swiglu_limit=swiglu_limit,
+    )
+
+
 def quant_apply_mlp(
     hidden_states: torch.Tensor,
     w1: list[torch.Tensor] | torch.Tensor,
@@ -250,7 +292,21 @@ def quant_apply_mlp(
             # TODO w4a8 scene: dynamic acquisition of dtype in the future
             _output_dtype = torch.bfloat16
 
-        if _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
+        has_w4_weight_assist = _has_non_empty_tensor(bias1)
+        if has_w4_weight_assist and _custom_gmm_swiglu_enabled(fusion, dynamic_eplb):
+            hidden_states, swiglu_out_scale = _grouped_matmul_swiglu_quant_v2(
+                hidden_states=hidden_states,
+                w1=w1,
+                w1_scale=w1_scale,
+                pertoken_scale=pertoken_scale,
+                group_list=group_list,
+                group_list_type=group_list_type,
+                swiglu_limit=swiglu_limit,
+                weight_assist_matrix=bias1,
+            )
+            if quantized_hidden_states is not None:
+                dispose_tensor(quantized_hidden_states)
+        elif _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
             # gmm1: gate_up_proj & act_fn: swiglu
             hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz_tensor_list(
                 x=hidden_states,
