@@ -46,6 +46,21 @@ BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
 
+def _scatter_nd_update_asc(var: torch.Tensor, indices: torch.Tensor,
+                           update: torch.Tensor) -> None:
+    if var.numel() == 0 or indices.numel() == 0 or update.numel() == 0:
+        return
+
+    update_2d = update.view(-1, update.shape[-1])
+    if update_2d.shape[0] != indices.shape[0]:
+        torch_npu.npu_scatter_nd_update_(var, indices, update)
+        return
+
+    import custom_ops
+
+    torch.ops.custom.scatter_nd_update_asc(var, indices, update_2d)
+
+
 def hadamard_transform_ref(x: torch.Tensor, hadamard: torch.Tensor, scale:int =1.0,):
     x_shape = x.shape
     dim = x.shape[-1]
@@ -1311,7 +1326,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
 
         # swa exec kv
-        torch_npu.npu_scatter_nd_update_(
+        _scatter_nd_update_asc(
             swa_cache.view(-1, kv.shape[-1]),
             swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
@@ -1361,7 +1376,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compressed_kv = None
 
             # kv_compress_epilog
-            torch_npu.npu_scatter_nd_update_(
+            _scatter_nd_update_asc(
                 compressor_attn_cache.view(-1, compressed_kv.shape[-1]),
                 compressor_attn_metadata.prefill.slot_mapping.unsqueeze(-1),
                 compressed_kv.view(-1, compressed_kv.shape[-1]))
@@ -1512,7 +1527,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             )
 
             # swa exec kv
-            torch_npu.npu_scatter_nd_update_(
+            _scatter_nd_update_asc(
                 swa_cache.view(-1, kv.shape[-1]),
                 swa_metadata.decode.slot_mapping.unsqueeze(-1), kv)
 
@@ -1566,7 +1581,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode=2,
                 enable_grad=False)
             # kv_compress_epilog
-            torch_npu.npu_scatter_nd_update_(
+            _scatter_nd_update_asc(
                 compressor_attn_cache.view(-1, compressed_kv.shape[-1]),
                 compressor_attn_metadata.decode.slot_mapping.unsqueeze(-1),
                 compressed_kv.view(-1, compressed_kv.shape[-1]))
@@ -1719,7 +1734,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5
                                                           } else torch.int8
 
-        q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
+        if dst_type is torch.int8 and q.shape[-1] == 128:
+            import custom_ops
+            q, q_scale = torch.ops.custom.npu_dynamic_quant_v3(q)
+        else:
+            q, q_scale = torch_npu.npu_dynamic_quant(q, dst_type=dst_type)
         if kv is not None:
             kv, kv_scale = torch_npu.npu_dynamic_quant(kv, dst_type=dst_type)
             kv_scale = kv_scale.unsqueeze(-1)
@@ -1733,22 +1752,22 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
+                _scatter_nd_update_asc(
                     indexer_kv_cache.view(-1, kv.shape[-1]),
                     indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
                     kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
+                _scatter_nd_update_asc(
                     indexer_scale_cache.view(-1, kv_scale.shape[-1]),
                     indexer_kv_scale_metadata.prefill.slot_mapping.unsqueeze(-1),
                     kv_scale.view(-1, kv_scale.shape[-1]))
         else:
             assert indexer_kv_scale_metadata.decode is not None
             if kv is not None:
-                torch_npu.npu_scatter_nd_update_(
+                _scatter_nd_update_asc(
                     indexer_kv_cache.view(-1, kv.shape[-1]),
                     indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
                     kv.view(-1, kv.shape[-1]))
-                torch_npu.npu_scatter_nd_update_(
+                _scatter_nd_update_asc(
                     indexer_scale_cache.view(-1, kv_scale.shape[-1]),
                     indexer_kv_scale_metadata.decode.slot_mapping.unsqueeze(-1),
                     kv_scale.view(-1, kv_scale.shape[-1]))

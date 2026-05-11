@@ -65,6 +65,21 @@ if TYPE_CHECKING:
 BMM_TRANS_MAX_SUPPORTED_TOKENS = 1024
 
 
+def _scatter_nd_update_asc(var: torch.Tensor, indices: torch.Tensor,
+                           update: torch.Tensor) -> None:
+    if var.numel() == 0 or indices.numel() == 0 or update.numel() == 0:
+        return
+
+    update_2d = update.view(-1, update.shape[-1])
+    if update_2d.shape[0] != indices.shape[0]:
+        torch_npu.npu_scatter_nd_update_(var, indices, update)
+        return
+
+    import custom_ops
+
+    torch.ops.custom.scatter_nd_update_asc(var, indices, update_2d)
+
+
 class AscendSFABackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -1194,13 +1209,13 @@ class AscendSFAImpl(MLAAttentionImpl):
         if kv_cache is not None:
             if self.is_kv_producer:
                 attn_metadata.reshape_cache_event = torch.npu.Event()
-            torch_npu.npu_scatter_nd_update_(
+            _scatter_nd_update_asc(
                 kv_cache[2].view(-1, k_li.shape[-1]), slot_mapping.view(-1, 1), k_li.view(-1, k_li.shape[-1])
             )  # b, s, n, d
             if self.use_sparse_c8_indexer:
                 assert len(kv_cache) == 4
                 assert k_li_scale is not None
-                torch_npu.npu_scatter_nd_update_(
+                _scatter_nd_update_asc(
                     kv_cache[3].view(-1, k_li_scale.shape[-1]),
                     slot_mapping.view(-1, 1),
                     k_li_scale.view(-1, k_li_scale.shape[-1]),
