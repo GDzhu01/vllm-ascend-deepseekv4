@@ -250,7 +250,20 @@ def quant_apply_mlp(
             # TODO w4a8 scene: dynamic acquisition of dtype in the future
             _output_dtype = torch.bfloat16
 
-        if _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
+        if bias1 is not None and bias1[0].numel() > 0 and _custom_gmm_swiglu_enabled(fusion, dynamic_eplb):
+            hidden_states, swiglu_out_scale = torch.ops._C_ascend.grouped_matmul_swiglu_quant_v2(
+                x=hidden_states,
+                weight=w1,
+                weight_scale=w1_scale,
+                x_scale=pertoken_scale,
+                group_list=cumsum_group_list(group_list, group_list_type, 0),
+                weight_assist_matrix=bias1,
+                dequant_mode=1,
+                swiglu_limit=swiglu_limit,
+            )
+            if quantized_hidden_states is not None:
+                dispose_tensor(quantized_hidden_states)
+        elif _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
             # gmm1: gate_up_proj & act_fn: swiglu
             hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz_tensor_list(
                 x=hidden_states,
