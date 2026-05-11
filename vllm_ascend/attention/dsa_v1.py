@@ -1,4 +1,5 @@
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Optional, Tuple, Type, TypeVar
 
@@ -1327,6 +1328,88 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_norm = self.compressor.norm
             self.compressor_norm_eps = self.compressor.norm_eps
 
+        self.dsa_debug_enabled = os.getenv("VLLM_ASCEND_DSA_DEBUG", "").lower() \
+            not in {"", "0", "false", "off", "no"}
+
+    @staticmethod
+    def _debug_tensor_numel(x: Optional[torch.Tensor]) -> int:
+        return 0 if x is None else int(x.numel())
+
+    @staticmethod
+    def _debug_valid_slots(slot_mapping: Optional[torch.Tensor]) -> int:
+        if slot_mapping is None or slot_mapping.numel() == 0:
+            return 0
+        return int((slot_mapping >= 0).sum().item())
+
+    @staticmethod
+    def _debug_slot_sample(slot_mapping: Optional[torch.Tensor],
+                           limit: int = 4) -> list[int]:
+        if slot_mapping is None or slot_mapping.numel() == 0:
+            return []
+        valid = slot_mapping[slot_mapping >= 0]
+        if valid.numel() == 0:
+            return []
+        return valid[:limit].to(torch.int64).cpu().tolist()
+
+    @staticmethod
+    def _debug_topk_summary(topk_idxs: Optional[torch.Tensor],
+                            limit: int = 8) -> str:
+        if topk_idxs is None or topk_idxs.numel() == 0:
+            return "none"
+        sample = topk_idxs.reshape(-1)[:limit].to(torch.int64).cpu().tolist()
+        return ",".join(str(v) for v in sample)
+
+    def _debug_log_cache_update(
+        self,
+        tag: str,
+        slot_mapping: Optional[torch.Tensor],
+        kv_tensor: Optional[torch.Tensor],
+    ) -> None:
+        if not self.dsa_debug_enabled:
+            return
+        valid_slots = self._debug_valid_slots(slot_mapping)
+        kv_numel = self._debug_tensor_numel(kv_tensor)
+        slot_len = 0 if slot_mapping is None else int(slot_mapping.numel())
+        status = "OK"
+        reason = ""
+        if valid_slots == 0 and kv_numel > 0:
+            status = "WARN"
+            reason = "nonempty_kv_without_valid_slot"
+        elif valid_slots > 0 and kv_numel == 0:
+            status = "WARN"
+            reason = "valid_slot_without_kv_payload"
+        log_fn = logger.warning if status == "WARN" else logger.info
+        msg = (
+            "[DSA-DEBUG][%s] %s ratio=%s slot_len=%d valid_slots=%d "
+            "kv_numel=%d slot_sample=%s"
+        )
+        if reason:
+            msg += " reason=%s"
+            log_fn(msg, status, tag, self.compress_ratio, slot_len, valid_slots,
+                   kv_numel, self._debug_slot_sample(slot_mapping), reason)
+        else:
+            log_fn(msg, status, tag, self.compress_ratio, slot_len, valid_slots,
+                   kv_numel, self._debug_slot_sample(slot_mapping))
+
+    def _debug_log_topk(
+        self,
+        tag: str,
+        topk_idxs: Optional[torch.Tensor],
+        slot_mapping: Optional[torch.Tensor],
+    ) -> None:
+        if not self.dsa_debug_enabled:
+            return
+        valid_slots = self._debug_valid_slots(slot_mapping)
+        topk_numel = self._debug_tensor_numel(topk_idxs)
+        logger.info(
+            "[DSA-DEBUG][OK] %s ratio=%s valid_slots=%d topk_numel=%d topk_sample=%s",
+            tag,
+            self.compress_ratio,
+            valid_slots,
+            topk_numel,
+            self._debug_topk_summary(topk_idxs),
+        )
+
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
@@ -1545,6 +1628,11 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
+                self._debug_log_cache_update(
+                    "compress_prefill_cache_write",
+                    compressor_attn_metadata.prefill.slot_mapping,
+                    compressed_kv,
+                )
                 torch.ops._C_ascend.kv_compress_epilog(
                     kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
                     x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
@@ -1841,6 +1929,11 @@ class AscendDSAImpl(DSAAttentionImpl):
             # kv_compress_epilog
             if get_ascend_device_type() in {AscendDeviceType.A5}:
                 if len(compressor_attn_metadata.decode.slot_mapping):
+                    self._debug_log_cache_update(
+                        "compress_decode_cache_write",
+                        compressor_attn_metadata.decode.slot_mapping,
+                        compressed_kv,
+                    )
                     torch.ops._C_ascend.kv_compress_epilog(
                         kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
                         x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
@@ -2086,6 +2179,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
+                self._debug_log_cache_update(
+                    "indexer_prefill_cache_write",
+                    indexer_kv_scale_metadata.prefill.slot_mapping,
+                    kv,
+                )
                 if soc_version in {AscendDeviceType.A5}:
                     torch.ops._C_ascend.indexer_compress_epilog_v2(
                         indexer_compress_cache=indexer_full_cache.view(torch.uint8),
@@ -2105,6 +2203,11 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             assert indexer_kv_scale_metadata.decode is not None
             if len(indexer_kv_scale_metadata.decode.slot_mapping):
+                self._debug_log_cache_update(
+                    "indexer_decode_cache_write",
+                    indexer_kv_scale_metadata.decode.slot_mapping,
+                    kv,
+                )
                 if soc_version in {AscendDeviceType.A5}:
                     torch.ops._C_ascend.indexer_compress_epilog_v2(
                         indexer_compress_cache=indexer_full_cache.view(torch.uint8),
@@ -2158,4 +2261,10 @@ class AscendDSAImpl(DSAAttentionImpl):
             next_tokens=(1 << 63) - 1,
             cmp_ratio=4,
             return_value=False)
+        self._debug_log_topk(
+            "indexer_prefill_topk" if with_prefill else "indexer_decode_topk",
+            topk_idxs,
+            indexer_kv_scale_metadata.prefill.slot_mapping if with_prefill
+            else indexer_kv_scale_metadata.decode.slot_mapping,
+        )
         return topk_idxs
