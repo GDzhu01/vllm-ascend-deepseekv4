@@ -139,7 +139,6 @@ class SpecDecodeBaseProposer(EagleProposer):
                 self.use_cuda_graph
                 and not self.use_async_scheduling
                 and not self.speculative_config.disable_padded_drafter_batch
-                and not self.use_compress
             )
 
         # TODO: Remove it when the bug of fx-graph is solved
@@ -338,12 +337,9 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         if self.vllm_config.compilation_config.cudagraph_mode.has_full_cudagraphs() and self.use_cuda_graph:
             self.update_stream = torch.npu.Stream()
-            if self.method == "mtp":
-                self.model = ACLGraphWrapper(self.model, self.vllm_config, runtime_mode=CUDAGraphMode.FULL)
-            else:
-                self._runnable = ACLGraphWrapper(
-                    self._run_merged_draft, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
-                )
+            self._runnable = ACLGraphWrapper(
+                self._run_merged_draft, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
+            )
 
     def _maybe_share_topk_indices(self, target_language_model: nn.Module) -> None:
         if hasattr(target_language_model.model, "topk_indices_buffer"):
@@ -373,6 +369,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         if decode_metadata is not None:
             if decode_metadata.sas_metadata is not None:
                 decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
+            if getattr(decode_metadata, "qli_metadata", None) is not None:
+                decode_metadata.qli_metadata = decode_metadata.qli_metadata.clone()
         return attn_metadata
 
     @torch.inference_mode()
@@ -419,6 +417,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 # This is used to hold a position.
                 slot_mapping=self.runner.input_batch.block_table[0].slot_mapping.gpu,
                 positions=self.runner.positions.gpu,
+                positions_cpu=self.runner.positions.cpu,
                 attn_state=self.runner.attn_state,
                 decode_token_per_req=self.runner.decode_token_per_req,
                 max_seq_len=0,
@@ -432,6 +431,11 @@ class SpecDecodeBaseProposer(EagleProposer):
 
             assert len(self.draft_attn_groups) > 0
             builder = self.draft_attn_groups[0].get_metadata_builder()
+            extra_attn_metadata_args = dict(
+                prefill_ratio_to_sas_metadata=dict(),
+                decode_ratio_to_sas_metadata=dict(),
+                common_ratio_to_sas_metadata=dict(),
+                block_size=self.draft_attn_groups[0].kv_cache_spec.block_size)
             # update the tensor's address for each step.
             for draft_step in range(self.num_speculative_tokens):
                 common_attn_metadata = self.shallow_copy_metadata(common_attn_metadata)
@@ -440,6 +444,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 attn_metadata_eagle = builder.build_for_graph_capture(
                     common_attn_metadata,
                     AscendAttentionState.SpecDecoding if self.method == "mtp" else AscendAttentionState.ChunkedPrefill,
+                    **extra_attn_metadata_args,
                 )
                 per_layer_attn_metadata = dict()
                 for layer_name in self.attn_layer_names:
@@ -1209,6 +1214,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu.clone()
         common_attn_metadata.num_computed_tokens_cpu = common_attn_metadata.num_computed_tokens_cpu.clone()
         common_attn_metadata.positions = common_attn_metadata.positions.clone()
+        if common_attn_metadata.positions_cpu is not None:
+            common_attn_metadata.positions_cpu = common_attn_metadata.positions_cpu.clone()
 
         # NOTE(woosuk): We should handle the case where the draft model
         # generates tokens beyond the max model length. Since it is complex
@@ -1244,6 +1251,11 @@ class SpecDecodeBaseProposer(EagleProposer):
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
         else:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
+        if common_attn_metadata.positions_cpu is not None:
+            if self.uses_mrope:
+                common_attn_metadata.positions_cpu[:batch_size].copy_(clamped_positions[0].cpu())
+            else:
+                common_attn_metadata.positions_cpu[:batch_size].copy_(clamped_positions.cpu())
 
         if self.pcp_size * self.dcp_size > 1:
             num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
