@@ -191,6 +191,8 @@ class AscendDSAPrefillMetadata:
     qli_metadata: torch.Tensor = None
     cu_c4_cmp_seqlen_list: torch.Tensor = None
     cu_c128_cmp_seqlen_list: torch.Tensor = None
+    num_valid_slots: int = 0
+    graph_pad_size: int = -1
 
 
 @dataclass
@@ -218,6 +220,8 @@ class AscendDSADecodeMetadata:
     start_pos: torch.Tensor = None
     sas_metadata: torch.Tensor = None
     qli_metadata: torch.Tensor = None
+    num_valid_slots: int = 0
+    graph_pad_size: int = -1
 
 
 @dataclass
@@ -645,6 +649,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_slot_mapping = self.slot_mapping[
             compressed_tokens_start:compressed_tokens_end +
             compressed_tokens_start]
+        num_valid_prefill_slots = int((prefill_slot_mapping >= 0).sum().item())
 
         assert self.start_pos_prefill is not None
         self.start_pos_prefill.fill_(0)
@@ -861,7 +866,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             sas_metadata=sas_metadata,
             qli_metadata=qli_metadata,
             cu_c4_cmp_seqlen_list=cu_c4_cmp_seqlen_list,
-            cu_c128_cmp_seqlen_list=cu_c128_cmp_seqlen_list)
+            cu_c128_cmp_seqlen_list=cu_c128_cmp_seqlen_list,
+            num_valid_slots=num_valid_prefill_slots,
+            graph_pad_size=self.graph_pad_size)
 
     def build_decode_metadata(
         self,
@@ -1199,7 +1206,9 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             batch_seq_mask=batch_seq_mask,
             start_pos=self.start_pos_decode[:self.num_decodes],  # cached
             sas_metadata = self.decode_sas_metadata,
-            qli_metadata=self.decode_qli_metadata)
+            qli_metadata=self.decode_qli_metadata,
+            num_valid_slots=compressed_tokens_start,
+            graph_pad_size=self.graph_pad_size)
         return decode_metadata
 
     def get_block_table_size(
@@ -1441,6 +1450,28 @@ class AscendDSAImpl(DSAAttentionImpl):
             self._debug_topk_summary(topk_idxs),
         )
 
+    @staticmethod
+    def _metadata_uses_full_graph(attn_metadata: object | None) -> bool:
+        return int(getattr(attn_metadata, "graph_pad_size", -1)) > -1
+
+    def _prepare_cache_write_inputs(
+        self,
+        attn_metadata: object | None,
+        slot_mapping: Optional[torch.Tensor],
+        kv_tensor: Optional[torch.Tensor],
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if slot_mapping is None or kv_tensor is None:
+            return slot_mapping, kv_tensor
+
+        if self._metadata_uses_full_graph(attn_metadata):
+            return slot_mapping, kv_tensor
+
+        num_valid_slots = int(getattr(attn_metadata, "num_valid_slots", 0))
+        if num_valid_slots <= 0:
+            return None, None
+
+        return slot_mapping[:num_valid_slots], kv_tensor[:num_valid_slots, ...]
+
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
@@ -1666,15 +1697,21 @@ class AscendDSAImpl(DSAAttentionImpl):
                     compressor_attn_metadata.prefill.slot_mapping,
                     compressed_kv,
                 )
-                torch.ops._C_ascend.kv_compress_epilog(
-                    kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
-                    x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
-                    slot_mapping=compressor_attn_metadata.prefill.slot_mapping,
-                    quant_group_size=64,
-                    quant_mode=2,
-                    round_scale_flag=True,
-                    layout=1,
+                write_slot_mapping, write_compressed_kv = self._prepare_cache_write_inputs(
+                    compressor_attn_metadata.prefill,
+                    compressor_attn_metadata.prefill.slot_mapping,
+                    compressed_kv,
                 )
+                if write_slot_mapping is not None and write_compressed_kv is not None:
+                    torch.ops._C_ascend.kv_compress_epilog(
+                        kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                        x=write_compressed_kv.reshape(-1, write_compressed_kv.shape[-1]),
+                        slot_mapping=write_slot_mapping,
+                        quant_group_size=64,
+                        quant_mode=2,
+                        round_scale_flag=True,
+                        layout=1,
+                    )
             else:
                 torch_npu.npu_scatter_nd_update_(
                     compress_kv_cache,
@@ -1969,15 +2006,21 @@ class AscendDSAImpl(DSAAttentionImpl):
                         compressor_attn_metadata.decode.slot_mapping,
                         compressed_kv,
                     )
-                    torch.ops._C_ascend.kv_compress_epilog(
-                        kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
-                        x=compressed_kv.reshape(-1, compressed_kv.shape[-1]),
-                        slot_mapping=compressor_attn_metadata.decode.slot_mapping,
-                        quant_group_size=64,
-                        quant_mode=2,
-                        round_scale_flag=True,
-                        layout=1,
+                    write_slot_mapping, write_compressed_kv = self._prepare_cache_write_inputs(
+                        compressor_attn_metadata.decode,
+                        compressor_attn_metadata.decode.slot_mapping,
+                        compressed_kv,
                     )
+                    if write_slot_mapping is not None and write_compressed_kv is not None:
+                        torch.ops._C_ascend.kv_compress_epilog(
+                            kv_compress_cache=compress_kv_cache.view(-1, 1, compress_kv_cache.shape[-1]),
+                            x=write_compressed_kv.reshape(-1, write_compressed_kv.shape[-1]),
+                            slot_mapping=write_slot_mapping,
+                            quant_group_size=64,
+                            quant_mode=2,
+                            round_scale_flag=True,
+                            layout=1,
+                        )
             else:
                 torch_npu.npu_scatter_nd_update_(
                     compress_kv_cache,
@@ -2222,12 +2265,18 @@ class AscendDSAImpl(DSAAttentionImpl):
                     kv,
                 )
                 if soc_version in {AscendDeviceType.A5}:
-                    torch.ops._C_ascend.indexer_compress_epilog_v2(
-                        indexer_compress_cache=indexer_full_cache.view(torch.uint8),
-                        x=kv, 
-                        slot_mapping=indexer_kv_scale_metadata.prefill.slot_mapping, 
-                        layout=2,
+                    write_slot_mapping, write_kv = self._prepare_cache_write_inputs(
+                        indexer_kv_scale_metadata.prefill,
+                        indexer_kv_scale_metadata.prefill.slot_mapping,
+                        kv,
                     )
+                    if write_slot_mapping is not None and write_kv is not None:
+                        torch.ops._C_ascend.indexer_compress_epilog_v2(
+                            indexer_compress_cache=indexer_full_cache.view(torch.uint8),
+                            x=write_kv,
+                            slot_mapping=write_slot_mapping,
+                            layout=2,
+                        )
                 else:
                     torch_npu.npu_scatter_nd_update_(
                         indexer_k_cache,
@@ -2247,12 +2296,18 @@ class AscendDSAImpl(DSAAttentionImpl):
                     kv,
                 )
                 if soc_version in {AscendDeviceType.A5}:
-                    torch.ops._C_ascend.indexer_compress_epilog_v2(
-                        indexer_compress_cache=indexer_full_cache.view(torch.uint8),
-                        x=kv, 
-                        slot_mapping=indexer_kv_scale_metadata.decode.slot_mapping, 
-                        layout=2,
+                    write_slot_mapping, write_kv = self._prepare_cache_write_inputs(
+                        indexer_kv_scale_metadata.decode,
+                        indexer_kv_scale_metadata.decode.slot_mapping,
+                        kv,
                     )
+                    if write_slot_mapping is not None and write_kv is not None:
+                        torch.ops._C_ascend.indexer_compress_epilog_v2(
+                            indexer_compress_cache=indexer_full_cache.view(torch.uint8),
+                            x=write_kv,
+                            slot_mapping=write_slot_mapping,
+                            layout=2,
+                        )
                 else:
                     torch_npu.npu_scatter_nd_update_(
                         indexer_k_cache,
