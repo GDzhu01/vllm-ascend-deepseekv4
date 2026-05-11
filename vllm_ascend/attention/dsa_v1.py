@@ -1500,7 +1500,19 @@ class AscendDSAImpl(DSAAttentionImpl):
             return False
         if not self.dsa_debug_layer_filters:
             return True
-        return any(token in layer_name for token in self.dsa_debug_layer_filters)
+        layer_idx = extract_dsv4_layer_index(layer_name)
+        for token in self.dsa_debug_layer_filters:
+            if token.isdigit():
+                if layer_idx == int(token):
+                    return True
+                continue
+            if token.startswith("layers.") and token[7:].isdigit():
+                if layer_idx == int(token[7:]):
+                    return True
+                continue
+            if token == layer_name or token in layer_name:
+                return True
+        return False
 
     def _debug_log_attn_output(
         self,
