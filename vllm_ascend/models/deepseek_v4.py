@@ -171,7 +171,7 @@ def apply_rotary_emb(x: torch.Tensor,
         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
+    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2).to(y.dtype)
     y.copy_(x)
     return y
 
