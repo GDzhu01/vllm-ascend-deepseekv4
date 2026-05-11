@@ -21,6 +21,69 @@ from vllm_ascend.ops.triton.reject_sample import (
 from vllm_ascend.sample.sampler import apply_top_k_top_p
 
 
+FORCED_TOKEN_ACCEPTANCE_RATE: float | None = None
+
+
+def force_token_acceptance_sample(
+    output_token_ids: torch.Tensor,
+    draft_token_ids: torch.Tensor,
+    num_draft_tokens: list[int],
+    max_spec_len: int,
+    cu_num_draft_tokens: torch.Tensor,
+    target_logits: torch.Tensor,
+    bonus_token_ids: torch.Tensor,
+    acceptance_rate: float,
+) -> torch.Tensor:
+    batch_size = len(num_draft_tokens)
+    device = output_token_ids.device
+    cu_num_draft_tokens = cu_num_draft_tokens.to(dtype=torch.long)
+    cu_start = torch.cat([
+        torch.zeros(1, dtype=torch.long, device=device),
+        cu_num_draft_tokens[:-1],
+    ])
+    num_draft_tokens_tensor = cu_num_draft_tokens - cu_start
+
+    positions = torch.arange(max_spec_len, device=device)[None, :]
+    valid_mask = positions < num_draft_tokens_tensor[:, None]
+    accept_mask = torch.rand(
+        (batch_size, max_spec_len),
+        device=device,
+    ) < acceptance_rate
+    num_accepted_tokens = (accept_mask & valid_mask).sum(dim=1)
+
+    if draft_token_ids.numel() > 0 and max_spec_len > 0:
+        global_token_indices = cu_start[:, None] + positions
+        global_token_indices = global_token_indices.clamp(
+            max=draft_token_ids.shape[0] - 1,
+        )
+        draft_tokens = draft_token_ids[global_token_indices]
+        accepted_prefix_mask = positions < num_accepted_tokens[:, None]
+        output_token_ids[:, :max_spec_len] = torch.where(
+            accepted_prefix_mask & valid_mask,
+            draft_tokens.to(output_token_ids.dtype),
+            output_token_ids[:, :max_spec_len],
+        )
+
+    row_indices = torch.arange(batch_size, device=device)
+    reject_mask = num_accepted_tokens < num_draft_tokens_tensor
+    target_token_ids = target_logits.argmax(dim=-1)
+    reject_rows = row_indices[reject_mask]
+    reject_cols = num_accepted_tokens[reject_mask]
+    reject_global_indices = cu_start[reject_mask] + reject_cols
+    output_token_ids[reject_rows, reject_cols] = target_token_ids[
+        reject_global_indices
+    ].to(output_token_ids.dtype)
+
+    bonus_mask = ~reject_mask
+    bonus_rows = row_indices[bonus_mask]
+    bonus_cols = num_draft_tokens_tensor[bonus_mask]
+    output_token_ids[bonus_rows, bonus_cols] = bonus_token_ids.view(-1)[
+        bonus_mask
+    ].to(output_token_ids.dtype)
+
+    return output_token_ids
+
+
 def apply_sampling_constraints(
     logits: torch.Tensor,  # [num_tokens, vocab_size]
     cu_num_draft_tokens: torch.Tensor,  # [batch_size]
@@ -122,6 +185,18 @@ def rejection_sample(
         device=device,
     )
     output_token_ids.fill_(PLACEHOLDER_TOKEN_ID)
+
+    if FORCED_TOKEN_ACCEPTANCE_RATE is not None:
+        return force_token_acceptance_sample(
+            output_token_ids,
+            draft_token_ids,
+            num_draft_tokens,
+            max_spec_len,
+            cu_num_draft_tokens,
+            target_logits,
+            bonus_token_ids,
+            FORCED_TOKEN_ACCEPTANCE_RATE,
+        )
 
     if sampling_metadata.all_greedy:
         is_greedy = None
