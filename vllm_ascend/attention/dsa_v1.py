@@ -663,6 +663,15 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         cu_c4_cmp_seqlen_list = None
         cu_c128_cmp_seqlen_list = None
+        if self.compressor_ratio > 1:
+            cmp_seq_lens = _get_cmp_seq_lens(
+                prefill_seq_lens,
+                self.compressor_ratio,
+            )
+            if self.compressor_ratio == 4:
+                cu_c4_cmp_seqlen_list = cmp_seq_lens
+            elif self.compressor_ratio == 128:
+                cu_c128_cmp_seqlen_list = cmp_seq_lens
 
         layer_name = f"c{self.compressor_ratio}"
         if get_ascend_device_type() in {AscendDeviceType.A5}:
@@ -1003,6 +1012,18 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         tp_size = get_tensor_model_parallel_world_size()
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = self.model_config.hf_config.index_topk
+
+        if self.compressor_ratio > 1:
+            cmp_seq_lens = self.seq_lens[:self.num_decodes] // self.compressor_ratio
+            self.cu_seqlens_cmp_kv = torch.concat(
+                (
+                    torch.tensor([0], device=cmp_seq_lens.device),
+                    torch.cumsum(cmp_seq_lens, -1),
+                ),
+                dim=-1,
+            )
+        else:
+            self.cu_seqlens_cmp_kv = torch.tensor([], device=self.device)
 
         assert self.decode_sas_metadata is not None
         if get_ascend_device_type() in {AscendDeviceType.A5}:
