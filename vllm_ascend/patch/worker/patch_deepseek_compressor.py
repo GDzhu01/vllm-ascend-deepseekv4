@@ -135,7 +135,7 @@ class AscendSVFSWACache(SVFSWACache):
         # same page size. The C4A KV block shape [256//4, head_dim] = [64, head_dim]
         # determines the SWA block size of 64 tokens per block.
         # TODO(cmq): make SWA block size automatically determined and configurable.
-        self.block_size = 128
+        self.block_size = 64
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
         if get_ascend_device_type() in {AscendDeviceType.A5}:
@@ -163,4 +163,3 @@ class AscendSVFSWACache(SVFSWACache):
 vllm.model_executor.layers.deepseek_compressor.CompressorStateCache = AscendCompressorStateCache
 vllm.model_executor.models.deepseek_v2.DeepseekV32IndexerCache = AscendDeepseekV32IndexerCache
 vllm.v1.attention.backends.mla.sparse_swa.SVFSWACache = AscendSVFSWACache
-
