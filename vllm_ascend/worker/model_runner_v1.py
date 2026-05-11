@@ -765,7 +765,7 @@ class NPUModelRunner(GPUModelRunner):
         self.seq_lens.copy_to_gpu()
 
         # Fill unused with -1. Needed for reshape_and_cache in attention_cp
-        self.query_start_loc.gpu[num_reqs + 1 :].fill_(-1)
+        self.query_start_loc.cpu[num_reqs + 1 :].fill_(-1)
 
         # Copy the tensors to the NPU.
         self._prepare_input_ids(scheduler_output, total_num_scheduled_tokens, cu_num_tokens)
