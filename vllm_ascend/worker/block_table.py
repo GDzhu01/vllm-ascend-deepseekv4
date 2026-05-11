@@ -29,14 +29,14 @@ class BlockTable:
                 hasattr(kv_cache_group, "kv_cache_spec") and \
                 hasattr(kv_cache_group.kv_cache_spec, "compress_ratio"):
             compress_ratio = kv_cache_group.kv_cache_spec.compress_ratio
-        self.max_num_blocks_per_req = max(
-            cdiv(max_num_blocks_per_req, compress_ratio), 1)
+        self.max_num_blocks_per_req = max(max_num_blocks_per_req, 1)
         self.max_num_batched_tokens = max_num_batched_tokens
-        max_num_blocks_per_req = max(
-            cdiv(max_num_blocks_per_req, compress_ratio), 1)
+        max_num_blocks_per_req = self.max_num_blocks_per_req
         self.pin_memory = pin_memory
         self.device = device
         self.physical_block_size = block_size
+        self.storage_block_size = max(block_size // max(compress_ratio, 1), 1)
+        self.use_storage_block_mapping = compress_ratio > 1
 
         try:
             self.pcp_world_size = get_pcp_group().world_size
@@ -94,6 +94,11 @@ class BlockTable:
 
         self.kernel_sizes = kernel_sizes
         self.cp_kv_cache_interleave_size = cp_kv_cache_interleave_size
+        self.slot_mapping_block_size = (
+            self.storage_block_size
+            if self.use_storage_block_mapping
+            else self.block_size
+        )
 
     def append_row(
         self,
@@ -144,7 +149,11 @@ class BlockTable:
 
             # Use a "virtual block" which equals to world_size * block_size
             # for block_table_indices calculation.
-            virtual_block_size = self.block_size * self.dcp_world_size * self.pcp_world_size
+            virtual_block_size = (
+                self.slot_mapping_block_size
+                * self.dcp_world_size
+                * self.pcp_world_size
+            )
 
             # IMPORTANT: In hybrid mode, positions are in logical block space,
             # but we need to map them to the correct logical block table indices
@@ -175,7 +184,9 @@ class BlockTable:
                 + virtual_block_offsets % self.cp_kv_cache_interleave_size
             )
             # Calculate slot_mapping
-            slot_mapping = block_numbers * self.block_size + block_offsets
+            slot_mapping = (
+                block_numbers * self.slot_mapping_block_size + block_offsets
+            )
             # Write final slots, use -1 for not-local
             self.slot_mapping.np[: req_indices.shape[0]] = np.where(mask, slot_mapping, -1)
         else:
@@ -183,7 +194,7 @@ class BlockTable:
             assert self.block_size == self.kernel_sizes[0]
             # IMPORTANT: In hybrid mode, positions are in logical block space,
             # but we need to map them to the correct logical block table indices
-            logical_block_idx = positions // self.block_size
+            logical_block_idx = positions // self.slot_mapping_block_size
 
             # Account for the expanded logical table
             # (always needed with unified tensor)
@@ -194,8 +205,12 @@ class BlockTable:
             )
 
             block_numbers = self.block_table.np.ravel()[block_table_indices]
-            block_offsets = positions % self.block_size
-            np.add(block_numbers * self.block_size, block_offsets, out=self.slot_mapping.np[: req_indices.shape[0]])
+            block_offsets = positions % self.slot_mapping_block_size
+            np.add(
+                block_numbers * self.slot_mapping_block_size,
+                block_offsets,
+                out=self.slot_mapping.np[: req_indices.shape[0]],
+            )
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)
