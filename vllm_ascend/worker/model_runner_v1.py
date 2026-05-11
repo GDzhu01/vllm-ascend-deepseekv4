@@ -127,6 +127,7 @@ from vllm_ascend.ops.rotary_embedding import set_cos_and_sin, update_cos_sin
 from vllm_ascend.patch.worker.patch_draft_quarot import patch_load_weights
 from vllm_ascend.patch.worker.patch_module import patch_torch_npu_argsort
 from vllm_ascend.quantization.utils import enable_fa_quant
+from vllm_ascend.sample import rejection_sampler as ascend_rejection_sampler
 from vllm_ascend.sample.sampler import AscendSampler
 from vllm_ascend.spec_decode import get_spec_decode_method
 from vllm_ascend.spec_decode.draft_proposer import AscendDraftModelProposer
@@ -1664,12 +1665,25 @@ class NPUModelRunner(GPUModelRunner):
 
         if lmhead_tp_enable() and logits is not None:
             logits = logits[: len(spec_decode_metadata.logits_indices)]
-        sampler_output = self.rejection_sampler(
-            spec_decode_metadata,
-            None,  # draft_probs
-            logits,
-            sampling_metadata,
+        forced_acceptance_rate = None
+        if self.speculative_config and self.speculative_config.method in (
+            "mtp",
+            "deepseek_mtp",
+        ):
+            forced_acceptance_rate = 0.7
+        old_forced_acceptance_rate = (
+            ascend_rejection_sampler.FORCED_TOKEN_ACCEPTANCE_RATE
         )
+        ascend_rejection_sampler.FORCED_TOKEN_ACCEPTANCE_RATE = forced_acceptance_rate
+        try:
+            sampler_output = self.rejection_sampler(
+                spec_decode_metadata,
+                None,  # draft_probs
+                logits,
+                sampling_metadata,
+            )
+        finally:
+            ascend_rejection_sampler.FORCED_TOKEN_ACCEPTANCE_RATE = old_forced_acceptance_rate
         return sampler_output
 
     # TODO: remove this func after eagle_proposer is refactored and
