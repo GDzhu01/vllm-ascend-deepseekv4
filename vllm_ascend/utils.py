@@ -456,6 +456,16 @@ def attention_calculation_stream() -> torch.npu.Stream:
         _ATNN_CALCULATION_STREAM = torch_npu.npu.Stream()
     return _ATNN_CALCULATION_STREAM
 
+
+_MICROBATCH_OVERLAP_STREAM: torch.npu.Stream | None = None
+
+
+def microbatch_overlap_stream() -> torch.npu.Stream:
+    global _MICROBATCH_OVERLAP_STREAM
+    if _MICROBATCH_OVERLAP_STREAM is None:
+        _MICROBATCH_OVERLAP_STREAM = torch_npu.npu.Stream()
+    return _MICROBATCH_OVERLAP_STREAM
+
 def adapt_patch(is_global_patch: bool = False):
     if is_global_patch:
         from vllm_ascend.patch import platform  # noqa: F401

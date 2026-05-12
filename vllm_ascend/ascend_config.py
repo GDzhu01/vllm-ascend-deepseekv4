@@ -86,6 +86,14 @@ class AscendConfig:
                 )
         self.multistream_overlap_shared_expert = additional_config.get("multistream_overlap_shared_expert", False)
         self.multistream_overlap_gate = additional_config.get("multistream_overlap_gate", False)
+        self.prefill_micro_batch_moe_overlap = additional_config.get("prefill_micro_batch_moe_overlap", False)
+        self.prefill_micro_batch_moe_overlap_split_ratio = additional_config.get(
+            "prefill_micro_batch_moe_overlap_split_ratio", 0.8
+        )
+        if not 0 < self.prefill_micro_batch_moe_overlap_split_ratio < 1:
+            raise ValueError(
+                "multistream_prefill_moe_overlap_split_ratio must be in the open interval (0, 1)."
+            )
         self.recompute_scheduler_enable = additional_config.get("recompute_scheduler_enable", False)
         self.enable_cpu_binding = additional_config.get("enable_cpu_binding", True)
         self.multistream_dsa_preprocess = additional_config.get(
