@@ -135,9 +135,10 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         self.use_cuda_graph = self.runner._use_aclgraph() and not self.speculative_config.enforce_eager
         if self.method == "mtp":
+            # NOTE: Removed async_scheduling restriction for cuda graph
+            # See Issue #5459. Risk: May crash like Issue #8587.
             self.use_cuda_graph = (
                 self.use_cuda_graph
-                and not self.use_async_scheduling
                 and not self.speculative_config.disable_padded_drafter_batch
                 and not self.use_compress
             )
@@ -1053,7 +1054,8 @@ class SpecDecodeBaseProposer(EagleProposer):
                     cad.max_query_len = max(self.decode_threshold, max_query_len_p)
                     cad.seq_lens[-num_prefill_reqs:] = seq_lens_p
                     cad.seq_lens_cpu[-num_prefill_reqs:] = seq_lens_p
-                    query_start_loc_p = cu_num_tokens_p[1:] + cad.query_start_loc[num_decode_reqs].item()
+                    # FIX: Keep tensor form, avoid .item() D2H sync
+                    query_start_loc_p = cu_num_tokens_p[1:] + cad.query_start_loc[num_decode_reqs]
                     cad.query_start_loc[-num_prefill_reqs:] = query_start_loc_p
                     cad.query_start_loc_cpu[-num_prefill_reqs:] = query_start_loc_p
 
@@ -1332,10 +1334,13 @@ class SpecDecodeBaseProposer(EagleProposer):
         # TODO(Ben): Combine this into a custom fused kernel
 
         # Precompute get_token_id for when there is no valid next token
+        # FIX: Use numpy array to avoid D2H synchronization from .item() calls
+        # seq_lens_cpu is already a CPU tensor, .numpy() is just memory copy
         num_reqs = gpu_input_batch.num_reqs
+        seq_lens_np = common_attn_metadata.seq_lens_cpu[:num_reqs].numpy()
         self.backup_next_token_ids.np[:num_reqs] = np.array(
             [
-                requests[gpu_input_batch.req_ids[i]].get_token_id(common_attn_metadata.seq_lens_cpu[i].item())
+                requests[gpu_input_batch.req_ids[i]].get_token_id(seq_lens_np[i])
                 for i in range(num_reqs)
             ]
         )
@@ -1467,7 +1472,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             num_reqs=common_attn_metadata.num_reqs,
             num_actual_tokens=total_num_tokens,
             num_input_tokens=common_attn_metadata.num_input_tokens,
-            max_query_len=new_query_len_per_req.max().item(),
+            max_query_len=int(new_query_len_per_req.max().numpy()),
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
@@ -1533,7 +1538,8 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         new_query_len_per_req = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
 
-        total_num_tokens = query_start_loc_cpu[-1].item()
+        # FIX: Use numpy to avoid potential sync, query_start_loc_cpu is CPU tensor
+        total_num_tokens = int(query_start_loc_cpu[-1].numpy())
         token_indices = self.arange[:total_num_tokens]
 
         # NOTE: Currently positions and seq_lens are not used in attn forward
@@ -1546,7 +1552,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             num_reqs=common_attn_metadata.num_reqs,
             num_actual_tokens=common_attn_metadata.num_actual_tokens if self.pcp_size > 1 else total_num_tokens,
             num_input_tokens=common_attn_metadata.num_input_tokens,
-            max_query_len=new_query_len_per_req.max().item(),
+            max_query_len=int(new_query_len_per_req.max().numpy()),
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
