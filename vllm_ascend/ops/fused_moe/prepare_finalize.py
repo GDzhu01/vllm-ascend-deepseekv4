@@ -66,6 +66,8 @@ class PrepareAndFinalize(ABC):
         enable_shared_expert_dp: bool = False,
         replace_allreduce: bool = False,
         quant_type: QuantType = QuantType.NONE,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
         """
         Prepare tensors before MoE computation. May involve:
@@ -174,6 +176,7 @@ class PrepareAndFinalizeWithAll2All(PrepareAndFinalize):
             mc2_mask=None,
             padded_hidden_states_shape=padded_hidden_states_shape,
             pertoken_scale=None,
+            prepared_num_tokens=hidden_states.shape[0],
         )
     
     def pad_and_split_input_ids(
@@ -347,6 +350,8 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
         enable_shared_expert_dp: bool = False,
         replace_allreduce: bool = False,
         quant_type=QuantType.NONE,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
         """
         Preparation steps:
@@ -356,13 +361,18 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             MoEPrepareOutput with global tensors.
         """
         if enable_sp() or enable_sp_by_pass():
-            return self._prepare_with_ep_group(hidden_states, router_logits, quant_type)
+            return self._prepare_with_ep_group(hidden_states, router_logits, quant_type, overlap_events, microbatch_role)
 
         return self._prepare_with_dp_group(hidden_states, router_logits, enable_shared_expert_dp, replace_allreduce)
 
     def _prepare_with_ep_group(
-        self, hidden_states: torch.Tensor, router_logits: torch.Tensor, quant_type=QuantType.NONE
+        self, hidden_states: torch.Tensor, router_logits: torch.Tensor, quant_type=QuantType.NONE,
+        overlap_events=None, microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
+        if overlap_events is not None and microbatch_role == "batch1":
+            if overlap_events.b0_quant_done is not None:
+                torch.npu.current_stream().wait_event(overlap_events.b0_quant_done)
+
         pertoken_scale = None
         if quant_type == QuantType.W8A8:
             hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
@@ -370,6 +380,12 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             # TODO(linfeng): MXFP8 with AllGather+EP currently does not pre-quantize
             # per-token activations in prepare. Keep quantization in the MoE MLP path.
             pass
+
+        if overlap_events is not None:
+            if microbatch_role == "batch0":
+                overlap_events.b0_quant_done = torch.npu.current_stream().record_event()
+            elif microbatch_role == "batch1":
+                overlap_events.b1_quant_done = torch.npu.current_stream().record_event()
 
         if self.multistream_overlap_gate:
             assert PrepareAndFinalize.quant_stream is not None
@@ -383,6 +399,15 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
         # TODO(fuzhihong): To adapt to self.num_token in the all_gather_input_id_with_dp_group method,
         #  when flashcomm1 is used and dp = N(N >=2).
         self.num_tokens = hidden_states.shape[0]
+        if overlap_events is not None:
+            if microbatch_role == "batch0":
+                self.b0_num_tokens = self.num_tokens
+            elif microbatch_role == "batch1":
+                self.b1_num_tokens = self.num_tokens
+
+        if microbatch_role is None:
+            self.b0_num_tokens = None
+            self.b1_num_tokens = None
 
         if pertoken_scale is not None:
             pertoken_scale = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(pertoken_scale, True, True)
@@ -396,6 +421,7 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             mc2_mask=None,
             padded_hidden_states_shape=None,
             pertoken_scale=pertoken_scale,
+            prepared_num_tokens=hidden_states.shape[0],
         )
 
     def _prepare_with_dp_group(
@@ -420,7 +446,7 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             max_tokens_across_dp = _EXTRA_CTX.max_tokens_across_dp
 
             self.num_tokens = hidden_states.shape[0]
-            pad_size = max_tokens_across_dp - self.num_tokens
+            pad_size = max_tokens_across_dp - input_ids.shape[0]
             if pad_size > 0:
                 hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad_size))
                 router_logits = nn.functional.pad(router_logits, (0, 0, 0, pad_size))
@@ -453,16 +479,32 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             mc2_mask=None,
             padded_hidden_states_shape=None,
             pertoken_scale=None,
+            prepared_num_tokens=hidden_states.shape[0],
         )
 
     def all_gather_input_id_with_dp_group(
-        self, input_ids: torch.Tensor) -> torch.Tensor:
+        self,
+        input_ids: torch.Tensor,
+        num_tokens_across_dp: torch.Tensor | None = None,
+        prepared_num_tokens: int | None = None,
+    ) -> torch.Tensor:
+        target_num_tokens = None
+        if prepared_num_tokens is not None:
+            target_num_tokens = prepared_num_tokens
+        elif num_tokens_across_dp is not None:
+            target_num_tokens = int(num_tokens_across_dp.max().item())
+        elif self.moe_config.dp_size > 1:
+            target_num_tokens = _EXTRA_CTX.max_tokens_across_dp
+        else:
+            return input_ids
+
+        pad_size = target_num_tokens - input_ids.shape[0]
+        if pad_size > 0:
+            input_ids = nn.functional.pad(input_ids, (0, pad_size))
+        elif pad_size < 0:
+            input_ids = input_ids[:target_num_tokens]
+
         if self.moe_config.dp_size > 1:
-            max_tokens_across_dp = _EXTRA_CTX.max_tokens_across_dp
-            pad_size = max_tokens_across_dp - self.num_tokens
-            if pad_size > 0:
-                input_ids = nn.functional.pad(input_ids, (0, pad_size))
-    
             input_ids = self.moe_config.dp_group.all_gather(input_ids, 0)
         return input_ids
 

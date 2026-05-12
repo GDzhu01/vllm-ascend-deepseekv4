@@ -22,6 +22,7 @@ import torch
 import torch_npu
 from vllm.config import CompilationMode, get_current_vllm_config
 from vllm.distributed import get_ep_group
+from vllm.forward_context import get_forward_context
 
 import vllm_ascend.envs as envs_ascend
 from vllm_ascend.ascend_config import get_ascend_config
@@ -187,6 +188,9 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
         apply_router_weight_on_input: bool = False,
         mc2_mask: torch.Tensor | None = None,
         tid2eid: torch.Tensor | None = None,
+        input_ids: torch.Tensor | None = None,
+        num_tokens_across_dp: torch.Tensor | None = None,
+        prepared_num_tokens: int | None = None,
     ) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
@@ -201,6 +205,11 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
             topk_weights = fc3_context.topk_weights
             topk_ids = fc3_context.topk_ids
         else:
+            forward_context = get_forward_context()
+            if input_ids is None:
+                input_ids = forward_context.input_ids
+            if num_tokens_across_dp is None:
+                num_tokens_across_dp = getattr(forward_context, "num_tokens_across_dp", None)
             topk_weights, topk_ids = select_experts(
                 hidden_states=x,
                 router_logits=router_logits,
@@ -215,6 +224,9 @@ class AscendW8A8DynamicFusedMoEMethod(AscendMoEScheme):
                 e_score_correction_bias=e_score_correction_bias,
                 global_num_experts=global_num_experts,
                 tid2eid=tid2eid,
+                input_ids=input_ids,
+                num_tokens_across_dp=num_tokens_across_dp,
+                prepared_num_tokens=prepared_num_tokens,
             )
         assert topk_ids is not None
         assert topk_weights is not None

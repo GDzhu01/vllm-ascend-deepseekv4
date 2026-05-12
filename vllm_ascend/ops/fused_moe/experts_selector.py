@@ -23,6 +23,7 @@ from vllm.distributed import get_tp_group
 from vllm.forward_context import get_forward_context
 
 from vllm_ascend.ascend_forward_context import MoECommType
+from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.distributed.utils import split_tensor_along_first_dim
 
 from vllm_ascend.device.device_op import DeviceOperator
@@ -45,6 +46,8 @@ def select_experts(
     global_num_experts: int = -1,
     input_ids: Optional[torch.Tensor] = None,
     tid2eid: Optional[torch.Tensor] = None,
+    num_tokens_across_dp: Optional[torch.Tensor] = None,
+    prepared_num_tokens: int | None = None,
 ):
     """
     Fused experts with select experts.
@@ -95,6 +98,8 @@ def select_experts(
             global_num_experts=global_num_experts,
             tid2eid=tid2eid,
             input_ids=input_ids,
+            num_tokens_across_dp=num_tokens_across_dp,
+            prepared_num_tokens=prepared_num_tokens,
         )
     else:
         topk_weights, topk_ids = _native_select_experts(
@@ -225,7 +230,9 @@ def _select_experts_with_fusion_ops(
     routed_scaling_factor=1.0,
     global_num_experts: int = -1,
     tid2eid=None,
-    input_ids=None
+    input_ids=None,
+    num_tokens_across_dp=None,
+    prepared_num_tokens: int | None = None,
     ):
     topk_group = topk_group if topk_group is not None else 1
     num_expert_group = num_expert_group if num_expert_group is not None else 1
@@ -233,13 +240,29 @@ def _select_experts_with_fusion_ops(
     if scoring_func == "sqrtsoftplus":
         if tid2eid is not None:
             forward_context = get_forward_context()
-            input_ids = forward_context.input_ids.to(torch.int64)
+            if input_ids is None:
+                input_ids = forward_context.input_ids
+            input_ids = input_ids.to(torch.int64)
             # tid2eid_ones = torch.ones(tid2eid.shape[0],tid2eid.shape[1],device=router_logits.device,dtype=torch.int32)
             tid2eid_ones = tid2eid.to(torch.int32)
             if forward_context.moe_comm_type == MoECommType.ALLGATHER:
                 prepare_finalize = forward_context.moe_comm_method.prepare_finalize
+                input_ids_before_gather = input_ids.shape[0]
                 input_ids = prepare_finalize.all_gather_input_id_with_dp_group(
-                    input_ids)
+                    input_ids,
+                    num_tokens_across_dp=num_tokens_across_dp,
+                    prepared_num_tokens=prepared_num_tokens,
+                )
+                if input_ids.numel() != router_logits.shape[0]:
+                    local_tokens = getattr(prepare_finalize, "num_tokens", None)
+                    raise RuntimeError(
+                        "MoE hash routing input length mismatch after input_ids gather: "
+                        f"before_gather={input_ids_before_gather}, after_gather={input_ids.numel()}, "
+                        f"router_rows={router_logits.shape[0]}, moe_comm_type={forward_context.moe_comm_type}, "
+                        f"dp_size={prepare_finalize.moe_config.dp_size}, local_tokens={local_tokens}, "
+                        f"num_tokens_across_dp={num_tokens_across_dp}, "
+                        f"max_tokens_across_dp={getattr(forward_context, 'max_tokens_across_dp', None)}"
+                    )
             else:
                 input_ids = forward_context.moe_comm_method.pad_and_split_input_ids(
                     input_ids)
