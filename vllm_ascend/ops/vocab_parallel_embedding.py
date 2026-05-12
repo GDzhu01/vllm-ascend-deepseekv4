@@ -16,11 +16,14 @@
 #
 
 
+import os
+
 import torch
 from torch import nn
 from torch.nn.parameter import Parameter
 from vllm.distributed import divide
 from vllm.distributed.parallel_state import get_tp_group
+from vllm.logger import init_logger
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
@@ -38,6 +41,26 @@ from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_ascend.distributed.parallel_state import get_embed_tp_group, get_lmhead_tp_group
 from vllm_ascend.utils import embedding_tp_enable, lmhead_tp_enable
+
+logger = init_logger(__name__)
+
+_LMHEAD_TP_DEBUG_ENVS = ("ASCEND_LMHEAD_TP_DEBUG", "VLLM_ASCEND_LMHEAD_TP_DEBUG")
+
+
+def _lmhead_tp_debug_enabled() -> bool:
+    return any(os.getenv(env, "0").lower() in ("1", "true", "yes", "on") for env in _LMHEAD_TP_DEBUG_ENVS)
+
+
+def _log_lmhead_tp(message: str, *args) -> None:
+    if _lmhead_tp_debug_enabled():
+        logger.warning(message, *args)
+    else:
+        logger.info_once(message, *args)
+
+
+def _is_main_lm_head_prefix(prefix: str) -> bool:
+    prefix = prefix.strip(".")
+    return prefix == "lm_head" or prefix.endswith(".lm_head")
 
 
 class AscendVocabParallelEmbedding(VocabParallelEmbedding):
@@ -59,8 +82,11 @@ class AscendVocabParallelEmbedding(VocabParallelEmbedding):
     ):
         nn.Module.__init__(self)
         self.forward_type = None
-        if lmhead_tp_enable() and "head" in prefix:
+        self.prefix = prefix
+        self.use_lmhead_tp = False
+        if lmhead_tp_enable() and _is_main_lm_head_prefix(prefix):
             self.comm_group = get_lmhead_tp_group()
+            self.use_lmhead_tp = True
         elif embedding_tp_enable() and "embed_tokens" in prefix:
             self.comm_group = get_embed_tp_group()
             self.forward_type = "embed_tp"
@@ -131,6 +157,19 @@ class AscendVocabParallelEmbedding(VocabParallelEmbedding):
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
         )
+
+        if self.use_lmhead_tp:
+            _log_lmhead_tp(
+                "[lmhead_tp] init prefix=%s tp_rank=%s tp_size=%s "
+                "num_embeddings=%s padded=%s per_partition=%s embedding_dim=%s",
+                prefix,
+                self.tp_rank,
+                self.tp_size,
+                self.num_embeddings,
+                self.num_embeddings_padded,
+                self.num_embeddings_per_partition,
+                self.embedding_dim,
+            )
 
     def _get_masked_input_and_mask(
         self,
@@ -250,9 +289,18 @@ class AscendLogitsProcessor(LogitsProcessor):
         lm_head: AscendParallelLMHead,
         embedding_bias: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
-        if lmhead_tp_enable():
+        if lmhead_tp_enable() and getattr(lm_head, "use_lmhead_tp", False):
             return self._get_logits_lmheadtp(hidden_states, lm_head, embedding_bias)
         else:
+            if lmhead_tp_enable() and _lmhead_tp_debug_enabled():
+                logger.info(
+                    "[lmhead_tp] normal logits path prefix=%s use_lmhead_tp=%s "
+                    "hidden_shape=%s weight_shape=%s",
+                    getattr(lm_head, "prefix", ""),
+                    getattr(lm_head, "use_lmhead_tp", False),
+                    tuple(hidden_states.shape),
+                    tuple(lm_head.weight.shape) if hasattr(lm_head, "weight") else None,
+                )
             return self._get_logits_normal(hidden_states, lm_head, embedding_bias)
 
     def _get_logits_lmheadtp(
@@ -261,11 +309,37 @@ class AscendLogitsProcessor(LogitsProcessor):
         lm_head: AscendParallelLMHead,
         embedding_bias: torch.Tensor | None,
     ) -> torch.Tensor | None:
+        comm_group = lm_head.comm_group
+        _log_lmhead_tp(
+            "[lmhead_tp] before all_gather prefix=%s rank=%s/%s "
+            "hidden_shape=%s weight_shape=%s",
+            getattr(lm_head, "prefix", ""),
+            getattr(comm_group, "rank_in_group", None),
+            getattr(comm_group, "world_size", None),
+            tuple(hidden_states.shape),
+            tuple(lm_head.weight.shape) if hasattr(lm_head, "weight") else None,
+        )
         # Gather hidden states from all devices in tensor parallel group
-        gathered_hidden_states = get_lmhead_tp_group().all_gather(hidden_states, dim=0)
+        gathered_hidden_states = comm_group.all_gather(hidden_states, dim=0)
+        _log_lmhead_tp(
+            "[lmhead_tp] after all_gather prefix=%s gathered_hidden_shape=%s",
+            getattr(lm_head, "prefix", ""),
+            tuple(gathered_hidden_states.shape),
+        )
         local_logits = lm_head.quant_method.apply(lm_head, gathered_hidden_states, bias=embedding_bias)
+        _log_lmhead_tp(
+            "[lmhead_tp] local logits prefix=%s local_logits_shape=%s",
+            getattr(lm_head, "prefix", ""),
+            tuple(local_logits.shape) if local_logits is not None else None,
+        )
         # Gather logits for tensor parallel
-        logits = get_lmhead_tp_group().all_to_all(local_logits)
+        logits = comm_group.all_to_all(local_logits)
+        _log_lmhead_tp(
+            "[lmhead_tp] after all_to_all prefix=%s logits_shape=%s org_vocab_size=%s",
+            getattr(lm_head, "prefix", ""),
+            tuple(logits.shape) if logits is not None else None,
+            self.org_vocab_size,
+        )
         # Remove paddings in vocab (if any)
         if logits is not None:
             logits = logits[..., : self.org_vocab_size]

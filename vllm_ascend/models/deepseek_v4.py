@@ -50,10 +50,8 @@ from vllm.model_executor.layers.linear import (ColumnParallelLinear,
                                                MergedColumnParallelLinear,
                                                ReplicatedLinear,
                                                RowParallelLinear)
-from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.vocab_parallel_embedding import (
-    ParallelLMHead, VocabParallelEmbedding)
+from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader, maybe_remap_kv_scale_name)
 from vllm.model_executor.models.interfaces import (MixtureOfExperts,
@@ -74,6 +72,8 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
+from vllm_ascend.ops.vocab_parallel_embedding import (
+    AscendLogitsProcessor, AscendParallelLMHead, _log_lmhead_tp)
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
 logger = init_logger(__name__)
@@ -1096,15 +1096,23 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
         self.model = self.model_cls(vllm_config=vllm_config,
                                     prefix=maybe_prefix(prefix, "model"))
         if get_pp_group().is_last_rank:
-            self.lm_head = ParallelLMHead(
+            self.lm_head = AscendParallelLMHead(
                 config.vocab_size,
                 config.hidden_size,
                 quant_config=quant_config,
                 prefix=maybe_prefix(prefix, "lm_head"),
             )
+            _log_lmhead_tp(
+                "[lmhead_tp] DeepSeekV4 main lm_head type=%s use_lmhead_tp=%s "
+                "comm_size=%s weight_shape=%s",
+                type(self.lm_head).__name__,
+                getattr(self.lm_head, "use_lmhead_tp", False),
+                getattr(getattr(self.lm_head, "comm_group", None), "world_size", None),
+                tuple(self.lm_head.weight.shape) if hasattr(self.lm_head, "weight") else None,
+            )
         else:
             self.lm_head = PPMissingLayer()
-        self.logits_processor = LogitsProcessor(config.vocab_size)
+        self.logits_processor = AscendLogitsProcessor(config.vocab_size)
         self.make_empty_intermediate_tensors = (
             self.model.make_empty_intermediate_tensors)
         # Set MoE hyperparameters

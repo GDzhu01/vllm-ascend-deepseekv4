@@ -26,6 +26,7 @@ from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
 from vllm_ascend.ascend_config import get_ascend_config
+from vllm_ascend.ops.vocab_parallel_embedding import _log_lmhead_tp
 
 from .deepseek_v4 import (DeepseekV2DecoderLayer, DeepseekV2MixtureOfExperts,
                           DeepseekV4MoE, get_spec_layer_idx_from_weight_name)
@@ -48,6 +49,15 @@ class SharedHead(nn.Module):
             config.hidden_size,
             quant_config=quant_config,
             prefix=maybe_prefix(prefix, "head"),
+        )
+        _log_lmhead_tp(
+            "[lmhead_tp] DeepSeekV4 MTP shared_head type=%s prefix=%s "
+            "use_lmhead_tp=%s comm_size=%s weight_shape=%s",
+            type(self.head).__name__,
+            maybe_prefix(prefix, "head"),
+            getattr(self.head, "use_lmhead_tp", False),
+            getattr(getattr(self.head, "comm_group", None), "world_size", None),
+            tuple(self.head.weight.shape) if hasattr(self.head, "weight") else None,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -171,6 +181,12 @@ class DeepSeekMultiTokenPredictor(nn.Module):
             config.hidden_size,
         )
         self.logits_processor = LogitsProcessor(config.vocab_size)
+        _log_lmhead_tp(
+            "[lmhead_tp] DeepSeekV4 MTP logits_processor type=%s "
+            "embed_tokens_type=%s",
+            type(self.logits_processor).__name__,
+            type(self.embed_tokens).__name__,
+        )
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
