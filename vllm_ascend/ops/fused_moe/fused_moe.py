@@ -800,9 +800,16 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         if self.multistream_overlap_gate:
             set_flash_common3_context(shared_experts=self._shared_experts)
 
-        before_routed_experts = torch.npu.current_stream().record_event()
         if self.multistream_overlap_shared_expert:
-            router_logits = F.linear(hidden_states.float(), self.gate.weight)
+            # NOTE(Angazenn): To make this cast explicitly, the hbm usage might
+            # increase with extra hidden states. We also assume that all gate
+            # linear is unquantized so that we the weight is pre-casted in
+            # process_weights_after_loading of AscendUnquantizedLinearMethod.
+            hidden_states_fp32 = hidden_states.float()
+            before_routed_experts = torch.npu.current_stream().record_event()
+            router_logits = F.linear(hidden_states_fp32, self.gate.weight_fp32)
+        else:
+            before_routed_experts = torch.npu.current_stream().record_event()
 
         fused_moe_results = AscendFusedMoE.forward_impl(
             self,
