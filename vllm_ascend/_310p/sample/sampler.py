@@ -22,6 +22,7 @@ from vllm_ascend.sample.sampler import (
     DEFAULT_LOGPROBS_MODE,
     AscendSampler,
     AscendTopKTopPSampler,
+    _apply_top_k_one_tie_break,
 )
 from vllm_ascend.utils import global_stream, npu_stream_switch
 
@@ -50,6 +51,7 @@ class AscendTopKTopPSampler310(AscendTopKTopPSampler):
             return super().forward_native(logits, generators, k, p)
 
         logits = self.apply_top_k_top_p(logits, k, p)
+        logits = _apply_top_k_one_tie_break(logits, k, p)
         logits_to_return = None
         if self.logprobs_mode == "processed_logits":
             logits_to_return = logits

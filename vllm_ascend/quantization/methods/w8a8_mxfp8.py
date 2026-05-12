@@ -37,6 +37,40 @@ from .base import AscendLinearScheme, AscendMoEScheme, QuantType
 from .registry import register_scheme
 
 
+def _expand_e8m0_scales(scale_bits: torch.Tensor,
+                        hidden_size: int) -> torch.Tensor:
+    candidate_count = scale_bits.shape[1]
+    scale_bits = scale_bits.permute(0, 2, 1).reshape(-1, candidate_count)
+    exponent = scale_bits.to(torch.int32) - 127
+    scale = torch.pow(torch.full_like(exponent, 2, dtype=torch.float32),
+                      exponent.to(torch.float32))
+    scale = torch.where(scale_bits == 0, torch.zeros_like(scale), scale)
+    return scale.repeat_interleave(32, dim=0)[:hidden_size]
+
+
+def rescore_mxfp8_lm_head_candidates(
+    layer: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    candidate_ids: torch.Tensor,
+) -> torch.Tensor:
+    flat_candidate_ids = candidate_ids.reshape(-1).to(torch.long)
+    candidate_weight = layer.weight[:, flat_candidate_ids].float()
+    candidate_scale = _expand_e8m0_scales(
+        layer.weight_scale[:, flat_candidate_ids, :],
+        hidden_states.shape[-1],
+    )
+    candidate_weight = candidate_weight * candidate_scale
+    scores = hidden_states.float().matmul(candidate_weight)
+
+    num_candidates = candidate_ids.shape[1]
+    row_offsets = (torch.arange(candidate_ids.shape[0],
+                                device=hidden_states.device,
+                                dtype=torch.long) * num_candidates)
+    gather_ids = row_offsets[:, None] + torch.arange(
+        num_candidates, device=hidden_states.device, dtype=torch.long)
+    return scores.gather(1, gather_ids)
+
+
 @register_scheme("W8A8_MXFP8", "linear")
 class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
     """Linear method for Ascend W8A8_MXFP8 (Microscaling FP8) quantization.
@@ -83,7 +117,6 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
             if x.dim() > 2:
                 x = x.view(-1, x.shape[-1])
             quantized_x, pertoken_scale = torch_npu.npu_dynamic_mx_quant(x, dst_type=torch.float8_e4m3fn)
-        
         if bias is not None and bias.dtype != torch.float32:
             bias = bias.to(torch.float32)
 

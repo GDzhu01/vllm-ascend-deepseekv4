@@ -38,6 +38,22 @@ def random_sample(
     return probs.div_(q).argmax(dim=-1).view(-1)
 
 
+def _apply_top_k_one_tie_break(
+    logits: torch.Tensor,
+    k: torch.Tensor | None,
+    p: torch.Tensor | None,
+) -> torch.Tensor:
+    if k is None or p is not None:
+        return logits
+
+    top_k_one_rows = (k == 1).unsqueeze(1)
+    argmax_ids = logits.argmax(dim=-1, keepdim=True)
+    argmax_mask = torch.zeros_like(logits, dtype=torch.bool)
+    argmax_mask.scatter_(1, argmax_ids, True)
+    logits.masked_fill_(top_k_one_rows & ~argmax_mask, -float("inf"))
+    return logits
+
+
 class AscendSampler(Sampler):
     @staticmethod
     def apply_penalties(
@@ -104,6 +120,7 @@ class AscendTopKTopPSampler(TopKTopPSampler):
         if vllm_is_batch_invariant():
             return super().forward_native(logits, generators, k, p)
         logits = self.apply_top_k_top_p(logits, k, p)
+        logits = _apply_top_k_one_tie_break(logits, k, p)
         logits_to_return = None
         if self.logprobs_mode == "processed_logits":
             logits_to_return = logits

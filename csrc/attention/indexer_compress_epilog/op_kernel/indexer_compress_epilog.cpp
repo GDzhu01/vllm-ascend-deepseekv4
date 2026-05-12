@@ -50,22 +50,18 @@ extern "C" __global__ __aicore__ void indexer_compress_epilog(
         IndexerCompressEpilog::IndexerCompressEpilogMultiRow<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE, DTYPE_INDEXER_COMPRESS_CACHE_SCALE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, indexer_compress_cache_scale, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } else if (TILING_KEY_IS(SINGLE_ROW_NORMAL_QUANT)) {
         IndexerCompressEpilog::IndexerCompressEpilogSingleRow<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE, DTYPE_INDEXER_COMPRESS_CACHE_SCALE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, indexer_compress_cache_scale, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } else if (TILING_KEY_IS(MULTI_ROW_MXFP8_QUANT)){
         IndexerCompressEpilog::IndexerCompressEpilogMultiRowMxFp8<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE, DTYPE_INDEXER_COMPRESS_CACHE_SCALE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, indexer_compress_cache_scale, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } else if (TILING_KEY_IS(SINGLE_ROW_MXFP8_QUANT)){
         IndexerCompressEpilog::IndexerCompressEpilogSingleRowMxFp8<DTYPE_X, DTYPE_INDEXER_COMPRESS_CACHE, DTYPE_INDEXER_COMPRESS_CACHE_SCALE> op;
         op.Init(x, slot_mapping, indexer_compress_cache, indexer_compress_cache_scale, userWs, &tilingData, &pipe);
         op.Process();
-        return;
     } 
     AscendC::SetCtrlSpr<FLOAT_OVERFLOW_MODE_CTRL, FLOAT_OVERFLOW_MODE_CTRL>(oriOverflowMode);
 }

@@ -29,7 +29,8 @@ class CompressAttentionManager(FullAttentionManager):
     def __init__(self, kv_cache_spec: CompressAttentionSpec,
                  block_pool: BlockPool, **kwargs) -> None:
         super().__init__(kv_cache_spec, block_pool, **kwargs)
-        self.compress_ratio = kv_cache_spec.compress_ratio
+        self.compress_ratio = max(kv_cache_spec.compress_ratio, 1)
+        self.original_block_size = kv_cache_spec.block_size * self.compress_ratio
         self._null_block = block_pool.null_block
 
     def get_num_blocks_to_allocate(
@@ -121,8 +122,7 @@ class CompressAttentionManager(FullAttentionManager):
                 cdiv(num_total_computed_tokens, self.block_size) - len(req_blocks)
             )
             req_blocks.extend(allocated_blocks)
-            if type(self.kv_cache_spec) is FullAttentionSpec:
-                self.new_block_ids.extend(b.block_id for b in allocated_blocks)
+            self.new_block_ids.extend(b.block_id for b in allocated_blocks)
 
 
     def allocate_new_blocks(self, request_id: str,
@@ -152,6 +152,7 @@ class CompressAttentionManager(FullAttentionManager):
             new_blocks = self.block_pool.get_new_blocks(
                 num_new_blocks)
             req_blocks.extend(new_blocks)
+            self.new_block_ids.extend(b.block_id for b in new_blocks)
             return new_blocks
 
     def cache_blocks(self, request: Request, num_tokens: int) -> None:
@@ -163,9 +164,22 @@ class CompressAttentionManager(FullAttentionManager):
             num_tokens: The total number of tokens that need to be cached
                 (including tokens that are already cached).
         """
-        num_tokens //= self.compress_ratio
+        num_cached_blocks = self.num_cached_block.get(request.request_id, 0)
+        num_full_blocks = num_tokens // self.original_block_size
 
-        return super().cache_blocks(request, num_tokens)
+        if num_cached_blocks >= num_full_blocks:
+            return
+
+        self.block_pool.cache_full_blocks(
+            request=request,
+            blocks=self.req_to_blocks[request.request_id],
+            num_cached_blocks=num_cached_blocks,
+            num_full_blocks=num_full_blocks,
+            block_size=self.original_block_size,
+            kv_cache_group_id=self.kv_cache_group_id,
+        )
+
+        self.num_cached_block[request.request_id] = num_full_blocks
 
     @classmethod
     def find_longest_cache_hit(
@@ -188,10 +202,13 @@ class CompressAttentionManager(FullAttentionManager):
         computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
             [] for _ in range(len(kv_cache_group_ids))
         )
+        compress_ratio = max(getattr(kv_cache_spec, "compress_ratio", 1), 1)
         block_size = kv_cache_spec.block_size
+        original_block_size = block_size * compress_ratio
         if dcp_world_size * pcp_world_size > 1:
             block_size *= dcp_world_size * pcp_world_size
-        max_num_blocks = max_length // block_size
+            original_block_size *= dcp_world_size * pcp_world_size
+        max_num_blocks = max_length // original_block_size
         for block_hash in itertools.islice(block_hashes, max_num_blocks):
             # block_hashes is a chain of block hashes. If a block hash is not
             # in the cached_block_hash_to_id, the following block hashes are
@@ -208,11 +225,9 @@ class CompressAttentionManager(FullAttentionManager):
             for computed in computed_blocks:
                 computed.pop()
 
-        # NOTE: Div the compress ratio when finding the longest cache hit token length.
-        alignment_tokens = cdiv(alignment_tokens, kv_cache_spec.compress_ratio)
         while (
-            block_size != alignment_tokens  # Faster for common case.
-            and len(computed_blocks[0]) * block_size % alignment_tokens != 0
+            original_block_size != alignment_tokens  # Faster for common case.
+            and len(computed_blocks[0]) * original_block_size % alignment_tokens != 0
         ):
             for computed in computed_blocks:
                 computed.pop()
@@ -235,6 +250,10 @@ def get_manager_for_kv_cache_spec(kv_cache_spec: KVCacheSpec,
     })
     # TODO(qcs): remove the unused classes
     spec_manager_map[MLAAttentionSpec] = CompressAttentionManager
-    manager_class = spec_manager_map[type(kv_cache_spec)]
+    manager_class = (
+        CompressAttentionManager
+        if isinstance(kv_cache_spec, MLAAttentionSpec)
+        else spec_manager_map[type(kv_cache_spec)]
+    )
     manager = manager_class(kv_cache_spec, **kwargs)
     return manager

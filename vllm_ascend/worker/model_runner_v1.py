@@ -179,6 +179,7 @@ PerLayerAttnMetadata: TypeAlias = list[AttnMetadataDict] | AttnMetadataDict
 
 
 SEQ_LEN_WITH_MAX_PA_WORKSPACE = 6144
+TOP_K_ONE_RESCORE_LOGIT_GAP = 0.25
 
 
 @dataclass
@@ -468,6 +469,210 @@ class NPUModelRunner(GPUModelRunner):
 
     def _sync_device(self) -> None:
         torch.npu.synchronize()
+
+    def _rescore_top_k_one_ties(
+        self,
+        logits: torch.Tensor,
+        hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
+        sampling_metadata = self.input_batch.sampling_metadata
+        top_k = sampling_metadata.top_k
+        if top_k is None or lmhead_tp_enable():
+            return logits
+        if logits.shape[-1] < 2:
+            return logits
+
+        lm_head = getattr(self.model, "lm_head", None)
+        if lm_head is None or not hasattr(lm_head, "weight"):
+            return logits
+
+        logits = logits.to(torch.float32)
+        top_vals, top_ids = torch.topk(logits, k=2, dim=-1)
+        top_k = top_k[:logits.shape[0]]
+        top2_gap = top_vals[:, 0] - top_vals[:, 1]
+        tie_rows = (top_k == 1) & (top2_gap <= TOP_K_ONE_RESCORE_LOGIT_GAP)
+        if not tie_rows.any():
+            return logits
+
+        tie_indices = torch.nonzero(tie_rows, as_tuple=False).flatten()
+        tie_hidden_states = hidden_states[tie_indices]
+        tie_top_ids = top_ids[tie_indices]
+
+        if (hasattr(lm_head, "weight_scale")
+                and lm_head.weight_scale.dim() == 3):
+            from vllm_ascend.quantization.methods.w8a8_mxfp8 import (
+                rescore_mxfp8_lm_head_candidates,
+            )
+            candidate_scores = rescore_mxfp8_lm_head_candidates(
+                lm_head,
+                tie_hidden_states,
+                tie_top_ids,
+            )
+        else:
+            flat_candidate_ids = tie_top_ids.reshape(-1).to(torch.long)
+            candidate_weight = lm_head.weight[flat_candidate_ids].float()
+            scores = tie_hidden_states.float().matmul(candidate_weight.t())
+            num_candidates = tie_top_ids.shape[1]
+            row_offsets = torch.arange(
+                tie_top_ids.shape[0],
+                device=hidden_states.device,
+                dtype=torch.long,
+            ) * num_candidates
+            gather_ids = row_offsets[:, None] + torch.arange(
+                num_candidates,
+                device=hidden_states.device,
+                dtype=torch.long,
+            )
+            candidate_scores = scores.gather(1, gather_ids)
+        chosen_offsets = candidate_scores.argmax(dim=-1, keepdim=True)
+        chosen_ids = tie_top_ids.gather(1, chosen_offsets)
+
+        boosted_vals = top_vals[tie_indices, :1] + 1e-3
+        logits.scatter_(1, chosen_ids, boosted_vals)
+        return logits
+
+    def _init_kv_zero_meta(self) -> None:
+        zero_entries_by_group: list[list[tuple[torch.Tensor, int]]] = [
+            [] for _ in self.kv_cache_config.kv_cache_groups
+        ]
+        seen_tensors_by_group: list[
+            set[tuple[int, tuple[int, ...], tuple[int, ...], torch.dtype]]
+        ] = [set() for _ in self.kv_cache_config.kv_cache_groups]
+        kernel_block_sizes = getattr(self, "kernel_block_sizes", None)
+
+        for group in self._kv_cache_spec_attn_group_iterator():
+            kv_cache_spec = group.kv_cache_spec
+            if not isinstance(kv_cache_spec, AttentionSpec):
+                continue
+            kv_cache_group_id = group.kv_cache_group_id
+
+            kernel_block_size = kv_cache_spec.block_size
+            if (kernel_block_sizes is not None
+                    and kv_cache_group_id < len(kernel_block_sizes)):
+                group_kernel_block_sizes = kernel_block_sizes[kv_cache_group_id]
+                if isinstance(group_kernel_block_sizes, list):
+                    if group_kernel_block_sizes:
+                        kernel_block_size = group_kernel_block_sizes[0]
+                else:
+                    kernel_block_size = group_kernel_block_sizes
+            if not kernel_block_size:
+                kernel_block_size = kv_cache_spec.block_size
+            blocks_per_cache_block = max(
+                kv_cache_spec.block_size // kernel_block_size, 1)
+
+            for layer_name in group.layer_names:
+                if layer_name in self.runner_only_attn_layers:
+                    continue
+                kv_cache = self.compilation_config.static_forward_context[
+                    layer_name].kv_cache[0]
+                kv_cache_tensors = (
+                    kv_cache if isinstance(kv_cache, (list, tuple)) else
+                    (kv_cache,))
+                for tensor in kv_cache_tensors:
+                    if not isinstance(tensor, torch.Tensor) or tensor.ndim == 0:
+                        continue
+                    tensor_key = (
+                        tensor.data_ptr(),
+                        tuple(tensor.shape),
+                        tuple(tensor.stride()),
+                        tensor.dtype,
+                    )
+                    seen_tensors = seen_tensors_by_group[kv_cache_group_id]
+                    if tensor_key in seen_tensors:
+                        continue
+                    seen_tensors.add(tensor_key)
+                    zero_entries_by_group[kv_cache_group_id].append(
+                        (tensor, blocks_per_cache_block))
+
+        self._ascend_kv_zero_entries_by_group = zero_entries_by_group
+        self._ascend_kv_zero_entries = [
+            entry for entries in zero_entries_by_group for entry in entries
+        ]
+        logger.info(
+            "Prepared Ascend KV cache zeroing metadata: groups=%d tensors_by_group=%s",
+            len(zero_entries_by_group),
+            [len(entries) for entries in zero_entries_by_group],
+        )
+
+    def _zero_entries_for_block_ids(
+        self,
+        zero_entries: list[tuple[torch.Tensor, int]],
+        block_ids: list[int],
+        kv_cache_group_id: int | None = None,
+    ) -> None:
+        if not block_ids or not zero_entries:
+            return
+
+        block_ids_tensor = torch.tensor(
+            block_ids,
+            dtype=torch.long,
+            device=self.device,
+        )
+        for tensor, blocks_per_cache_block in zero_entries:
+            if tensor.shape[0] == 0:
+                continue
+            if blocks_per_cache_block > 1:
+                offsets = torch.arange(
+                    blocks_per_cache_block,
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                indices = (
+                    block_ids_tensor[:, None] * blocks_per_cache_block +
+                    offsets).flatten()
+            else:
+                indices = block_ids_tensor
+            valid_indices = indices[indices < tensor.shape[0]]
+            if valid_indices.numel() == 0:
+                continue
+            if tensor.dtype == torch.float8_e4m3fn:
+                zero_tensor = tensor.view(torch.uint8)
+                assert zero_tensor.shape[0] == tensor.shape[0], (
+                    "The FP8 KV cache block dimension must be preserved when "
+                    "reinterpreting it as uint8 for zeroing.")
+                zero_tensor[valid_indices] = 0
+            else:
+                tensor.index_fill_(0, valid_indices, 0)
+
+    def _zero_block_ids(self, block_ids: list[int] | list[list[int]]) -> None:
+        if not block_ids:
+            return
+
+        if isinstance(block_ids[0], (list, tuple)):
+            zero_entries_by_group = getattr(
+                self, "_ascend_kv_zero_entries_by_group", None)
+            if not zero_entries_by_group:
+                return
+            zero_call_count = getattr(self, "_ascend_kv_zero_call_count", 0) + 1
+            self._ascend_kv_zero_call_count = zero_call_count
+            if zero_call_count <= 3 or zero_call_count % 512 == 0:
+                logger.info(
+                    "Zeroing Ascend KV cache blocks: call=%d ids_by_group=%s",
+                    zero_call_count,
+                    [len(group_block_ids) for group_block_ids in block_ids],
+                )
+            for kv_cache_group_id, group_block_ids in enumerate(block_ids):
+                if kv_cache_group_id >= len(zero_entries_by_group):
+                    continue
+                self._zero_entries_for_block_ids(
+                    zero_entries_by_group[kv_cache_group_id],
+                    list(group_block_ids),
+                    kv_cache_group_id,
+                )
+            return
+
+        zero_entries = getattr(self, "_ascend_kv_zero_entries", None)
+        if not zero_entries:
+            return
+        zero_call_count = getattr(self, "_ascend_kv_zero_call_count", 0) + 1
+        self._ascend_kv_zero_call_count = zero_call_count
+        if zero_call_count <= 3 or zero_call_count % 512 == 0:
+            logger.info(
+                "Zeroing Ascend KV cache blocks: call=%d ids=%d",
+                zero_call_count,
+                len(block_ids),
+            )
+        self._zero_entries_for_block_ids(zero_entries, block_ids, None)
 
     def _set_up_drafter(self):
         # Set up speculative decoding.
@@ -1461,6 +1666,12 @@ class NPUModelRunner(GPUModelRunner):
                 )
                 assert broadcasted is not None
                 logits = broadcasted["logits"]
+
+            if logits is not None:
+                logits = self._rescore_top_k_one_ties(
+                    logits,
+                    sample_hidden_states,
+                )
 
             # Apply structured output bitmasks if present
             self.execute_model_state = ExecuteModelState(
@@ -3026,14 +3237,28 @@ class NPUModelRunner(GPUModelRunner):
                                                 current_kv_cache_spec.num_kv_heads,
                                                 current_kv_cache_spec.head_size + current_kv_cache_spec.scale_dim * get_dtype_size(current_kv_cache_spec.scale_dtype)
                                                 )
-                        kv_cache_shape_list = [indexer_k_shape, indexer_scale_shape, indexer_full_shape]
-                        kv_cache_dtype_list = [current_kv_cache_spec.dtype, current_kv_cache_spec.scale_dtype, current_kv_cache_spec.dtype]
-
-                    kv_cache = self._adjust_kv_layout(kv_tensor,
-                                           kv_cache_shape_list,
-                                           kv_cache_dtype_list,
-                                           current_kv_cache_spec.page_size_bytes,
-                                           )
+                        kv_cache_shape_list = [
+                            indexer_k_shape, indexer_scale_shape,
+                            indexer_full_shape
+                        ]
+                        kv_cache_dtype_list = [
+                            current_kv_cache_spec.dtype,
+                            current_kv_cache_spec.scale_dtype,
+                            current_kv_cache_spec.dtype
+                        ]
+                        kv_cache = self._adjust_kv_layout(
+                            kv_tensor,
+                            kv_cache_shape_list,
+                            kv_cache_dtype_list,
+                            current_kv_cache_spec.page_size_bytes,
+                        )
+                    else:
+                        kv_cache = self._adjust_kv_layout(
+                            kv_tensor,
+                            kv_cache_shape_list,
+                            kv_cache_dtype_list,
+                            current_kv_cache_spec.page_size_bytes,
+                        )
 
                     kv_caches[layer_name] = kv_cache
                 # encounter OOM issue

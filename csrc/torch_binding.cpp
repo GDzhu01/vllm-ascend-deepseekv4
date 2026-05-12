@@ -2402,6 +2402,29 @@ void indexer_compress_epilog_v2_npu(
     const at::Tensor& slot_mapping,
     int64_t layout=2)
 {
+    TORCH_CHECK(indexer_compress_cache.dtype() == at::kByte,
+        "indexer_compress_cache must be UINT8, but got ",
+        indexer_compress_cache.dtype());
+    TORCH_CHECK(indexer_compress_cache.dim() == 4,
+        "indexer_compress_cache must be a 4D tensor, but got dim ",
+        indexer_compress_cache.dim());
+    TORCH_CHECK(indexer_compress_cache.size(2) == 1,
+        "indexer_compress_cache dim 2 must be 1, but got ",
+        indexer_compress_cache.size(2));
+    TORCH_CHECK(x.dim() >= 1,
+        "x must have at least one dimension, but got dim ", x.dim());
+    TORCH_CHECK(x.size(-1) > 0,
+        "x last dimension must be greater than 0, but got ", x.size(-1));
+    TORCH_CHECK(x.dtype() == at::kHalf || x.dtype() == at::kBFloat16,
+        "x must be FP16 or BF16, but got ", x.dtype());
+    TORCH_CHECK(slot_mapping.dtype() == at::kInt,
+        "slot_mapping must be INT32, but got ", slot_mapping.dtype());
+    TORCH_CHECK(slot_mapping.numel() == x.numel() / x.size(-1),
+        "slot_mapping element count must equal x rows, but got slot_mapping.numel()=",
+        slot_mapping.numel(), ", x rows=", x.numel() / x.size(-1));
+    TORCH_CHECK(layout == 2,
+        "indexer_compress_epilog_v2 only supports layout=2, but got ", layout);
+
     auto indexerCompressCacheStride = indexer_compress_cache.stride(0);
     EXEC_NPU_CMD(aclnnIndexerCompressEpilogV2, indexer_compress_cache, x, slot_mapping, layout, indexerCompressCacheStride);
 }

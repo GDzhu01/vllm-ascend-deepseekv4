@@ -178,13 +178,15 @@ __aicore__ inline void SCFABlockVec<TEMPLATE_ARGS>::GetRealCmpS2Idx(int64_t &tok
     if (unlikely(topkKIdx >= constInfo.sparseBlockCount)) {
         token0Idx = -1;
     } else {
-        token0Idx = cmpSparseIndicesGm.GetValue(topkBS1Idx + topkKIdx) + runInfo.s2StartIdx;
+        token0Idx = cmpSparseIndicesGm.GetValue(topkBS1Idx + topkKIdx);
+        token0Idx = token0Idx < 0 ? -1 : token0Idx + runInfo.s2StartIdx;
     }
     topkKIdx += 1;
     if (unlikely(topkKIdx >= constInfo.sparseBlockCount)) {
         token1Idx = -1;
     } else {
-        token1Idx = cmpSparseIndicesGm.GetValue(topkBS1Idx + topkKIdx) + runInfo.s2StartIdx;
+        token1Idx = cmpSparseIndicesGm.GetValue(topkBS1Idx + topkKIdx);
+        token1Idx = token1Idx < 0 ? -1 : token1Idx + runInfo.s2StartIdx;
     }
 }
 
@@ -247,8 +249,10 @@ __aicore__ inline uint32_t SCFABlockVec<TEMPLATE_ARGS>::CopyInKvSparse(LocalTens
     int64_t keySrcStride = (keyOffset0 > keyOffset1 ? (keyOffset0 - keyOffset1) :
         (keyOffset1 - keyOffset0)) - combineBytes;
     if (unlikely(keySrcStride >= INT32_MAX || keySrcStride < 0) ||
+        (keyOffset0 >= 0 && keyOffset1 >= 0 && keyOffset1 < keyOffset0) ||
         constInfo.sparseBlockSize > 1) {
-        // stride溢出、stride为负数、s2超长等异常场景，还原成2条搬运指令
+        // Stride overflow, non-contiguous order, or sparse block expansion falls
+        // back to two copies so the sparse topk order is preserved.
         CopyInSingleKv(kvInUb, startRow, keyOffset0);
         CopyInSingleKv(kvInUb, startRow + 1, keyOffset1);
     } else {
@@ -310,7 +314,7 @@ __simd_vf__ void CastScaleImpl(__ubuf__ float* ubDstAddr, __ubuf__ int8_t* ubSrc
         MicroAPI::Cast<float, bfloat16_t, castTraitFp8_1>(vScalefp32Res0, vScalebf16Res0, fp32MaskAll);
 
         MicroAPI::StoreAlign<float, MicroAPI::PostLiteral::POST_MODE_UPDATE>(
-            ubDstAddrTmp, vScalefp32Res0, 64, bf16TypeMaskAll);
+            ubDstAddrTmp, vScalefp32Res0, 64, fp32MaskAll);
     }
 }
 

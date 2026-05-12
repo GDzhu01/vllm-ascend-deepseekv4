@@ -59,6 +59,20 @@ class AscendW8A8MXFP8DSDynamicLinearMethod(AscendW8A8MXFP8DynamicLinearMethod):
         return params_dict
 
     def process_weights_after_loading(self, layer):
+        if layer.prefix.endswith('wo_a'):
+            weight = layer.weight.data
+            weight_scale = layer.weight_scale.data
+            weight = (weight.unflatten(0, (-1, self.block_size))
+                      .unflatten(-1, (-1, self.block_size))
+                      .float())
+            weight = weight * weight_scale[:, None, :, None].float()
+            layer.weight.data = (weight.flatten(2, 3).flatten(0, 1)
+                                 .view(self.n_local_groups,
+                                       self.o_lora_rank, -1)
+                                 .contiguous()
+                                 .bfloat16())
+            return
+
         layer.weight_scale.data = layer.weight_scale.data.view(torch.int32) >> 23 & 0xFF
         layer.weight_scale.data = layer.weight_scale.data.to(torch.uint8)
         layer.weight_scale.data = layer.weight_scale.data.repeat_interleave(4, dim=1).repeat_interleave(128, dim=0)
@@ -66,10 +80,6 @@ class AscendW8A8MXFP8DSDynamicLinearMethod(AscendW8A8MXFP8DynamicLinearMethod):
         layer.weight_scale.data = layer.weight_scale.data.reshape(n_dim, k_dim // 2, 2)
         layer.weight.data = layer.weight.data.transpose(0, 1)
         layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1)
-        
-        # if layer.prefix.endswith('wo_a'):
-        #     layer.weight.data=layer.weight.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1).transpose(1, 2).contiguous()
-        #     layer.weight_scale.data = layer.weight_scale.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1, 2).transpose(1, 2).contiguous()
 
 
 @register_scheme("FP8", "w4a8_moe")

@@ -359,6 +359,8 @@ __aicore__ inline BasicBlockInfo CompressorKernel<COMP>::SkipOneLoop(BatchInfo &
     if (currentGroupStart >= totalDataSize) {
         // 超出尾块
         basicBlockInfo.dealSeqCnt = 0;
+        basicBlockInfo.dealTcNum = 0;
+        basicBlockInfo.compressedTcNum = 0;
     } else {
         // 还在有效范围内，计算剩余量
         uint32_t remaining = totalDataSize - currentGroupStart;

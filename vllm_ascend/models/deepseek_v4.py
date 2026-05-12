@@ -194,9 +194,11 @@ class DeepseekV2MLP(nn.Module):
         quant_config: QuantizationConfig | None = None,
         reduce_results: bool = True,
         is_sequence_parallel=False,
+        swiglu_limit: float = 10.0,
         prefix: str = "",
     ) -> None:
         super().__init__()
+        self.swiglu_limit = swiglu_limit
 
         # If is_sequence_parallel, the input and output tensors are sharded
         # across the ranks within the tp_group. In this case the weights are
@@ -229,7 +231,7 @@ class DeepseekV2MLP(nn.Module):
             group_index=None,
             dst_type=torch.float8_e4m3fn,
             quant_mode=2,
-            clamp_value=10.0,
+            clamp_value=self.swiglu_limit,
         )
         x, _ = self.down_proj((hidden_states, swiglu_out_scale))
         return x
@@ -301,6 +303,7 @@ class DeepseekV4MoE(nn.Module):
                 quant_config=quant_config,
                 is_sequence_parallel=self.is_sequence_parallel,
                 reduce_results=False,
+                swiglu_limit=config.swiglu_limit,
                 prefix=f"{prefix}.shared_experts",
             )
 

@@ -63,6 +63,19 @@ else:
 _CUSTOM_OP_REGISTERED = False
 
 
+def _use_decode_only_aclgraph_for_deepseek_v4(
+    model_config: ModelConfig | None,
+) -> bool:
+    if model_config is None or get_ascend_device_type() != AscendDeviceType.A5:
+        return False
+    hf_config = getattr(model_config, "hf_config", None)
+    if hf_config is None:
+        hf_config = getattr(model_config, "hf_text_config", None)
+    architectures = getattr(hf_config, "architectures", ()) or ()
+    model_type = getattr(hf_config, "model_type", "")
+    return model_type == "deepseek_v4" or "DeepseekV4ForCausalLM" in architectures
+
+
 def config_deprecated_logging():
     """Configure deprecated logging format, when used deprecated codes
     in vllm-ascend.
@@ -338,7 +351,15 @@ class NPUPlatform(Platform):
 
         # TODO: Full graph is fully supported later, and the default value will be set to full graph.
         if compilation_config.cudagraph_mode == CUDAGraphMode.FULL_AND_PIECEWISE:
-            compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+            if _use_decode_only_aclgraph_for_deepseek_v4(model_config):
+                logger.info(
+                    "Using FULL_DECODE_ONLY ACLGraph for DeepSeek-V4 on A5 "
+                    "because DSA mixed prefill-decode piecewise graph is not "
+                    "stable for this model."
+                )
+                compilation_config.cudagraph_mode = CUDAGraphMode.FULL_DECODE_ONLY
+            else:
+                compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
 
         # encoder-decoder models currently only support piecewise mode
         if model_config and model_config.is_encoder_decoder is True:

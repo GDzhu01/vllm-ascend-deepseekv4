@@ -9,8 +9,12 @@ from typing_extensions import Self
 from vllm.utils.math_utils import round_up
 from vllm.utils.torch_utils import get_dtype_size
 from vllm.v1.kv_cache_interface import (
+    KVCacheConfig,
+    KVCacheSpec,
     SlidingWindowMLASpec,
+    SlidingWindowSpec,
     MLAAttentionSpec,
+    UniformTypeKVCacheSpecs,
 )
 
 from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
@@ -129,8 +133,29 @@ class AscendMLAAttentionSpec(MLAAttentionSpec):
             "All attention layers in the same KV cache group must be MLAAttentionSpec."
         )
         cache_dtype_str_set = set(spec.cache_dtype_str for spec in specs)
-        assert len(cache_dtype_str_set) == 1, (
-            "All attention layers in the same KV cache group must use the same quantization method."
+        compress_ratio_set = set(spec.compress_ratio for spec in specs)
+        model_version_set = set(spec.model_version for spec in specs)
+        scale_dim_set = set(spec.scale_dim for spec in specs)
+        scale_dtype_set = set(spec.scale_dtype for spec in specs)
+        sparse_head_dim_set = set(spec.sparse_head_dim for spec in specs)
+        cache_sparse_c8_set = set(spec.cache_sparse_c8 for spec in specs)
+        c8_k_cache_dtype_set = set(spec.c8_k_cache_dtype for spec in specs)
+        c8_k_scale_cache_dtype_set = set(
+            spec.c8_k_scale_cache_dtype for spec in specs)
+        assert (
+            len(cache_dtype_str_set) == 1
+            and len(compress_ratio_set) == 1
+            and len(model_version_set) == 1
+            and len(scale_dim_set) == 1
+            and len(scale_dtype_set) == 1
+            and len(sparse_head_dim_set) == 1
+            and len(cache_sparse_c8_set) == 1
+            and len(c8_k_cache_dtype_set) == 1
+            and len(c8_k_scale_cache_dtype_set) == 1
+        ), (
+            "All attention layers in the same KV cache group must use the same "
+            "quantization method, compress ratio, model version and sparse "
+            "cache layout."
         )
         return cls(
             block_size=specs[0].block_size,
@@ -138,8 +163,15 @@ class AscendMLAAttentionSpec(MLAAttentionSpec):
             head_size=specs[0].head_size,
             sparse_head_dim=specs[0].sparse_head_dim,
             dtype=specs[0].dtype,
+            page_size_padded=specs[0].page_size_padded,
             cache_dtype_str=cache_dtype_str_set.pop(),
-            cache_sparse_c8=specs[0].cache_sparse_c8,
+            compress_ratio=compress_ratio_set.pop(),
+            model_version=model_version_set.pop(),
+            scale_dim=scale_dim_set.pop(),
+            scale_dtype=scale_dtype_set.pop(),
+            cache_sparse_c8=cache_sparse_c8_set.pop(),
+            c8_k_cache_dtype=c8_k_cache_dtype_set.pop(),
+            c8_k_scale_cache_dtype=c8_k_scale_cache_dtype_set.pop(),
         )
 
 
@@ -163,14 +195,16 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
     assert spec.num_kv_heads == 1, "MLAAttentionSpec only supports 1 head."
     # TODO(yifan): move this head size to bytes mapping to a utils file.
     if spec.model_version == "svf":
-        # we should have a scale dim here.
-        # we should have dtype of scale and k of indexer here.
-        # NOTE(zyj): patch modifies here
-        # TODO(cmq): adapt this for A5
-        HEAD_DIM_TO_BLOCK_BYTES: dict[int, int] = {
-            128: 260,   # SVF: 128*2B NoPE, 4B for fp32 scale = 260B
-            512: 1024,  # SVF: 512*2B NoPE + RoPE = 1024B
-        }
+        if get_ascend_device_type() == AscendDeviceType.A5:
+            HEAD_DIM_TO_BLOCK_BYTES: dict[int, int] = {
+                128: 128,  # indexer value: 128B fp8, scale handled by scale_dim
+                512: 640,  # attention KV: 448B fp8 NoPE + 128B bf16 RoPE + scale/pad
+            }
+        else:
+            HEAD_DIM_TO_BLOCK_BYTES = {
+                128: 260,   # SVF: 128*2B NoPE, 4B for fp32 scale = 260B
+                512: 1024,  # SVF: 512*2B NoPE + RoPE = 1024B
+            }
 
         if spec.head_size in HEAD_DIM_TO_BLOCK_BYTES:
             actual_head_bytes = HEAD_DIM_TO_BLOCK_BYTES[spec.head_size]
@@ -202,3 +236,116 @@ def _init_mla_cache_fields(spec: MLAAttentionSpec | SlidingWindowMLASpec):
 
 vllm.v1.kv_cache_interface.MLAAttentionSpec = AscendMLAAttentionSpec
 vllm.v1.kv_cache_interface._init_mla_cache_fields = _init_mla_cache_fields
+
+
+def _iter_kv_cache_specs(spec: KVCacheSpec):
+    if isinstance(spec, UniformTypeKVCacheSpecs):
+        yield from spec.kv_cache_specs.values()
+    else:
+        yield spec
+
+
+def _needs_kv_cache_zeroing(self: KVCacheConfig) -> bool:
+    for group in self.kv_cache_groups:
+        for spec in _iter_kv_cache_specs(group.kv_cache_spec):
+            if spec.__class__.__name__.endswith("MambaSpec"):
+                return True
+    return False
+
+
+KVCacheConfig.needs_kv_cache_zeroing = property(_needs_kv_cache_zeroing)
+
+
+def _patch_grouped_new_block_ids() -> None:
+    from vllm.v1.core.kv_cache_manager import KVCacheManager
+
+    def take_new_block_ids(self: KVCacheManager) -> list[list[int]]:
+        ids_by_group = [
+            mgr.take_new_block_ids()
+            for mgr in self.coordinator.single_type_managers
+        ]
+        return ids_by_group if any(ids_by_group) else []
+
+    KVCacheManager.take_new_block_ids = take_new_block_ids
+
+
+_patch_grouped_new_block_ids()
+
+
+def _patch_attention_new_block_tracking() -> None:
+    from vllm.utils.math_utils import cdiv
+    from vllm.v1.core.single_type_kv_cache_manager import (
+        FullAttentionSpec,
+        SingleTypeKVCacheManager,
+        spec_manager_map,
+    )
+    from vllm_ascend.core.single_type_kv_cache_manager import (
+        CompressAttentionManager,
+    )
+
+    def should_track_blocks(manager: SingleTypeKVCacheManager) -> bool:
+        return isinstance(
+            manager.kv_cache_spec,
+            (AscendMLAAttentionSpec, SlidingWindowMLASpec, SlidingWindowSpec),
+        )
+
+    original_allocate_new_blocks = SingleTypeKVCacheManager.allocate_new_blocks
+    original_allocate_new_computed_blocks = (
+        SingleTypeKVCacheManager.allocate_new_computed_blocks
+    )
+
+    def allocate_new_blocks(self, request_id, num_tokens, num_tokens_main_model):
+        new_blocks = original_allocate_new_blocks(
+            self, request_id, num_tokens, num_tokens_main_model)
+        if should_track_blocks(self) and type(self.kv_cache_spec) is not FullAttentionSpec:
+            self.new_block_ids.extend(b.block_id for b in new_blocks)
+        return new_blocks
+
+    def allocate_new_computed_blocks(
+        self,
+        request_id,
+        new_computed_blocks,
+        num_local_computed_tokens,
+        num_external_computed_tokens,
+    ) -> None:
+        num_external_blocks = 0
+        if (should_track_blocks(self)
+                and type(self.kv_cache_spec) is not FullAttentionSpec
+                and request_id not in self.num_cached_block
+                and num_external_computed_tokens > 0):
+            req_blocks = self.req_to_blocks[request_id]
+            num_total_computed_tokens = (
+                num_local_computed_tokens + num_external_computed_tokens)
+            num_skipped_tokens = self.get_num_skipped_tokens(
+                num_total_computed_tokens)
+            num_skipped_blocks = num_skipped_tokens // self.block_size
+            local_computed_blocks = new_computed_blocks[num_skipped_blocks:]
+            num_blocks_before_external = (
+                len(req_blocks) + num_skipped_blocks +
+                len(local_computed_blocks))
+            num_external_blocks = max(
+                cdiv(num_total_computed_tokens, self.block_size) -
+                num_blocks_before_external,
+                0,
+            )
+
+        original_allocate_new_computed_blocks(
+            self,
+            request_id,
+            new_computed_blocks,
+            num_local_computed_tokens,
+            num_external_computed_tokens,
+        )
+
+        if num_external_blocks:
+            self.new_block_ids.extend(
+                b.block_id
+                for b in self.req_to_blocks[request_id][-num_external_blocks:])
+
+    SingleTypeKVCacheManager.allocate_new_blocks = allocate_new_blocks
+    SingleTypeKVCacheManager.allocate_new_computed_blocks = (
+        allocate_new_computed_blocks)
+    spec_manager_map[AscendMLAAttentionSpec] = CompressAttentionManager
+
+
+_patch_attention_new_block_tracking()
