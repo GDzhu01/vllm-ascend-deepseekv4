@@ -381,7 +381,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                 AscendDSAMetadataBuilder.hadamard = torch.tensor(
                     hadamard(dim_padded, dtype=float),
                     dtype=torch.float,
-                    device=self.device).to(torch.bfloat16)
+                    device=self.device)
         self.start_pos_prefill = torch.zeros(scheduler_config.max_num_seqs,
                                              dtype=torch.int32,
                                              device=self.device)
@@ -1454,8 +1454,8 @@ class AscendDSAImpl(DSAAttentionImpl):
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
-    # TODO: cast to bfloat16 to speed up
     def rope_single(self, x, cos, sin, inverse=False):
+        dtype = x.dtype
         if inverse:
             sin = -sin
         tnd_layout = 1
@@ -1465,7 +1465,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             tnd_layout = 0
             _, num_tokens, num_heads, rotary_dim = x.shape
         x_rot = torch_npu.npu_rotary_mul(x.reshape(num_tokens, num_heads, 1,
-                                                   rotary_dim),
+                                                   rotary_dim).to(torch.float32),
                                          cos,
                                          sin,
                                          rotary_mode="interleave")
@@ -1473,7 +1473,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             x = x_rot.reshape(num_tokens, -1, rotary_dim)
         else:
             x = x_rot.reshape(1, num_tokens, -1, rotary_dim)
-        return x
+        return x.to(dtype)
 
     def forward(  # type: ignore[override]
         self,

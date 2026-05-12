@@ -171,7 +171,7 @@ def apply_rotary_emb(x: torch.Tensor,
         freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2)
+    x = torch.view_as_real(x * freqs_cis.to(x.device)).flatten(-2).to(y.dtype)
     y.copy_(x)
     return y
 
@@ -951,8 +951,8 @@ class DeepseekV4Model(nn.Module):
         shape, dtype = x.size(), x.dtype
         x = x.flatten(1).float()
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = torch.nn.functional.linear(x, hc_fn) * rsqrt
-        pre = torch.sigmoid(mixes * hc_scale + hc_base) + self.hc_eps
+        mixes = torch.nn.functional.linear(x, hc_fn.float()) * rsqrt
+        pre = torch.sigmoid(mixes * hc_scale.float() + hc_base.float()) + self.hc_eps
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1)
         return y.to(dtype)
 
