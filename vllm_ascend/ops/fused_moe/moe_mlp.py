@@ -250,7 +250,7 @@ def quant_apply_mlp(
             # TODO w4a8 scene: dynamic acquisition of dtype in the future
             _output_dtype = torch.bfloat16
 
-        if bias1 is not None and bias1[0].numel() > 0 and fusion and not dynamic_eplb and enable_custom_op():
+        if bias1 is not None and bias1[0].numel() > 0 and not dynamic_eplb and enable_custom_op():
             hidden_states, swiglu_out_scale = torch.ops._C_ascend.grouped_matmul_swiglu_quant_v2(
                 x=hidden_states,
                 weight=w1,
