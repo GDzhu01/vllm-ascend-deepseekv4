@@ -66,6 +66,8 @@ class PrepareAndFinalize(ABC):
         enable_shared_expert_dp: bool = False,
         replace_allreduce: bool = False,
         quant_type: QuantType = QuantType.NONE,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
         """
         Prepare tensors before MoE computation. May involve:
@@ -347,6 +349,8 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
         enable_shared_expert_dp: bool = False,
         replace_allreduce: bool = False,
         quant_type=QuantType.NONE,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
         """
         Preparation steps:
@@ -356,13 +360,18 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             MoEPrepareOutput with global tensors.
         """
         if enable_sp() or enable_sp_by_pass():
-            return self._prepare_with_ep_group(hidden_states, router_logits, quant_type)
+            return self._prepare_with_ep_group(hidden_states, router_logits, quant_type, overlap_events, microbatch_role)
 
         return self._prepare_with_dp_group(hidden_states, router_logits, enable_shared_expert_dp, replace_allreduce)
 
     def _prepare_with_ep_group(
-        self, hidden_states: torch.Tensor, router_logits: torch.Tensor, quant_type=QuantType.NONE
+        self, hidden_states: torch.Tensor, router_logits: torch.Tensor, quant_type=QuantType.NONE,
+        overlap_events=None, microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
+        if overlap_events is not None and microbatch_role == "batch1":
+            if overlap_events.b0_quant_done is not None:
+                torch.npu.current_stream().wait_event(overlap_events.b0_quant_done)
+
         pertoken_scale = None
         if quant_type == QuantType.W8A8:
             hidden_states, pertoken_scale = torch_npu.npu_dynamic_quant(hidden_states)
@@ -370,6 +379,12 @@ class PrepareAndFinalizeWithAllGather(PrepareAndFinalize):
             # TODO(linfeng): MXFP8 with AllGather+EP currently does not pre-quantize
             # per-token activations in prepare. Keep quantization in the MoE MLP path.
             pass
+
+        if overlap_events is not None:
+            if microbatch_role == "batch0":
+                overlap_events.b0_quant_done = torch.npu.current_stream().record_event()
+            elif microbatch_role == "batch1":
+                overlap_events.b1_quant_done = torch.npu.current_stream().record_event()
 
         if self.multistream_overlap_gate:
             assert PrepareAndFinalize.quant_stream is not None
