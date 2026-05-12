@@ -97,6 +97,8 @@ class MoECommMethod(ABC):
         enable_shared_expert_dp: bool = False,
         replace_allreduce: bool = False,
         quant_type: QuantType = QuantType.NONE,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> MoEPrepareOutput:
         return self.prepare_finalize.prepare(
             hidden_states,
@@ -104,6 +106,8 @@ class MoECommMethod(ABC):
             enable_shared_expert_dp,
             replace_allreduce,
             quant_type,
+            overlap_events,
+            microbatch_role,
         )
 
     def finalize(
@@ -111,7 +115,18 @@ class MoECommMethod(ABC):
         hidden_states: torch.Tensor,
         reduce_results: bool,
         padded_hidden_states_shape: torch.Size | None = None,
+        overlap_events=None,
+        microbatch_role: str | None = None,
     ) -> torch.Tensor:
+        if overlap_events is not None:
+            if microbatch_role == "batch0":
+                overlap_events.b0_unpermute_done = torch.npu.current_stream().record_event()
+            elif microbatch_role == "batch1":
+                overlap_events.b1_unpermute_done = torch.npu.current_stream().record_event()
+            # Skip ReduceScatter here. It is deferred to
+            # _forward_with_microbatch_overlap so RS-b0 does not block AG-b1.
+            return hidden_states
+
         hidden_states = self.prepare_finalize.finalize(hidden_states, reduce_results, padded_hidden_states_shape)
         return hidden_states
 
@@ -126,6 +141,10 @@ class MoECommMethod(ABC):
         assert moe_comm_method is not None, "Missing communication context"
 
         before_dispatch_evt = torch.npu.current_stream().record_event()
+
+        overlap_events = getattr(self, '_overlap_events', None)
+        microbatch_role = getattr(self, '_microbatch_role', None)
+
         routed_topk_ids = fused_experts_input.topk_ids
         if fused_experts_input.routing.log2phy is not None:
             routed_topk_ids = fused_experts_input.routing.log2phy[routed_topk_ids]

@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from vllm.distributed import get_tp_group
 from vllm.forward_context import get_forward_context
 
+from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.distributed.utils import split_tensor_along_first_dim
 
@@ -252,6 +253,14 @@ def _select_experts_with_fusion_ops(
                     input_ids, num_partitions=tp_size)
                 input_ids = splitted_input[tp_rank].contiguous()
             input_ids = torch.where(input_ids == -1, 0, input_ids)
+
+            if get_ascend_config().prefill_micro_batch_moe_overlap:
+                # In microbatch mode, input_ids can be longer than router_logits
+                # because hidden_states was split before prepare/all-gather.
+                # Slice input_ids to the current token count.
+                num_tokens = router_logits.shape[0]
+                if input_ids.numel() > num_tokens:
+                    input_ids = input_ids[:num_tokens]
         else:
             input_ids = None
             tid2eid_ones = None
