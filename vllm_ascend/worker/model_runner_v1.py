@@ -748,6 +748,9 @@ class NPUModelRunner(GPUModelRunner):
 
         self.query_start_loc.np[0] = 0
         self.query_start_loc.np[1 : num_reqs + 1] = cu_num_tokens
+        # Fill unused with -1. Needed for reshape_and_cache in attention_cp
+        # IMPORTANT: fill before copy_to_gpu to ensure GPU receives correct values
+        self.query_start_loc.cpu[num_reqs + 1 :].fill_(-1)
         self.query_start_loc.copy_to_gpu()
 
         # Now, query_start_loc is padded.
@@ -763,9 +766,6 @@ class NPUModelRunner(GPUModelRunner):
         self.seq_lens.np[:num_reqs] = self.input_batch.num_computed_tokens_cpu[:num_reqs] + num_scheduled_tokens
         self.seq_lens.cpu[num_reqs:].fill_(0)
         self.seq_lens.copy_to_gpu()
-
-        # Fill unused with -1. Needed for reshape_and_cache in attention_cp
-        self.query_start_loc.cpu[num_reqs + 1 :].fill_(-1)
 
         # Copy the tensors to the NPU.
         self._prepare_input_ids(scheduler_output, total_num_scheduled_tokens, cu_num_tokens)
@@ -1841,7 +1841,7 @@ class NPUModelRunner(GPUModelRunner):
         forward_context = get_forward_context()
         assert forward_context is not None
         if (
-            forward_context.cudagraph_runtime_mode == CUDAGraphMode.FULL
+            forward_context.cudagraph_runtime_mode in (CUDAGraphMode.FULL, CUDAGraphMode.FULL_DECODE_ONLY)
             and not forward_context.capturing
             and not self.use_sparse
         ):
