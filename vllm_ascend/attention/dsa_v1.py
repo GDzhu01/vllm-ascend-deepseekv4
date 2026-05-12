@@ -358,8 +358,6 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         self.decode_qli_metadata = torch.zeros(1024,
                                                dtype=torch.int32,
                                                device=self.device)
-        self.cu_seqlens_ori_kv = torch.tensor([], device=self.device)
-        self.cu_seqlens_cmp_kv = torch.tensor([], device=self.device)
         self.seqused_q = torch.tensor([], device=self.device)
         # Note(qcs): we use two dimension slot_mapping for kvcache with shape [block_nums, block_size, head_num, head_dim]
         self.slot_mapping = torch.zeros((vllm_config.scheduler_config.max_num_batched_tokens, 2), dtype=torch.int32, device=self.device)
@@ -996,6 +994,15 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
         index_topk = self.model_config.hf_config.index_topk
 
+        if self.decode_ratio_to_sas_metadata.get("cu_seqlens_ori_kv", None) is None:
+            cu_seqlens_ori_kv = torch.cat([
+                torch.tensor([0], device=self.device, dtype=torch.int32),
+                torch.cumsum(self.seq_lens[:self.num_decodes], dim=0).to(torch.int32)
+            ])
+            self.decode_ratio_to_sas_metadata["cu_seqlens_ori_kv"] = cu_seqlens_ori_kv
+        else:
+            cu_seqlens_ori_kv = self.decode_ratio_to_sas_metadata["cu_seqlens_ori_kv"]
+
         assert self.decode_sas_metadata is not None
         if get_ascend_device_type() in {AscendDeviceType.A5}:
             if self.compressor_ratio <= 1:
@@ -1006,8 +1013,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1032,8 +1039,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1060,8 +1067,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1086,8 +1093,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1111,8 +1118,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1138,8 +1145,8 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
                         num_heads_kv=1,
                         head_dim=self.model_config.get_head_size(),
                         cu_seqlens_q=query_start_loc,
-                        cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
-                        cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+                        cu_seqlens_ori_kv=cu_seqlens_ori_kv,
+                        cu_seqlens_cmp_kv=None,
                         seqused_q=self.seqused_q,
                         seqused_kv=self.seq_lens[:self.num_decodes],
                         max_seqlen_q=max_seqlen_q,
@@ -1413,16 +1420,14 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        
         eye = torch.eye(
-            4096,
-            dtype=torch.bfloat16,
-            device=self.wo_a.weight.device,
-        )
+                    4096,
+                    dtype=torch.bfloat16,
+                    device=self.wo_a.weight.device,
+                )
         wo_a_weight = self.wo_a(eye)
         wo_a_weight=wo_a_weight.T.view(self.n_local_groups,self.o_lora_rank,-1).transpose(2,1).contiguous()
         o = torch_npu.npu_transpose_batchmatmul(o, wo_a_weight, bias=None, scale=None, perm_x1=(1,0,2), perm_x2=(0,1,2), perm_y=(1,0,2), batch_split_factor=1)
-
         # o, swiglu_out_scale = torch_npu.npu_dynamic_mx_quant(o, dst_type=torch.float8_e4m3fn)
         # o = torch_npu.npu_transpose_quant_batchmatmul(o, self.wo_a.weight, dtype=torch.bfloat16, bias=None, group_sizes=(0, 0, 32), 
         #                                               x1_scale=swiglu_out_scale.view(torch.float8_e8m0fnu), x2_scale=self.wo_a.weight_scale.view(torch.float8_e8m0fnu), 
