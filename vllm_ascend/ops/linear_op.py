@@ -57,6 +57,7 @@ from vllm.distributed import (
     tensor_model_parallel_reduce_scatter,
 )
 from vllm.distributed.parallel_state import get_tp_group
+from vllm.config import get_current_vllm_config
 from vllm.model_executor.models.utils import extract_layer_index
 
 from vllm_ascend.ascend_config import get_ascend_config
@@ -75,12 +76,27 @@ from vllm_ascend.utils import (
     flashcomm2_enable,
     get_flashcomm2_reorgnized_batch_ids,
     get_weight_prefetch_method,
+    is_oproj_prefix,
     is_vl_model,
+    log_oproj_tp_debug,
     matmul_allreduce_enable,
     mlp_tp_enable,
     oproj_tp_enable,
     shared_expert_dp_enabled,
 )
+
+
+def _is_deepseek_v4_wo_a_prefix(prefix: str) -> bool:
+    return "wo_a" in prefix.split(".")
+
+
+def _assert_deepseek_v4_wo_a_oproj(prefix: str) -> None:
+    hf_config = get_current_vllm_config().model_config.hf_text_config
+    model_type = getattr(hf_config, "model_type", None)
+    assert model_type == "deepseek_v4", (
+        "wo_a oproj tensor parallel path is only supported for "
+        f"deepseek_v4, got model_type={model_type}, prefix={prefix}"
+    )
 
 
 class CustomLinearOp:
@@ -200,6 +216,21 @@ class MLPColumnParallelOp(CustomColumnParallelOp):
         return output, output_bias
 
 
+class DeepseekV4OProjColumnParallelOp(CustomColumnParallelOp):
+    @property
+    def comm_group(self):
+        return get_otp_group()
+
+    def apply_impl(
+        self,
+        input_: torch.Tensor,
+    ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
+        raise AssertionError(
+            "DeepSeek V4 wo_a with oproj_tensor_parallel_size is handled "
+            "inside AscendDSAImpl; direct wo_a.forward is not supported."
+        )
+
+
 class MLPRowParallelOp(CustomRowParallelOp):
     def __init__(self, layer):
         super().__init__(layer)
@@ -253,6 +284,14 @@ class OProjRowParallelOp(CustomRowParallelOp):
         # Only fuse bias add for rank 0 to avoid duplicate bias addition in TP>1
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
         assert self.quant_method is not None
+        log_oproj_tp_debug(
+            f"compute prefix={self.prefix} "
+            f"input_shape={tuple(input_.shape)} "
+            f"matmul_left_shape={tuple(input_parallel.shape)} "
+            f"matmul_right_shape={tuple(self.layer.weight.shape)} "
+            f"input_size_per_partition={chunk_size} "
+            f"otp_rank={self.tp_rank} otp_size={self.tp_size}"
+        )
         output_parallel = self.quant_method.apply(self.layer, input_parallel, bias=bias_)
 
         # otp-specific: Combine partial results across devices
@@ -626,9 +665,19 @@ class ShardedCPColumnParallelOp(CustomColumnParallelOp):
 
 def _get_column_parallel_op(
     prefix, layer
-) -> MLPColumnParallelOp | SequenceColumnParallelOp | ShardedCPColumnParallelOp | Flashcomm2OshardQKVParallelOp | None:
+) -> (
+    MLPColumnParallelOp
+    | DeepseekV4OProjColumnParallelOp
+    | SequenceColumnParallelOp
+    | ShardedCPColumnParallelOp
+    | Flashcomm2OshardQKVParallelOp
+    | None
+):
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
+    if _is_deepseek_v4_wo_a_prefix(prefix) and oproj_tp_enable():
+        _assert_deepseek_v4_wo_a_oproj(prefix)
+        return DeepseekV4OProjColumnParallelOp(layer)
     if "gate_up_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
         return MLPColumnParallelOp(layer)
     if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
@@ -670,7 +719,7 @@ def _get_row_parallel_op(
             return ShardedCPRowParallelOp(layer)
     if "down_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
         return MLPRowParallelOp(layer)
-    if "o_proj" in prefix and oproj_tp_enable():
+    if is_oproj_prefix(prefix) and oproj_tp_enable():
         return OProjRowParallelOp(layer)
     if matmul_allreduce_enable():
         return MatmulAllreduceRowParallelOp(layer)
@@ -703,6 +752,7 @@ def get_parallel_op(disable_tp, prefix, layer, direct):
         return None, 0, 1
     custom_op: (
         MLPColumnParallelOp
+        | DeepseekV4OProjColumnParallelOp
         | SequenceColumnParallelOp
         | MLPRowParallelOp
         | OProjRowParallelOp

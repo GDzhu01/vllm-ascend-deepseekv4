@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Optional, Tuple, Type, TypeVar
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torch_npu
 import vllm.envs as envs_vllm
@@ -24,12 +25,21 @@ from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
                                          split_decodes_and_prefills)
+from vllm_ascend.distributed.parallel_state import get_otp_group
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinearMethod
-from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream, extract_dsv4_layer_index, get_dsv4_compress_ratio, 
-                               get_ascend_device_type, npu_stream_switch,
-                               olora_tp_enable)
+from vllm_ascend.utils import (
+    AscendDeviceType,
+    attention_calculation_stream,
+    extract_dsv4_layer_index,
+    get_ascend_device_type,
+    get_dsv4_compress_ratio,
+    log_oproj_tp_debug,
+    npu_stream_switch,
+    olora_tp_enable,
+    oproj_tp_enable,
+)
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 
 if TYPE_CHECKING:
@@ -1160,6 +1170,143 @@ class AscendDSAImpl(DSAAttentionImpl):
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
+    def _assert_deepseek_v4_oproj_tp(self, layer_name: str) -> None:
+        hf_config = self.vllm_config.model_config.hf_text_config
+        model_type = getattr(hf_config, "model_type", None)
+        assert model_type == "deepseek_v4", (
+            "oproj tensor parallel DSA path is only supported for "
+            f"deepseek_v4, got model_type={model_type}, "
+            f"layer_name={layer_name}"
+        )
+
+    def _forward_deepseek_v4_oproj_tp(
+        self,
+        o_proj_input: torch.Tensor,
+        output: torch.Tensor,
+        num_tokens: int,
+        layer_name: str,
+        wo_a_prefix: str,
+    ) -> None:
+        self._assert_deepseek_v4_oproj_tp(layer_name)
+        otp_group = get_otp_group()
+        otp_size = otp_group.world_size
+        otp_rank = otp_group.rank_in_group
+
+        local_batch_size = o_proj_input.size(0)
+        total_groups = o_proj_input.size(1)
+        input_size_per_group = o_proj_input.size(2)
+        assert local_batch_size == num_tokens, (
+            f"o_proj local_batch_size={local_batch_size} must match "
+            f"num_tokens={num_tokens}, layer_name={layer_name}"
+        )
+        assert self.wo_a.weight.dim() == 3, (
+            "DeepSeek V4 wo_a weight must be reshaped to "
+            f"[groups_per_rank, input, rank], got "
+            f"{tuple(self.wo_a.weight.shape)}"
+        )
+
+        groups_per_rank = self.wo_a.weight.shape[0]
+        assert groups_per_rank > 0, (
+            f"wo_a groups_per_rank must be positive, prefix={wo_a_prefix}"
+        )
+        assert total_groups == groups_per_rank * otp_size, (
+            f"wo_a input groups={total_groups} must equal "
+            f"groups_per_rank={groups_per_rank} * otp_size={otp_size}, "
+            f"prefix={wo_a_prefix}"
+        )
+        assert self.wo_a.weight.shape[1] == input_size_per_group, (
+            f"wo_a input dim mismatch: input={input_size_per_group}, "
+            f"weight={tuple(self.wo_a.weight.shape)}, prefix={wo_a_prefix}"
+        )
+        assert self.wo_a.weight.shape[2] == self.o_lora_rank, (
+            f"wo_a rank mismatch: expected={self.o_lora_rank}, "
+            f"weight={tuple(self.wo_a.weight.shape)}, prefix={wo_a_prefix}"
+        )
+
+        wo_b_input_size = groups_per_rank * self.o_lora_rank
+        assert self.wo_b.input_size_per_partition == wo_b_input_size, (
+            f"wo_b local input mismatch: expected={wo_b_input_size}, "
+            f"actual={self.wo_b.input_size_per_partition}, "
+            f"prefix={getattr(self.wo_b, 'prefix', None)}"
+        )
+        assert self.wo_b.weight.shape[-1] == wo_b_input_size, (
+            f"wo_b weight dim mismatch: expected last dim={wo_b_input_size}, "
+            f"weight={tuple(self.wo_b.weight.shape)}, "
+            f"prefix={getattr(self.wo_b, 'prefix', None)}"
+        )
+
+        send_buf = (
+            o_proj_input.reshape(
+                local_batch_size,
+                otp_size,
+                groups_per_rank,
+                input_size_per_group,
+            )
+            .transpose(0, 1)
+            .contiguous()
+            .view(-1)
+        )
+        recv_buf = torch.empty(
+            local_batch_size * total_groups * input_size_per_group,
+            dtype=o_proj_input.dtype,
+            device=o_proj_input.device,
+        )
+        dist.all_to_all_single(
+            recv_buf,
+            send_buf,
+            group=otp_group.device_group,
+        )
+        wo_a_input = recv_buf.view(
+            local_batch_size * otp_size,
+            groups_per_rank,
+            input_size_per_group,
+        )
+        log_oproj_tp_debug(
+            f"compute prefix={wo_a_prefix} "
+            f"oproj_tp_wo_a_all2all_input_shape={tuple(o_proj_input.shape)} "
+            f"oproj_tp_wo_a_local_input_shape={tuple(wo_a_input.shape)} "
+            f"wo_a_weight_shape={tuple(self.wo_a.weight.shape)} "
+            f"otp_rank={otp_rank} otp_size={otp_size}"
+        )
+
+        wo_a_output = torch_npu.npu_transpose_batchmatmul(
+            wo_a_input,
+            self.wo_a.weight,
+            bias=None,
+            scale=None,
+            perm_x1=(1, 0, 2),
+            perm_x2=(0, 1, 2),
+            perm_y=(1, 0, 2),
+            batch_split_factor=1)
+        wo_b_input = wo_a_output.reshape(
+            local_batch_size * otp_size,
+            wo_b_input_size,
+        )
+        wo_b_prefix = getattr(self.wo_b, "prefix", f"{layer_name}.wo_b")
+        log_oproj_tp_debug(
+            f"compute prefix={wo_b_prefix} "
+            f"wo_a_output_shape={tuple(wo_a_output.shape)} "
+            f"wo_b_input_shape={tuple(wo_b_input.shape)} "
+            f"wo_b_weight_shape={tuple(self.wo_b.weight.shape)} "
+            f"otp_rank={otp_rank} otp_size={otp_size}"
+        )
+
+        bias_ = None if (otp_rank > 0 or self.wo_b.skip_bias_add) else self.wo_b.bias
+        assert self.wo_b.quant_method is not None
+        output_parallel = self.wo_b.quant_method.apply(
+            self.wo_b,
+            wo_b_input,
+            bias=bias_,
+        )
+        output_tp = otp_group.reduce_scatter(output_parallel, dim=0)
+        output[...] = output_tp.view(local_batch_size, self.wo_b.output_size)
+        log_oproj_tp_debug(
+            f"compute prefix={wo_b_prefix} "
+            f"wo_b_output_parallel_shape={tuple(output_parallel.shape)} "
+            f"wo_b_output_shape={tuple(output.shape)} "
+            f"otp_rank={otp_rank} otp_size={otp_size}"
+        )
+
     # TODO: cast to bfloat16 to speed up
     def rope_single(self, x, cos, sin, inverse=False):
         if inverse:
@@ -1246,7 +1393,24 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if olora_tp_enable():
+        wo_a_prefix = getattr(self.wo_a, "prefix", f"{layer_name}.wo_a")
+        log_oproj_tp_debug(
+            f"compute prefix={wo_a_prefix} "
+            f"wo_a_input_shape={tuple(o_proj_input.shape)} "
+            f"wo_a_weight_shape={tuple(self.wo_a.weight.shape)} "
+            f"n_local_groups={self.n_local_groups} "
+            f"o_lora_rank={self.o_lora_rank}"
+        )
+        if oproj_tp_enable():
+            self._forward_deepseek_v4_oproj_tp(
+                o_proj_input,
+                output,
+                num_tokens,
+                layer_name,
+                wo_a_prefix,
+            )
+            return output_padded
+        elif olora_tp_enable():
             o_proj_input = self.wo_a(o_proj_input)
         else:
             # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
@@ -1261,6 +1425,11 @@ class AscendDSAImpl(DSAAttentionImpl):
                 perm_y=(1, 0, 2),
                 batch_split_factor=1)
             o_proj_input = o_proj_input.reshape(num_tokens, -1)
+        log_oproj_tp_debug(
+            f"compute prefix={wo_a_prefix} "
+            f"wo_a_output_shape={tuple(o_proj_input.shape)} "
+            f"wo_b_input_shape={tuple(o_proj_input.shape)}"
+        )
         output[...] = self.wo_b(o_proj_input)
 
         return output_padded

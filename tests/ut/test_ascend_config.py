@@ -13,12 +13,17 @@
 # This file is a part of the vllm-ascend project.
 #
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from vllm.config import VllmConfig
 
 from tests.ut.base import TestBase
-from vllm_ascend.ascend_config import clear_ascend_config, get_ascend_config, init_ascend_config
+from vllm_ascend.ascend_config import (
+    FinegrainedTPConfig,
+    clear_ascend_config,
+    get_ascend_config,
+    init_ascend_config,
+)
 
 
 class TestAscendConfig(TestBase):
@@ -102,6 +107,18 @@ class TestAscendConfig(TestBase):
     def test_get_ascend_config_without_init(self):
         with self.assertRaises(RuntimeError):
             get_ascend_config()
+
+    def test_oproj_tp_allows_single_node_config(self):
+        test_vllm_config = MagicMock()
+        test_vllm_config.model_config.enforce_eager = False
+        test_vllm_config.kv_transfer_config = None
+        test_vllm_config.parallel_config.data_parallel_size = 16
+
+        finegrained_tp_config = FinegrainedTPConfig({
+            "oproj_tensor_parallel_size": 8,
+        }, test_vllm_config)
+
+        self.assertEqual(finegrained_tp_config.oproj_tensor_parallel_size, 8)
 
     @_clean_up_ascend_config
     @patch("vllm_ascend.platform.NPUPlatform._fix_incompatible_config")

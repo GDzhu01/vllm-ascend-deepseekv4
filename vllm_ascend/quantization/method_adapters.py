@@ -29,9 +29,22 @@ from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.distributed.parallel_state import get_flashcomm2_otp_group, get_mlp_tp_group, get_otp_group
-from vllm_ascend.utils import flashcomm2_enable, mlp_tp_enable, oproj_tp_enable
+from vllm_ascend.utils import (
+    flashcomm2_enable,
+    is_oproj_prefix,
+    log_oproj_tp_debug,
+    mlp_tp_enable,
+    oproj_tp_enable,
+)
 
 from .methods import AscendAttentionScheme, AscendLinearScheme, AscendMoEScheme, is_mx_quant_type
+
+
+def _shape_of_attr(layer: torch.nn.Module, name: str) -> tuple[int, ...] | None:
+    value = getattr(layer, name, None)
+    if value is None:
+        return None
+    return tuple(value.shape)
 
 
 class AscendLinearMethod(LinearMethodBase):
@@ -114,8 +127,24 @@ class AscendLinearMethod(LinearMethodBase):
                 param.input_dim = 1
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        loaded_weight_shape = _shape_of_attr(layer, "weight")
         if hasattr(self.quant_method, "process_weights_after_loading"):
             self.quant_method.process_weights_after_loading(layer)
+        prefix = getattr(layer, "prefix", "")
+        if isinstance(layer, RowParallelLinear) and is_oproj_prefix(prefix):
+            log_oproj_tp_debug(
+                f"loaded prefix={prefix} "
+                f"input_size={getattr(layer, 'input_size', None)} "
+                f"input_size_per_partition={getattr(layer, 'input_size_per_partition', None)} "
+                f"output_size={getattr(layer, 'output_size', None)} "
+                f"tp_rank={getattr(layer, 'tp_rank', None)} "
+                f"tp_size={getattr(layer, 'tp_size', None)} "
+                f"loaded_weight_shape={loaded_weight_shape} "
+                f"processed_weight_shape={_shape_of_attr(layer, 'weight')} "
+                f"quant_bias_shape={_shape_of_attr(layer, 'quant_bias')} "
+                f"deq_scale_shape={_shape_of_attr(layer, 'deq_scale')} "
+                f"input_scale_shape={_shape_of_attr(layer, 'input_scale')}"
+            )
 
     def get_computed_params(self) -> set[str]:
         """Return parameter name patterns that are computed, not loaded.
@@ -136,7 +165,7 @@ class AscendLinearMethod(LinearMethodBase):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if isinstance(layer, RowParallelLinear):
-            if layer.prefix.find("o_proj") != -1 and oproj_tp_enable():
+            if is_oproj_prefix(layer.prefix) and oproj_tp_enable():
                 tp_rank = get_otp_group().rank_in_group
             elif layer.prefix.find("down_proj") != -1 and mlp_tp_enable():
                 tp_rank = get_mlp_tp_group().rank_in_group

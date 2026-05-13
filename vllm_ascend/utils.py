@@ -827,6 +827,47 @@ def embedding_tp_enable() -> bool:
 def oproj_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.oproj_tensor_parallel_size > 0
 
+
+def is_oproj_prefix(prefix: str) -> bool:
+    return "o_proj" in prefix or "wo_b" in prefix.split(".")
+
+
+def oproj_tp_debug_enabled() -> bool:
+    return os.getenv("VLLM_ASCEND_OPROJ_TP_DEBUG", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def oproj_tp_debug_all_ranks() -> bool:
+    return os.getenv("VLLM_ASCEND_OPROJ_TP_DEBUG_ALL_RANKS", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def log_oproj_tp_debug(message: str) -> None:
+    if not oproj_tp_debug_enabled():
+        return
+
+    rank = None
+    try:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+    except Exception:
+        rank = None
+
+    if rank not in (None, 0) and not oproj_tp_debug_all_ranks():
+        return
+
+    rank_text = "unknown" if rank is None else str(rank)
+    print(f"[vllm-ascend][oproj_tp][rank={rank_text}] {message}", flush=True)
+
+
 def olora_tp_enable() -> bool:
     return get_ascend_config(
     ).finegrained_tp_config.olora_tensor_parallel_size > 1

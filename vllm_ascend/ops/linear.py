@@ -40,7 +40,8 @@ from vllm.model_executor.layers.quantization.base_config import QuantizationConf
 from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_ascend.ops.linear_op import get_parallel_op, get_replicated_op
-from vllm_ascend.utils import enable_sp, maybe_trans_nz
+from vllm_ascend.utils import (enable_sp, log_oproj_tp_debug,
+                               maybe_trans_nz, oproj_tp_enable)
 
 
 class AscendUnquantizedLinearMethod(UnquantizedLinearMethod):
@@ -394,10 +395,21 @@ class AscendColumnParallelLinear(ColumnParallelLinear):
         if self.custom_op is not None:
             self.custom_op.update_attrs()
         self.prefix = prefix
-        if "wo_a" in prefix:
+        if "wo_a" in prefix.split("."):
             hf_config = get_current_vllm_config().model_config.hf_text_config
-            self.n_local_groups = getattr(hf_config, "o_groups",
-                                          0) // self.tp_size
+            if oproj_tp_enable():
+                model_type = getattr(hf_config, "model_type", None)
+                assert model_type == "deepseek_v4", (
+                    "wo_a oproj tensor parallel path is only supported for "
+                    f"deepseek_v4, got model_type={model_type}, "
+                    f"prefix={prefix}"
+                )
+            o_groups = getattr(hf_config, "o_groups", 0)
+            assert o_groups % self.tp_size == 0, (
+                f"wo_a o_groups={o_groups} must be divisible by "
+                f"tp_size={self.tp_size}, prefix={prefix}"
+            )
+            self.n_local_groups = o_groups // self.tp_size
             self.o_lora_rank = getattr(hf_config, "o_lora_rank", 0)
 
     def forward(
@@ -410,11 +422,27 @@ class AscendColumnParallelLinear(ColumnParallelLinear):
         return super().forward(input_)
     
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
+        loaded_weight_shape = tuple(loaded_weight.shape)
         super().weight_loader(param, loaded_weight)
-        if "wo_a" in self.prefix:
+        if "wo_a" in self.prefix.split("."):
+            weight_shape_after_load = tuple(self.weight.shape)
             self.weight.data = self.weight.data.view(
                 self.n_local_groups, self.o_lora_rank,
                 -1).transpose(2, 1).contiguous()
+            log_oproj_tp_debug(
+                f"loaded prefix={self.prefix} "
+                f"input_size={getattr(self, 'input_size', None)} "
+                f"input_size_per_partition={getattr(self, 'input_size_per_partition', None)} "
+                f"output_size={getattr(self, 'output_size', None)} "
+                f"output_size_per_partition={getattr(self, 'output_size_per_partition', None)} "
+                f"tp_rank={getattr(self, 'tp_rank', None)} "
+                f"tp_size={getattr(self, 'tp_size', None)} "
+                f"n_local_groups={self.n_local_groups} "
+                f"o_lora_rank={self.o_lora_rank} "
+                f"checkpoint_weight_shape={loaded_weight_shape} "
+                f"weight_shape_after_load={weight_shape_after_load} "
+                f"processed_weight_shape={tuple(self.weight.shape)}"
+            )
 
 
 class AscendReplicatedLinear(ReplicatedLinear):
