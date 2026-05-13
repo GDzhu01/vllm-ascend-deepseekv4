@@ -51,6 +51,7 @@ constexpr int64_t ITER_TIMES_ATTR_IDX = 1;
 constexpr int64_t HC_EPS_ATTR_IDX = 2;
 constexpr int64_t NORM_EPS_ATTR_IDX = 3;
 constexpr int64_t DEFAULT_ITER_TIMES = 20;
+constexpr int64_t BS_SPLIT_THRESHOLD = 128;
 }
 
 ge::graphStatus HcPreTiling::GetPlatformInfo()
@@ -142,9 +143,9 @@ ge::graphStatus HcPreTiling::GetShapeAttrsInfoInner()
 
 ge::graphStatus HcPreTiling::CalcMKSplitCoreMembasePart2Tiling() 
 {
-    rowOfFormerBlock_ = CeilDiv(bs_, static_cast<int64_t>(aivCoreNum_));
-    usedAivCoreNums_ = std::min(CeilDiv(bs_, rowOfFormerBlock_), static_cast<int64_t>(aivCoreNum_));
-    rowOfTailBlock_ = bs_ - (usedAivCoreNums_ - 1) * rowOfFormerBlock_;
+    rowOfFormerBlock_ = CeilDiv(curBsSplit_, static_cast<int64_t>(aivCoreNum_));
+    usedAivCoreNums_ = std::min(CeilDiv(curBsSplit_, rowOfFormerBlock_), static_cast<int64_t>(aivCoreNum_));
+    rowOfTailBlock_ = curBsSplit_ - (usedAivCoreNums_ - 1) * rowOfFormerBlock_;
 
     int64_t minRowPerCore = 1;
     int64_t rowOnceLoop = std::min(rowOfFormerBlock_, minRowPerCore);
@@ -380,13 +381,92 @@ ge::graphStatus HcPreTiling::CalcMembaseOpTiling()
     return ge::GRAPH_SUCCESS;
 }
 
+ge::graphStatus HcPreTiling::CalcBsSplit()
+{
+    tailBs_ = bs_;
+    curBsSplit_ = bs_;
+    if (bs_ > BS_SPLIT_THRESHOLD) {
+        bsLoop_ = CeilDiv(bs_, BS_SPLIT_THRESHOLD);
+        tailBs_ = bs_ % BS_SPLIT_THRESHOLD;
+        if (tailBs_ == 0) {
+            tailBs_ = BS_SPLIT_THRESHOLD;
+        }
+        curBsSplit_ = BS_SPLIT_THRESHOLD;
+    }
+    tilingData_.set_bsSplitThreshold(BS_SPLIT_THRESHOLD);
+    tilingData_.set_bsLoop(bsLoop_);
+    tilingData_.set_tailBs(tailBs_);
+    tilingData_.set_curBsSplit(curBsSplit_);
+
+    return ge::GRAPH_SUCCESS;
+}
+
+ge::graphStatus HcPreTiling::CalcTailBsTiling()
+{
+    if (tailBs_ == BS_SPLIT_THRESHOLD || tailBs_ == bs_) {
+        tilingData_.set_tailBsRowOfFormerBlock(tilingData_.get_rowOfFormerBlock());
+        tilingData_.set_tailBsRowOfTailBlock(tilingData_.get_rowOfTailBlock());
+        tilingData_.set_tailBsRowLoopOfFormerBlock(tilingData_.get_rowLoopOfFormerBlock());
+        tilingData_.set_tailBsRowLoopOfTailBlock(tilingData_.get_rowLoopOfTailBlock());
+        tilingData_.set_tailBsUsedCoreNum(tilingData_.get_secondUsedCoreNum());
+        tilingData_.set_tailBsRowFactor(tilingData_.get_stage2RowFactor());
+        tilingData_.set_tailBsTailRowFactorOfFormerBlock(tilingData_.get_tailRowFactorOfFormerBlock());
+        tilingData_.set_tailBsTailRowFactorOfTailBlock(tilingData_.get_tailRowFactorOfTailBlock());
+        tilingData_.set_tailBsML1Size(tilingData_.get_mL1Size());
+        tilingData_.set_tailBsKL1Size(tilingData_.get_kL1Size());
+        tilingData_.set_tailBsMultCoreSplitMSize(tilingData_.get_multCoreSplitMSize());
+        tilingData_.set_tailBsCubeBlockDimM(tilingData_.get_cubeBlockDimM());
+        return ge::GRAPH_SUCCESS;
+    }
+
+    uint64_t tailMDimNum = std::min(aicCoreNum_, static_cast<uint64_t>(CeilDiv(tailBs_, M_L1_MAX_SIZE)));
+    uint64_t tailSingleCoreM = RoundUp(CeilDiv(tailBs_, tailMDimNum), AscendC::BLOCK_CUBE);
+
+    tailBsCubeBlockDimM_ = static_cast<int64_t>(tailMDimNum);
+    tailBsMultCoreSplitMSize_ = static_cast<int64_t>(tailSingleCoreM);
+    tailBsML1Size_ = std::min(M_L1_MAX_SIZE, tailSingleCoreM);
+    tailBsKL1Size_ = std::min(A_L1_SIZE / tailSingleCoreM, static_cast<uint64_t>(K_L1_MAX_SIZE)) / 128 * 128;
+
+    tailBsRowOfFormerBlock_ = CeilDiv(tailBs_, static_cast<int64_t>(aivCoreNum_));
+    tailBsUsedCoreNum_ = std::min(CeilDiv(tailBs_, tailBsRowOfFormerBlock_), static_cast<int64_t>(aivCoreNum_));
+    tailBsRowOfTailBlock_ = tailBs_ - (tailBsUsedCoreNum_ - 1) * tailBsRowOfFormerBlock_;
+
+    int64_t minRowPerCore = 1;
+    tailBsRowFactor_ = std::min(tailBsRowOfFormerBlock_, minRowPerCore);
+
+    tailBsRowLoopOfFormerBlock_ = CeilDiv(tailBsRowOfFormerBlock_, tailBsRowFactor_);
+    tailBsRowLoopOfTailBlock_ = CeilDiv(tailBsRowOfTailBlock_, tailBsRowFactor_);
+    tailBsTailRowFactorOfFormerBlock_ = tailBsRowOfFormerBlock_ % tailBsRowFactor_ == 0 ?
+                                         tailBsRowFactor_ : tailBsRowOfFormerBlock_ % tailBsRowFactor_;
+    tailBsTailRowFactorOfTailBlock_ = tailBsRowOfTailBlock_ % tailBsRowFactor_ == 0 ?
+                                       tailBsRowFactor_ : tailBsRowOfTailBlock_ % tailBsRowFactor_;
+
+    tilingData_.set_tailBsRowOfFormerBlock(tailBsRowOfFormerBlock_);
+    tilingData_.set_tailBsRowOfTailBlock(tailBsRowOfTailBlock_);
+    tilingData_.set_tailBsRowLoopOfFormerBlock(tailBsRowLoopOfFormerBlock_);
+    tilingData_.set_tailBsRowLoopOfTailBlock(tailBsRowLoopOfTailBlock_);
+    tilingData_.set_tailBsUsedCoreNum(tailBsUsedCoreNum_);
+    tilingData_.set_tailBsRowFactor(tailBsRowFactor_);
+    tilingData_.set_tailBsTailRowFactorOfFormerBlock(tailBsTailRowFactorOfFormerBlock_);
+    tilingData_.set_tailBsTailRowFactorOfTailBlock(tailBsTailRowFactorOfTailBlock_);
+    tilingData_.set_tailBsML1Size(tailBsML1Size_);
+    tilingData_.set_tailBsKL1Size(tailBsKL1Size_);
+    tilingData_.set_tailBsMultCoreSplitMSize(tailBsMultCoreSplitMSize_);
+    tilingData_.set_tailBsCubeBlockDimM(tailBsCubeBlockDimM_);
+
+    return ge::GRAPH_SUCCESS;
+}
+
 ge::graphStatus HcPreTiling::CalcOpTiling() {
+    if (CalcBsSplit() == ge::GRAPH_FAILED) {
+        return ge::GRAPH_FAILED;
+    }
     uint64_t kSize = hcMult_ * d_;
     tilingData_.set_k(kSize);
     uint64_t cvLoopKSize = 1024;
     // 计算bs_轴切核
-    uint64_t mDimNum = std::min(aicCoreNum_, static_cast<uint64_t>(CeilDiv(bs_, M_L1_MAX_SIZE)));
-    uint64_t singleCoreM = RoundUp(CeilDiv(bs_, mDimNum), AscendC::BLOCK_CUBE);
+    uint64_t mDimNum = std::min(aicCoreNum_, static_cast<uint64_t>(CeilDiv(curBsSplit_, M_L1_MAX_SIZE)));
+    uint64_t singleCoreM = RoundUp(CeilDiv(curBsSplit_, mDimNum), AscendC::BLOCK_CUBE);
     uint64_t kDimNum = aicCoreNum_ / mDimNum;
     // Align splitKSize to cvLoopKSize so every core has the same number of iterations
     uint64_t splitKSize = RoundUp(CeilDiv(kSize, kDimNum), cvLoopKSize);
@@ -433,6 +513,10 @@ ge::graphStatus HcPreTiling::DoOpTiling()
         return ge::GRAPH_FAILED;
     }
 
+    if (CalcTailBsTiling() == ge::GRAPH_FAILED) {
+        return ge::GRAPH_FAILED;
+    }
+
     if (GetWorkspaceSize() == ge::GRAPH_FAILED) {
         return ge::GRAPH_FAILED;
     }
@@ -455,7 +539,7 @@ ge::graphStatus HcPreTiling::PostTiling()
     context_->SetTilingKey(0);
     context_->SetBlockDim(aicCoreNum_);
     size_t* workspaces = context_->GetWorkspaceSizes(1);
-    workspaces[0] = workspaceSize_;
+    workspaces[0] = workspaceSize_ + tilingData_.get_curBsSplit() *  d_ * 4 * 16;
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
     return ge::GRAPH_SUCCESS;

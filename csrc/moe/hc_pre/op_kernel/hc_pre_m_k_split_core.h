@@ -30,12 +30,17 @@ public:
     }
 
     __aicore__ inline void Init(GM_ADDR x, GM_ADDR hcFn, GM_ADDR workspace,
-                                const HcPreTilingData *tilingDataPtr, TPipe *pipePtr)
+                                const HcPreTilingData *tilingDataPtr, TPipe *pipePtr,
+                                int64_t bsOffset, int64_t curBs, bool isTailBsLoop)
     {
         pipe = pipePtr;
         tilingData = tilingDataPtr;
+        isTailBsLoop_ = isTailBsLoop;
 
-        xGm.SetGlobalBuffer((__gm__ T *)x);
+        int64_t curML1Size = isTailBsLoop ? tilingData->tailBsML1Size : tilingData->mL1Size;
+        int64_t curCubeBlockDimM = isTailBsLoop ? tilingData->tailBsCubeBlockDimM : tilingData->cubeBlockDimM;
+
+        xGm.SetGlobalBuffer((__gm__ T *)x + (bsOffset * tilingData->hcMult *tilingData->d));
         hcFnGm.SetGlobalBuffer((__gm__ float *)hcFn);
         workspaceGm.SetGlobalBuffer((__gm__ float *)workspace);
 
@@ -44,19 +49,16 @@ public:
         if ASCEND_IS_AIV {
             curCubeBlockIdx = curCubeBlockIdx / CV_RATIO;
         }
-        // uint64_t wsOffset = 0;
-        // xCastFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
-        xCastFp32BufSize_ = tilingData->mL1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float));
+        xCastFp32BufSize_ = curML1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float));
         int64_t SingleCubeCoreXCastSize = xCastFp32BufSize_ * DOUBLE_BUFFER;
         xCastFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + curCubeBlockIdx * SingleCubeCoreXCastSize);
-        // wsOffset += DOUBLE_BUFFER * xCastFp32BufSize_;
-        uint64_t wsOffset = tilingData->cubeCoreNum * SingleCubeCoreXCastSize; //TODO need change to real value
+        uint64_t wsOffset = tilingData->cubeCoreNum * SingleCubeCoreXCastSize;
         mmOutFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
         mmOuterInnerSize_ = CeilAlign(N_SIZE, MM_CACHE_LINE_BYTES / sizeof(float));
-        mmOutFp32BufSize_ = tilingData->bs * mmOuterInnerSize_;
+        mmOutFp32BufSize_ = curBs * mmOuterInnerSize_;
         wsOffset += tilingData->totalKSlots * mmOutFp32BufSize_;
         squareSumFp32WsGm.SetGlobalBuffer((__gm__ float *)workspace + wsOffset);
-        squareSumFp32BufSize_ = CeilAlign(tilingData->bs, BLOCK_CUBE) * BLOCK_CUBE;
+        squareSumFp32BufSize_ = CeilAlign(curBs, BLOCK_CUBE) * BLOCK_CUBE;
 
         if ASCEND_IS_AIC {
             cubeCompute_.Init(xCastFp32WsGm, hcFnGm, pipePtr);
@@ -68,11 +70,15 @@ public:
 
         // OutQue
         pipe->InitBuffer(mmInQue, NUM_TWO, xQueNum * sizeof(float));
-
     }
 
-    __aicore__ inline void Process() 
+    __aicore__ inline void Process(int64_t bsOffset, int64_t curBs, bool isTailBsLoop)
     {
+        isTailBsLoop_ = isTailBsLoop;
+        int64_t curML1Size = isTailBsLoop ? tilingData->tailBsML1Size : tilingData->mL1Size;
+        int64_t curKL1Size = isTailBsLoop ? tilingData->tailBsKL1Size : tilingData->kL1Size;
+        int64_t curCubeBlockDimM = isTailBsLoop ? tilingData->tailBsCubeBlockDimM : tilingData->cubeBlockDimM;
+
         if ASCEND_IS_AIC{
             // 初始设置
             CrossCoreSetFlag<SYNC_MODE2, PIPE_FIX>(SYNC_AIC_TO_AIV_FLAG);
@@ -92,9 +98,9 @@ public:
             kGmEndOffset = tilingData->k;
         }
         uint64_t curCvLoopKSize = tilingData->cvLoopKSize;
-        for (uint64_t mGmOffset = mBlkDimIdx * tilingData->mL1Size; mGmOffset < tilingData->bs;
-                mGmOffset += tilingData->cubeBlockDimM * tilingData->mL1Size) {
-            uint64_t realMSize = mGmOffset + tilingData->mL1Size > tilingData->bs ? tilingData->bs - mGmOffset : tilingData->mL1Size;
+        for (uint64_t mGmOffset = mBlkDimIdx * curML1Size; mGmOffset < curBs;
+                mGmOffset += curCubeBlockDimM * curML1Size) {
+            uint64_t realMSize = mGmOffset + curML1Size > curBs ? curBs - mGmOffset : curML1Size;
             uint64_t localIterIdx = 0;
             for (uint64_t kGmBaseOffset = kGmStartOffset; kGmBaseOffset < kGmEndOffset; kGmBaseOffset += tilingData->cvLoopKSize) {
                 uint64_t realKGmSize = kGmBaseOffset + tilingData->cvLoopKSize > kGmEndOffset ? kGmEndOffset - kGmBaseOffset : tilingData->cvLoopKSize;
@@ -102,7 +108,7 @@ public:
                 if ASCEND_IS_AIC{
                     MmParams mmParams;
                     mmParams.curML1 = realMSize;
-                    mmParams.curKL1 = tilingData->kL1Size;
+                    mmParams.curKL1 = curKL1Size;
                     mmParams.curNL1 = N_SIZE;
                     mmParams.singleCoreK = realKGmSize;
                     mmParams.xWsKSize = tilingData->cvLoopKSize;
@@ -185,17 +191,18 @@ private:
     LocalTensor<float> xCastLocal;
     LocalTensor<float> yCastLocal;
     LocalTensor<float> mmOutLocal;
-    
+
     HcCubeCompute<false> cubeCompute_;
     static constexpr uint64_t SYNC_AIV_TO_AIC_FLAG = 8;
     static constexpr uint64_t SYNC_AIC_TO_AIV_FLAG = 9;
     static constexpr uint64_t SYNC_MODE2 = NUM_TWO;
-    
+
     uint64_t cvLoopIdx_ = 0;
     uint64_t xCastFp32BufSize_;
     uint64_t mmOuterInnerSize_;
     uint64_t mmOutFp32BufSize_;
     uint64_t squareSumFp32BufSize_;
+    bool isTailBsLoop_ = false;
 };
 
 template <typename T>
@@ -207,17 +214,19 @@ public:
 
     __aicore__ inline void Init(GM_ADDR x, GM_ADDR hcScale, GM_ADDR hcBase, GM_ADDR y,
                                 GM_ADDR post, GM_ADDR combFrag, GM_ADDR workspace,
-                                const HcPreTilingData *tilingDataPtr, TPipe *pipePtr)
+                                const HcPreTilingData *tilingDataPtr, TPipe *pipePtr,
+                                int64_t bsOffset, bool isTailBsLoop)
     {
         pipe = pipePtr;
         tilingData = tilingDataPtr;
+        isTailBsLoop_ = isTailBsLoop;
 
-        xGm.SetGlobalBuffer((__gm__ T *)x);
+        xGm.SetGlobalBuffer((__gm__ T *)x + (bsOffset * tilingData->hcMult *tilingData->d));
         hcScaleGm.SetGlobalBuffer((__gm__ float *)hcScale);
         hcBaseGm.SetGlobalBuffer((__gm__ float *)hcBase);
-        yGm.SetGlobalBuffer((__gm__ T *)y);
-        postGm.SetGlobalBuffer((__gm__ float *)post);
-        combFragGm.SetGlobalBuffer((__gm__ float *)combFrag);
+        yGm.SetGlobalBuffer((__gm__ T *)y + (bsOffset * tilingData->d));
+        postGm.SetGlobalBuffer((__gm__ float *)post + (bsOffset * tilingData->hcMult));
+        combFragGm.SetGlobalBuffer((__gm__ float *)combFrag + (bsOffset * tilingData->hcMult * tilingData->hcMult));
         workspaceGm.SetGlobalBuffer((__gm__ float *)workspace);
 
         // InQue
@@ -244,7 +253,7 @@ public:
         pipe->InitBuffer(hcBaseBuf1, tilingData->hcMultAlign * sizeof(float));
         pipe->InitBuffer(hcBaseBuf2, tilingData->hcMult * tilingData->hcMultAlign * sizeof(float));
         pipe->InitBuffer(rowBrcbBuf0, RoundUp<float>(tilingData->stage2RowFactor) * BLOCK_SIZE);
-        pipe->InitBuffer(hcBrcbBuf1, RoundUp<float>(tilingData->stage2RowFactor * tilingData->hcMultAlign) * BLOCK_SIZE);
+        pipe->InitBuffer(hcBrcbBuf1, RoundUp<float>(tilingData->stage2RowFactor * tilingData->hcMultAlign * NUM_TWO) * BLOCK_SIZE);
         pipe->InitBuffer(reduceBuf, tilingData->stage2RowFactor * tilingData->hcMultAlign * sizeof(float));
         pipe->InitBuffer(mxies01ReduceBuf, tilingData->stage2RowFactor * tilingData->hcMultAlign * NUM_TWO * sizeof(float));
         pipe->InitBuffer(mxies02ReduceBuf, tilingData->stage2RowFactor * tilingData->hcMultAlign * tilingData->hcMult * sizeof(float));
@@ -270,19 +279,30 @@ public:
         SetGatherMaskPattern(maskPatternLocal);
     }
 
-    __aicore__ inline void Process() 
+    __aicore__ inline void Process(int64_t bsOffset, int64_t curBs, bool isTailBsLoop)
     {
+        isTailBsLoop_ = isTailBsLoop;
+
+        int64_t curRowOfFormerBlock = isTailBsLoop ? tilingData->tailBsRowOfFormerBlock : tilingData->rowOfFormerBlock;
+        int64_t curRowLoopOfFormerBlock = isTailBsLoop ? tilingData->tailBsRowLoopOfFormerBlock : tilingData->rowLoopOfFormerBlock;
+        int64_t curRowLoopOfTailBlock = isTailBsLoop ? tilingData->tailBsRowLoopOfTailBlock : tilingData->rowLoopOfTailBlock;
+        int64_t curSecondUsedCoreNum = isTailBsLoop ? tilingData->tailBsUsedCoreNum : tilingData->secondUsedCoreNum;
+        int64_t curStage2RowFactor = isTailBsLoop ? tilingData->tailBsRowFactor : tilingData->stage2RowFactor;
+        int64_t curTailRowFactorOfFormerBlock = isTailBsLoop ? tilingData->tailBsTailRowFactorOfFormerBlock : tilingData->tailRowFactorOfFormerBlock;
+        int64_t curTailRowFactorOfTailBlock = isTailBsLoop ? tilingData->tailBsTailRowFactorOfTailBlock : tilingData->tailRowFactorOfTailBlock;
+        int64_t curML1Size = isTailBsLoop ? tilingData->tailBsML1Size : tilingData->mL1Size;
+
         if ASCEND_IS_AIV {
             int64_t stage1UsedCoreNum = tilingData->totalKSlots;
             int64_t stage2BlockIdx = GetBlockIdx();
-            int64_t stage2UsedCoreNum = tilingData->secondUsedCoreNum;
+            int64_t stage2UsedCoreNum = curSecondUsedCoreNum;
             if (stage2BlockIdx >= stage2UsedCoreNum) {
                 return;
             }
             int64_t mmLastAxisSize = CeilAlign(tilingData->hcMix, MM_CACHE_LINE_BYTES / sizeof(float));
-            int64_t xCastFp32BufSize = tilingData->mL1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float)) * sizeof(float);
+            int64_t xCastFp32BufSize = curML1Size * CeilAlign(tilingData->cvLoopKSize, MM_CACHE_LINE_BYTES / sizeof(float)) * sizeof(float);
             int64_t workspaceSize1 = (tilingData->cubeCoreNum * DOUBLE_BUFFER * xCastFp32BufSize) / sizeof(float);
-            int64_t workspaceSize2 = CeilAlign(stage1UsedCoreNum * tilingData->bs * mmLastAxisSize * sizeof(float), WORKSPACE_ALIGN_SIZE) / sizeof(float);
+            int64_t workspaceSize2 = CeilAlign(stage1UsedCoreNum * curBs * mmLastAxisSize * sizeof(float), WORKSPACE_ALIGN_SIZE) / sizeof(float);
             CopyIn(hcBaseGm, hcBase0Local, 1, tilingData->hcMult);
             CopyIn(hcBaseGm[tilingData->hcMult], hcBase1Local, 1, tilingData->hcMult);
             CopyIn(hcBaseGm[tilingData->hcMult * NUM_TWO], hcBase2Local, tilingData->hcMult, tilingData->hcMult);
@@ -291,23 +311,23 @@ public:
             WaitFlag<HardEvent::MTE2_V>(eventId);
 
             int64_t rowOuterLoop =
-                (stage2BlockIdx == stage2UsedCoreNum - 1) ? tilingData->rowLoopOfTailBlock : tilingData->rowLoopOfFormerBlock;
-            int64_t tailRowFactor = (stage2BlockIdx == stage2UsedCoreNum - 1) ? tilingData->tailRowFactorOfTailBlock :
-                                                                        tilingData->tailRowFactorOfFormerBlock;
-            int64_t xGmBlockBaseOffsetPart2 = stage2BlockIdx * tilingData->rowOfFormerBlock * tilingData->hcMult * tilingData->d;
+                (stage2BlockIdx == stage2UsedCoreNum - 1) ? curRowLoopOfTailBlock : curRowLoopOfFormerBlock;
+            int64_t tailRowFactor = (stage2BlockIdx == stage2UsedCoreNum - 1) ? curTailRowFactorOfTailBlock :
+                                                                        curTailRowFactorOfFormerBlock;
+            int64_t xGmBlockBaseOffsetPart2 = stage2BlockIdx * curRowOfFormerBlock * tilingData->hcMult * tilingData->d;
 
             for (int64_t rowOuterIdx = 0; rowOuterIdx < rowOuterLoop; rowOuterIdx++) { 
-                int64_t xGmBsBaseOffsetPart2 = rowOuterIdx * tilingData->stage2RowFactor * tilingData->hcMult * tilingData->d;
-                int64_t curRowFactor = (rowOuterIdx == rowOuterLoop - 1) ? tailRowFactor : tilingData->stage2RowFactor;
+                int64_t xGmBsBaseOffsetPart2 = rowOuterIdx * curStage2RowFactor * tilingData->hcMult * tilingData->d;
+                int64_t curRowFactor = (rowOuterIdx == rowOuterLoop - 1) ? tailRowFactor : curStage2RowFactor;
                 squareSumOutLocal = squareSumQue.AllocTensor<float>();
                 //todo
-                CopyIn(workspaceGm[workspaceSize1 + workspaceSize2 + stage2BlockIdx * tilingData->rowOfFormerBlock * SQUARE_SUM_SIZE + rowOuterIdx * tilingData->stage2RowFactor * SQUARE_SUM_SIZE], 
-                        squareSumOutLocal, stage1UsedCoreNum, curRowFactor * SQUARE_SUM_SIZE, CeilAlign(tilingData->bs, SQUARE_SUM_SIZE) * SQUARE_SUM_SIZE - curRowFactor * SQUARE_SUM_SIZE);
+                CopyIn(workspaceGm[workspaceSize1 + workspaceSize2 + stage2BlockIdx * curRowOfFormerBlock * SQUARE_SUM_SIZE + rowOuterIdx * curStage2RowFactor * SQUARE_SUM_SIZE], 
+                        squareSumOutLocal, stage1UsedCoreNum, curRowFactor * SQUARE_SUM_SIZE, CeilAlign(curBs, SQUARE_SUM_SIZE) * SQUARE_SUM_SIZE - curRowFactor * SQUARE_SUM_SIZE);
                 squareSumQue.EnQue(squareSumOutLocal);
                 squareSumOutLocal = squareSumQue.DeQue<float>();
                 ReduceSumARAPerf(squareReduceLocal, squareSumOutLocal, 1, stage1UsedCoreNum, curRowFactor * SQUARE_SUM_SIZE);
-                int64_t curBsIdxForAll = (stage2BlockIdx * tilingData->rowLoopOfFormerBlock + rowOuterIdx) * tilingData->stage2RowFactor;
- 	            GatherMaskByDiagonal(rsqrtLocal, squareReduceLocal, maskPatternLocal[(curBsIdxForAll % SQUARE_SUM_SIZE) * 8], curRowFactor);
+                int64_t curBsIdxForAll = (stage2BlockIdx * curRowOfFormerBlock + rowOuterIdx) * curStage2RowFactor;
+                GatherMaskByDiagonal(rsqrtLocal, squareReduceLocal, maskPatternLocal[(curBsIdxForAll % SQUARE_SUM_SIZE) * 8], curRowFactor);
                 float coeff = 1.0f / static_cast<float>(tilingData->k);
                 Muls(rsqrtLocal, rsqrtLocal, coeff, curRowFactor);
                 PipeBarrier<PIPE_V>();
@@ -319,14 +339,14 @@ public:
                 Div(rsqrtLocal, rowBrcbLocal0, rsqrtLocal, curRowFactor);
 
                 mxies01Local = mixesQue01.AllocTensor<float>();
-                
-                uint64_t mixBaseOffset = workspaceSize1 + stage2BlockIdx * tilingData->rowOfFormerBlock * CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float)) + 
-                                         rowOuterIdx * tilingData->stage2RowFactor * CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float));
+
+                uint64_t mixBaseOffset = workspaceSize1 + stage2BlockIdx * curRowOfFormerBlock * CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float)) + 
+                                         rowOuterIdx * curStage2RowFactor * CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float));
                 CopyInWithOuterFor(workspaceGm[mixBaseOffset], mxies01Local, stage1UsedCoreNum, curRowFactor, tilingData->hcMult,
-                                tilingData->bs, CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float)));
+                                curBs, CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float)));
                 CopyInWithOuterFor(workspaceGm[mixBaseOffset + tilingData->hcMult],
-                                mxies01Local[stage1UsedCoreNum * tilingData->stage2RowFactor * tilingData->hcMultAlign],
-                                stage1UsedCoreNum, curRowFactor, tilingData->hcMult, tilingData->bs,
+                                mxies01Local[stage1UsedCoreNum * curRowFactor * tilingData->hcMultAlign],
+                                stage1UsedCoreNum, curRowFactor, tilingData->hcMult, curBs,
                                 CeilAlign(tilingData->hcMix, WORKSPACE_ALIGN_SIZE / sizeof(float)));
 
                 mixesQue01.EnQue(mxies01Local);
@@ -340,7 +360,7 @@ public:
                     xLocal = xQue.template AllocTensor<T>();
                     CopyIn(xGm[xGmBlockBaseOffsetPart2 + xGmBsBaseOffsetPart2 +
                                 dLoopIdx * tilingData->dFactor],
-                            xLocal, tilingData->stage2RowFactor * tilingData->hcMult, curDFactor, tilingData->d - curDFactor);
+                            xLocal, curStage2RowFactor * tilingData->hcMult, curDFactor, tilingData->d - curDFactor);
                     xQue.template EnQue(xLocal);
                     xLocal = xQue.template DeQue<T>();
                     yLocal = yQue.template AllocTensor<T>();
@@ -350,22 +370,22 @@ public:
                     yQue.template EnQue(yLocal);
                     yLocal = yQue.template DeQue<T>();
                     CopyOut(yLocal,
-                            yGm[stage2BlockIdx * tilingData->rowOfFormerBlock * tilingData->d +
-                                rowOuterIdx * tilingData->stage2RowFactor * tilingData->d + dLoopIdx * tilingData->dFactor],
+                            yGm[stage2BlockIdx * curRowOfFormerBlock * tilingData->d +
+                                rowOuterIdx * curStage2RowFactor * tilingData->d + dLoopIdx * tilingData->dFactor],
                             curRowFactor, curDFactor, tilingData->d - curDFactor);
                     yQue.template FreeTensor(yLocal);
                 }
                 // post
                 postLocal = postQue.AllocTensor<float>();
-                ProcessPost(postLocal, mxies01ReduceLocal[tilingData->stage2RowFactor * tilingData->hcMultAlign], hcBase1Local,
+                ProcessPost(postLocal, mxies01ReduceLocal[curRowFactor * tilingData->hcMultAlign], hcBase1Local,
                             rsqrtLocal, rowBrcbLocal0, hcBrcbLocal1, hcScaleGm.GetValue(1), curRowFactor,
                             tilingData->hcMult);
                 mixesQue01.template FreeTensor(mxies01Local);
                 postQue.EnQue(postLocal);
                 postLocal = postQue.DeQue<float>();
                 CopyOut(postLocal,
-                        postGm[stage2BlockIdx * tilingData->rowOfFormerBlock * tilingData->hcMult +
-                                rowOuterIdx * tilingData->stage2RowFactor * tilingData->hcMult],
+                        postGm[stage2BlockIdx * curRowOfFormerBlock * tilingData->hcMult +
+                                rowOuterIdx * curStage2RowFactor * tilingData->hcMult],
                         curRowFactor, tilingData->hcMult);
                 postQue.FreeTensor(postLocal);
 
@@ -373,7 +393,7 @@ public:
                 mixes2Local = mixesQue2.AllocTensor<float>();
                 for (int64_t i = 0; i < stage1UsedCoreNum; ++i) {
                     for (int64_t j = 0; j < curRowFactor; ++j) {
-                        CopyIn(workspaceGm[workspaceSize1 + i * tilingData->bs * mmLastAxisSize + j * mmLastAxisSize + stage2BlockIdx * tilingData->rowOfFormerBlock * mmLastAxisSize + rowOuterIdx * tilingData->stage2RowFactor * mmLastAxisSize + tilingData->hcMult * NUM_TWO],
+                        CopyIn(workspaceGm[workspaceSize1 + i * curBs * mmLastAxisSize + j * mmLastAxisSize + stage2BlockIdx * curRowOfFormerBlock * mmLastAxisSize + rowOuterIdx * curStage2RowFactor * mmLastAxisSize + tilingData->hcMult * NUM_TWO],
                                         mixes2Local[(i * curRowFactor + j) * tilingData->hcMult * tilingData->hcMultAlign], tilingData->hcMult, tilingData->hcMult);
                     }
                 }
@@ -414,8 +434,8 @@ public:
                 combFragQue.EnQue(combFragLocal);
                 combFragLocal = combFragQue.DeQue<float>();
                 CopyOut(combFragLocal,
-                        combFragGm[stage2BlockIdx * tilingData->rowOfFormerBlock * tilingData->hcMult * tilingData->hcMult +
-                                    rowOuterIdx * tilingData->stage2RowFactor * tilingData->hcMult * tilingData->hcMult],
+                        combFragGm[stage2BlockIdx * curRowOfFormerBlock * tilingData->hcMult * tilingData->hcMult +
+                                    rowOuterIdx * curStage2RowFactor * tilingData->hcMult * tilingData->hcMult],
                         curRowFactor * tilingData->hcMult, tilingData->hcMult);
                 combFragQue.FreeTensor(combFragLocal);
             }
@@ -435,6 +455,7 @@ private:
     GlobalTensor<float> postGm;
     GlobalTensor<float> combFragGm;
 
+    bool isTailBsLoop_ = false;
     TQue<QuePosition::VECIN, 1> mixesQue01;
     TQue<QuePosition::VECIN, 1> mixesQue2;
     TQue<QuePosition::VECIN, 1> xQue;

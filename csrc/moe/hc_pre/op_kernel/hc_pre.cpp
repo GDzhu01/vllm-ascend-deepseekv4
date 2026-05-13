@@ -44,10 +44,10 @@ extern "C" __global__ __aicore__ void hc_pre(GM_ADDR x, GM_ADDR hc_fn, GM_ADDR h
     if (userWs == nullptr) {
         return;
     }
-    TPipe pipe;
 
     // 950PR 950DT
     #if defined(__DAV_C310__) 
+        TPipe pipe;
         if (TILING_KEY_IS(1000)) {
             GET_TILING_DATA_WITH_STRUCT(HcPreTilingData, tiling_data_in, tiling);
             const HcPreTilingData *__restrict tilingData = &tiling_data_in;
@@ -73,18 +73,27 @@ extern "C" __global__ __aicore__ void hc_pre(GM_ADDR x, GM_ADDR hc_fn, GM_ADDR h
         if (TILING_KEY_IS(0)) {
             GET_TILING_DATA_WITH_STRUCT(HcPreTilingData, tiling_data_in, tiling);
             const HcPreTilingData *__restrict tilingData = &tiling_data_in;
-            HcPre::HcPreMembaseKSplitCorePart1<DTYPE_X> op;
-            op.Init(x, hc_fn, userWs, tilingData, &pipe);
-            op.Process();
 
-            pipe.Destroy();
+            for (int64_t bsLoopIdx = 0; bsLoopIdx < tilingData->bsLoop; bsLoopIdx++) {
+                int64_t curBsOffset = bsLoopIdx * tilingData->curBsSplit;
+                int64_t curBs = (bsLoopIdx == tilingData->bsLoop - 1) ? tilingData->tailBs : tilingData->curBsSplit;
+                bool isTailBsLoop = (bsLoopIdx == tilingData->bsLoop - 1) && (tilingData->tailBs != tilingData->curBsSplit);
 
-            TPipe pipeStage2;
-            HcPre::HcPreMembaseKSplitCorePart2<DTYPE_X> op2;
-            op2.Init(x, hc_scale, hc_base, y, post, comb_frag, userWs, tilingData, &pipeStage2);
-            op2.Process();
+                TPipe pipeStage1;
+                HcPre::HcPreMembaseKSplitCorePart1<DTYPE_X> op;
+                op.Init(x, hc_fn, userWs, tilingData, &pipeStage1, curBsOffset, curBs, isTailBsLoop);
+                op.Process(curBsOffset, curBs, isTailBsLoop);
 
-            pipeStage2.Destroy();            
+                pipeStage1.Destroy();
+
+                TPipe pipeStage2;
+                HcPre::HcPreMembaseKSplitCorePart2<DTYPE_X> op2;
+                op2.Init(x, hc_scale, hc_base, y, post, comb_frag, userWs, tilingData, &pipeStage2, curBsOffset, isTailBsLoop);
+                op2.Process(curBsOffset, curBs, isTailBsLoop);
+
+                pipeStage2.Destroy();            
+                SyncAll<false>(); // cv全部同步
+            }
         }
     #endif
 }
