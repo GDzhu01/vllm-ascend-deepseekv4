@@ -729,6 +729,32 @@ __aicore__ inline void CompressorBlockVectorPerf<COMP>::SaveState(const LocalTen
 {
     if constexpr (COMP::coff == COFF::OVERLAP) {
         uint32_t coff = static_cast<uint32_t>(COMP::coff);
+
+        if (sliceInfo.dealTcSize > 1) {
+            // 后续的状态保存逻辑只覆盖尾侧窗口。对于批量 verifier 调用，
+            // 还需要持久化当前处理的第一个块，确保任意可能被接受的前缀
+            // 都能得到与串行逐 token 压缩一致的 state
+            uint32_t firstCopySeqCnt = constInfo_.cmpRatio - sliceInfo.headHolderSeqCnt;
+            if (firstCopySeqCnt > sliceInfo.validSeqCnt) {
+                firstCopySeqCnt = sliceInfo.validSeqCnt;
+            }
+
+            uint64_t startSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx;
+            uint64_t endSeqIdx = startSeqIdx + firstCopySeqCnt;
+            uint64_t leftSrcBaseOffset =
+                (sliceInfo.preValidSeqCnt + sliceInfo.preTailHolderSeqCnt + sliceInfo.headHolderSeqCnt) *
+                coff * dDealSize;
+            uint64_t rightSrcBaseOffset = sliceInfo.headHolderSeqCnt * coff * dDealSize + dDealSize;
+            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[leftSrcBaseOffset], sliceInfo.bIdx,
+                startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[leftSrcBaseOffset], sliceInfo.bIdx,
+                startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[rightSrcBaseOffset], sliceInfo.bIdx,
+                startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[rightSrcBaseOffset], sliceInfo.bIdx,
+                startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+        }
+
         // 存右边
         if (sliceInfo.sIdx + sliceInfo.validSeqCnt == sliceInfo.bSeqUsed) {
             uint32_t copySeqCnt = constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt;
