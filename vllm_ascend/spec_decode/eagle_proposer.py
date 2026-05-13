@@ -135,11 +135,12 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         self.use_cuda_graph = self.runner._use_aclgraph() and not self.speculative_config.enforce_eager
         if self.method == "mtp":
+            # NOTE: Removed async_scheduling restriction for cuda graph
+            # See Issue #5459. Risk: May crash like Issue #8587.
             self.use_cuda_graph = (
                 self.use_cuda_graph
-                and not self.use_async_scheduling
                 and not self.speculative_config.disable_padded_drafter_batch
-                and not self.use_compress
+                #and not self.use_compress
             )
 
         # TODO: Remove it when the bug of fx-graph is solved
@@ -338,12 +339,9 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         if self.vllm_config.compilation_config.cudagraph_mode.has_full_cudagraphs() and self.use_cuda_graph:
             self.update_stream = torch.npu.Stream()
-            if self.method == "mtp":
-                self.model = ACLGraphWrapper(self.model, self.vllm_config, runtime_mode=CUDAGraphMode.FULL)
-            else:
-                self._runnable = ACLGraphWrapper(
-                    self._run_merged_draft, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
-                )
+            self._runnable = ACLGraphWrapper(
+                self._run_merged_draft, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
+            )
 
     def _maybe_share_topk_indices(self, target_language_model: nn.Module) -> None:
         if hasattr(target_language_model.model, "topk_indices_buffer"):
@@ -373,6 +371,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         if decode_metadata is not None:
             if decode_metadata.sas_metadata is not None:
                 decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
+            if getattr(decode_metadata, "qli_metadata", None) is not None:
+                decode_metadata.qli_metadata = decode_metadata.qli_metadata.clone()
         return attn_metadata
 
     @torch.inference_mode()
@@ -388,6 +388,14 @@ class SpecDecodeBaseProposer(EagleProposer):
         dummy_compute_logits=lambda hidden_states: None,
         is_profile=False,
     ):
+        try:
+            _flash_comm_v1 = getattr(_EXTRA_CTX, 'flash_comm_v1_enabled', 'N/A')
+        except (AssertionError, Exception):
+            _flash_comm_v1 = 'N/A(no_ctx)'
+        logger.debug("[DEBUG][eagle_proposer.dummy_run] num_tokens=%d, is_profile=%s, "
+                     "use_cuda_graph=%s, use_compress=%s, flash_comm_v1=%s",
+                     num_tokens, is_profile, self.use_cuda_graph, self.use_compress,
+                     _flash_comm_v1)
         (
             num_tokens,
             num_tokens_across_dp,
@@ -419,6 +427,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 # This is used to hold a position.
                 slot_mapping=self.runner.input_batch.block_table[0].slot_mapping.gpu,
                 positions=self.runner.positions.gpu,
+                positions_cpu=self.runner.positions.cpu,
                 attn_state=self.runner.attn_state,
                 decode_token_per_req=self.runner.decode_token_per_req,
                 max_seq_len=0,
@@ -432,6 +441,11 @@ class SpecDecodeBaseProposer(EagleProposer):
 
             assert len(self.draft_attn_groups) > 0
             builder = self.draft_attn_groups[0].get_metadata_builder()
+            extra_attn_metadata_args = dict(
+                prefill_ratio_to_sas_metadata=dict(),
+                decode_ratio_to_sas_metadata=dict(),
+                common_ratio_to_sas_metadata=dict(),
+                block_size=self.draft_attn_groups[0].kv_cache_spec.block_size)
             # update the tensor's address for each step.
             for draft_step in range(self.num_speculative_tokens):
                 common_attn_metadata = self.shallow_copy_metadata(common_attn_metadata)
@@ -440,6 +454,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 attn_metadata_eagle = builder.build_for_graph_capture(
                     common_attn_metadata,
                     AscendAttentionState.SpecDecoding if self.method == "mtp" else AscendAttentionState.ChunkedPrefill,
+                    **extra_attn_metadata_args,
                 )
                 per_layer_attn_metadata = dict()
                 for layer_name in self.attn_layer_names:
@@ -781,10 +796,26 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         if self.pass_hidden_states_to_model:
             model_hidden_states = self.hidden_states[:num_input_tokens]
+            try:
+                _flash_comm_v1 = getattr(_EXTRA_CTX, 'flash_comm_v1_enabled', 'N/A')
+            except (AssertionError, Exception):
+                _flash_comm_v1 = 'N/A(no_ctx)'
+            logger.debug("[DEBUG][_run_merged_draft] BEFORE maybe_pad_and_reduce: "
+                         "model_hidden_states.shape=%s, model_positions.shape=%s, "
+                         "num_input_tokens=%d, flash_comm_v1=%s",
+                         model_hidden_states.shape, model_positions.shape,
+                         num_input_tokens,
+                         _flash_comm_v1)
             model_hidden_states, model_positions = self.maybe_pad_and_reduce(model_hidden_states, model_positions)
+            logger.debug("[DEBUG][_run_merged_draft] AFTER maybe_pad_and_reduce: "
+                         "model_hidden_states.shape=%s, model_positions.shape=%s",
+                         model_hidden_states.shape, model_positions.shape)
             model_kwargs["hidden_states"] = model_hidden_states
             if self.method == "mtp":
                 model_kwargs["positions"] = model_positions
+                if _EXTRA_CTX.flash_comm_v1_enabled and inputs_embeds is None:
+                    model_kwargs["inputs_embeds"] = self.model.embed_input_ids(
+                        model_input_ids)
 
         ret_hidden_states = self.model(**model_kwargs)
         if not self.model_returns_tuple():
@@ -928,6 +959,9 @@ class SpecDecodeBaseProposer(EagleProposer):
             }
             if self.pass_hidden_states_to_model:
                 model_kwargs["hidden_states"] = model_hidden_states
+                if self.method == "mtp" and _EXTRA_CTX.flash_comm_v1_enabled and inputs_embeds is None:
+                    model_kwargs["inputs_embeds"] = self.model.embed_input_ids(
+                        model_input_ids)
 
             ret_hidden_states = self.model(**model_kwargs)
             if not self.model_returns_tuple():
@@ -1053,7 +1087,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                     cad.max_query_len = max(self.decode_threshold, max_query_len_p)
                     cad.seq_lens[-num_prefill_reqs:] = seq_lens_p
                     cad.seq_lens_cpu[-num_prefill_reqs:] = seq_lens_p
-                    query_start_loc_p = cu_num_tokens_p[1:] + cad.query_start_loc[num_decode_reqs].item()
+                    query_start_loc_p = cu_num_tokens_p[1:] + cad.query_start_loc[num_decode_reqs]
                     cad.query_start_loc[-num_prefill_reqs:] = query_start_loc_p
                     cad.query_start_loc_cpu[-num_prefill_reqs:] = query_start_loc_p
 
@@ -1209,6 +1243,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu.clone()
         common_attn_metadata.num_computed_tokens_cpu = common_attn_metadata.num_computed_tokens_cpu.clone()
         common_attn_metadata.positions = common_attn_metadata.positions.clone()
+        if common_attn_metadata.positions_cpu is not None:
+            common_attn_metadata.positions_cpu = common_attn_metadata.positions_cpu.clone()
 
         # NOTE(woosuk): We should handle the case where the draft model
         # generates tokens beyond the max model length. Since it is complex
@@ -1244,6 +1280,11 @@ class SpecDecodeBaseProposer(EagleProposer):
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
         else:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
+        if common_attn_metadata.positions_cpu is not None:
+            if self.uses_mrope:
+                common_attn_metadata.positions_cpu[:batch_size].copy_(clamped_positions[0].cpu())
+            else:
+                common_attn_metadata.positions_cpu[:batch_size].copy_(clamped_positions.cpu())
 
         if self.pcp_size * self.dcp_size > 1:
             num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
@@ -1333,9 +1374,10 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         # Precompute get_token_id for when there is no valid next token
         num_reqs = gpu_input_batch.num_reqs
+        seq_lens_np = common_attn_metadata.seq_lens_cpu[:num_reqs].numpy()
         self.backup_next_token_ids.np[:num_reqs] = np.array(
             [
-                requests[gpu_input_batch.req_ids[i]].get_token_id(common_attn_metadata.seq_lens_cpu[i].item())
+                requests[gpu_input_batch.req_ids[i]].get_token_id(seq_lens_np[i])
                 for i in range(num_reqs)
             ]
         )
@@ -1467,7 +1509,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             num_reqs=common_attn_metadata.num_reqs,
             num_actual_tokens=total_num_tokens,
             num_input_tokens=common_attn_metadata.num_input_tokens,
-            max_query_len=new_query_len_per_req.max().item(),
+            max_query_len=int(new_query_len_per_req.max().numpy()),
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
@@ -1533,7 +1575,7 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         new_query_len_per_req = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
 
-        total_num_tokens = query_start_loc_cpu[-1].item()
+        total_num_tokens = int(query_start_loc_cpu[-1].numpy())
         token_indices = self.arange[:total_num_tokens]
 
         # NOTE: Currently positions and seq_lens are not used in attn forward
@@ -1546,7 +1588,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             num_reqs=common_attn_metadata.num_reqs,
             num_actual_tokens=common_attn_metadata.num_actual_tokens if self.pcp_size > 1 else total_num_tokens,
             num_input_tokens=common_attn_metadata.num_input_tokens,
-            max_query_len=new_query_len_per_req.max().item(),
+            max_query_len=int(new_query_len_per_req.max().numpy()),
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
