@@ -31,6 +31,7 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.distributed.parallel_state import get_flashcomm2_otp_group, get_mlp_tp_group, get_otp_group
 from vllm_ascend.utils import (
     flashcomm2_enable,
+    is_mtp_draft_prefix,
     is_oproj_prefix,
     log_oproj_tp_debug,
     mlp_tp_enable,
@@ -165,7 +166,8 @@ class AscendLinearMethod(LinearMethodBase):
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if isinstance(layer, RowParallelLinear):
-            if is_oproj_prefix(layer.prefix) and oproj_tp_enable():
+            if (is_oproj_prefix(layer.prefix) and oproj_tp_enable()
+                    and not is_mtp_draft_prefix(layer.prefix)):
                 tp_rank = get_otp_group().rank_in_group
             elif layer.prefix.find("down_proj") != -1 and mlp_tp_enable():
                 tp_rank = get_mlp_tp_group().rank_in_group

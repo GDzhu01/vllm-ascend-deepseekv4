@@ -77,6 +77,7 @@ from vllm_ascend.utils import (
     get_flashcomm2_reorgnized_batch_ids,
     get_weight_prefetch_method,
     is_oproj_prefix,
+    is_mtp_draft_prefix,
     is_vl_model,
     log_oproj_tp_debug,
     matmul_allreduce_enable,
@@ -87,7 +88,7 @@ from vllm_ascend.utils import (
 
 
 def _is_deepseek_v4_wo_a_prefix(prefix: str) -> bool:
-    return "wo_a" in prefix.split(".")
+    return "wo_a" in prefix.split(".") and not is_mtp_draft_prefix(prefix)
 
 
 def _assert_deepseek_v4_wo_a_oproj(prefix: str) -> None:
@@ -719,7 +720,7 @@ def _get_row_parallel_op(
             return ShardedCPRowParallelOp(layer)
     if "down_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
         return MLPRowParallelOp(layer)
-    if is_oproj_prefix(prefix) and oproj_tp_enable():
+    if is_oproj_prefix(prefix) and oproj_tp_enable() and not is_mtp_draft_prefix(prefix):
         return OProjRowParallelOp(layer)
     if matmul_allreduce_enable():
         return MatmulAllreduceRowParallelOp(layer)

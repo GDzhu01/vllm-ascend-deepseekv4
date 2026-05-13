@@ -146,6 +146,25 @@ class TestAscendRowParallelLinear(BaseLinearTest):
         self.assertIsInstance(linear.custom_op, OProjRowParallelOp)
         self.assertEqual(linear.custom_op.comm_group, parallel_state._OTP)
 
+    @patch("vllm_ascend.ops.linear_op.get_weight_prefetch_method",
+           return_value=MagicMock())
+    def test_deepseek_v4_mtp_wo_b_skips_oproj_tp(
+            self, mock_get_weight_prefetch_method):
+
+        config._current_vllm_config = MagicMock()
+
+        ascend_config._ASCEND_CONFIG = MagicMock()
+        ascend_config._ASCEND_CONFIG.recompute_scheduler_enable = False
+        ascend_config._ASCEND_CONFIG.finegrained_tp_config.oproj_tensor_parallel_size = 2
+        ascend_config._ASCEND_CONFIG.ascend_scheduler_config.enabled = False
+
+        linear = AscendRowParallelLinear(
+            input_size=16,
+            output_size=8,
+            prefix="mtp.0.self_attn.wo_b",
+        )
+        self.assertNotIsInstance(linear.custom_op, OProjRowParallelOp)
+
     @patch("vllm_ascend.quantization.method_adapters.get_otp_group")
     @patch("vllm_ascend.quantization.method_adapters.oproj_tp_enable",
            return_value=True)
@@ -176,6 +195,37 @@ class TestAscendRowParallelLinear(BaseLinearTest):
 
         scheme.apply.assert_called_once()
         self.assertEqual(scheme.apply.call_args.args[3], 1)
+
+    @patch(
+        "vllm_ascend.quantization.method_adapters.get_tensor_model_parallel_rank",
+        return_value=0,
+    )
+    @patch("vllm_ascend.quantization.method_adapters.get_otp_group")
+    @patch("vllm_ascend.quantization.method_adapters.oproj_tp_enable",
+           return_value=True)
+    def test_deepseek_v4_mtp_wo_b_quant_skips_otp_rank(
+        self,
+        mock_oproj_tp_enable,
+        mock_get_otp_group,
+        mock_get_tensor_model_parallel_rank,
+    ):
+        mock_group = MagicMock()
+        mock_group.rank_in_group = 1
+        mock_get_otp_group.return_value = mock_group
+
+        linear = AscendRowParallelLinear(
+            input_size=16,
+            output_size=8,
+            prefix="mtp.0.self_attn.wo_b",
+        )
+
+        scheme = MagicMock()
+        scheme.apply = MagicMock(return_value=torch.empty(1, 1))
+        method = AscendLinearMethod(scheme)
+        method.apply(linear, torch.empty(1, 8))
+
+        scheme.apply.assert_called_once()
+        self.assertEqual(scheme.apply.call_args.args[3], 0)
 
 
 class TestAscendMergedColumnParallelLinear(BaseLinearTest):
@@ -220,6 +270,20 @@ class TestAscendColumnParallelLinear(BaseLinearTest):
         self.assertIsInstance(linear.custom_op,
                               DeepseekV4OProjColumnParallelOp)
         self.assertEqual(linear.custom_op.comm_group, parallel_state._OTP)
+        self.assertEqual(linear.tp_size, 2)
+        self.assertEqual(linear.n_local_groups, 2)
+
+    def test_deepseek_v4_mtp_wo_a_skips_oproj_tp(self):
+        self._set_hf_config("deepseek_v4")
+
+        linear = AscendColumnParallelLinear(
+            input_size=8,
+            output_size=16,
+            prefix="mtp.0.self_attn.wo_a",
+        )
+
+        self.assertNotIsInstance(linear.custom_op,
+                                 DeepseekV4OProjColumnParallelOp)
         self.assertEqual(linear.tp_size, 2)
         self.assertEqual(linear.n_local_groups, 2)
 

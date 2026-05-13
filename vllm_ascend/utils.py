@@ -832,6 +832,11 @@ def is_oproj_prefix(prefix: str) -> bool:
     return "o_proj" in prefix or "wo_b" in prefix.split(".")
 
 
+def is_mtp_draft_prefix(prefix: str) -> bool:
+    parts = prefix.split(".")
+    return "mtp" in parts or "mtp_block" in parts
+
+
 def oproj_tp_debug_enabled() -> bool:
     return os.getenv("VLLM_ASCEND_OPROJ_TP_DEBUG", "0").lower() in (
         "1",

@@ -1401,7 +1401,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             f"n_local_groups={self.n_local_groups} "
             f"o_lora_rank={self.o_lora_rank}"
         )
-        if oproj_tp_enable():
+        if (oproj_tp_enable()
+                and not getattr(forward_context, "is_draft_model", False)):
             self._forward_deepseek_v4_oproj_tp(
                 o_proj_input,
                 output,
