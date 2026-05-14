@@ -223,6 +223,7 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
         common_prefix_len: int,
         common_attn_metadata: AscendCommonAttentionMetadata,
         fast_build: bool = False,
+        **kwargs,
     ) -> AscendSFAMetadata:
         num_reqs = common_attn_metadata.num_reqs
         num_actual_tokens = common_attn_metadata.num_actual_tokens
@@ -337,6 +338,7 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
         self,
         common_attn_metadata: AscendCommonAttentionMetadata,
         attn_state: AscendAttentionState = AscendAttentionState.DecodeOnly,
+        **kwargs,
     ):
         if attn_state in {AscendAttentionState.DecodeOnly, AscendAttentionState.SpecDecoding}:
             attn_metadata = self.build(
@@ -348,6 +350,12 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
 
         attn_metadata.attn_state = attn_state
         return attn_metadata
+
+    def build_for_cudagraph_capture(
+        self,
+        common_attn_metadata,
+    ):
+        return self.build_for_graph_capture(common_attn_metadata)
 
 
 class AscendSFAImpl(MLAAttentionImpl):

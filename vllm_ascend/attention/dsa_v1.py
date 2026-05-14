@@ -47,6 +47,10 @@ BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
 
+def _seq_lens_from_cu_seqlens(cu_seqlens: torch.Tensor) -> torch.Tensor:
+    return (cu_seqlens[1:] - cu_seqlens[:-1]).contiguous()
+
+
 def hadamard_transform_ref(x: torch.Tensor, hadamard: torch.Tensor, scale:int =1.0,):
     x_shape = x.shape
     dim = x.shape[-1]
@@ -1053,12 +1057,30 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         attn_metadata.attn_state = attn_state
         return attn_metadata
 
+    def build_for_cudagraph_capture(
+        self,
+        common_attn_metadata,
+    ):
+        return self.build_for_graph_capture(common_attn_metadata)
+
 
 class AscendDSAImpl(DSAAttentionImpl):
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
     """
+
+    @staticmethod
+    def update_graph_params(
+        update_stream,
+        forward_context,
+        num_tokens,
+        vllm_config=None,
+        speculative_config=None,
+        num_dcp_pcp_tokens=None,
+        draft_attn_metadatas=None,
+    ):
+        pass
 
     def __init__(
         self,
@@ -1347,7 +1369,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 # TODO(lxs): adapt the block table
                 state_block_table=compressor_kv_state_metadata.prefill.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=None,
+                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
                 start_pos=compress_common_attn_metadata.prefill.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1553,7 +1575,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 compress_cos.view(-1, compress_cos.shape[-1]),
                 state_block_table=compressor_kv_state_metadata.decode.block_table,
                 cu_seqlens=actual_seq_lengths_query,
-                seqused=None,
+                seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
                 start_pos=compress_common_attn_metadata.decode.start_pos,
                 rope_head_dim=self.rope_head_dim,
                 cmp_ratio=self.compress_ratio,
@@ -1691,7 +1713,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             compressed_cos.view(-1, compressed_cos.shape[-1]),
             state_block_table=kv_block_table,
             cu_seqlens=actual_seq_lengths_query,
-            seqused=None,
+            seqused=_seq_lens_from_cu_seqlens(actual_seq_lengths_query),
             start_pos=start_pos,
             rope_head_dim=self.rope_head_dim,
             cmp_ratio=self.compress_ratio,
