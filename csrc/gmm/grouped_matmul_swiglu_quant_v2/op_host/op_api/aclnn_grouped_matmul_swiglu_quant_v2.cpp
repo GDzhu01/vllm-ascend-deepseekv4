@@ -118,6 +118,16 @@ aclnnStatus aclnnGroupedMatmulSwigluQuantWeightNzV2GetWorkspaceSize(const aclTen
         auto storgeShape = w->GetStorageShape();
         auto viewShape = w->GetViewShape();
         aclTensor *weightNZ = const_cast<aclTensor *>(w);
+        auto storageShape = w->GetStorageShape();
+        auto groupListViewShape = groupList->GetViewShape();
+        auto expertNum = groupListViewShape[0];
+        auto weightScale0 = (*weightScale)[0];
+        auto weightScaleStorageShape = weightScale0->GetViewShape();
+        auto n = weightScaleStorageShape[1];
+        auto xViewShape = x->GetViewShape();
+        auto k = xViewShape[1];
+        storageShape = {expertNum, n / 64, k / 16, 16, 8};
+        w->SetStorageShape(storageShape);
         CHECK_COND((storgeShape.GetDimNum() == WEIGHT_NZ_DIM_LIMIT), ACLNN_ERR_PARAM_INVALID,
                    "aclnnGroupedMatmulSwigluQuantWeightNzV2, The dimnum of storageShape for second input (weight)"
                  "must be 5. \n But StorageShape got %s , and dimNum is %lu.",
