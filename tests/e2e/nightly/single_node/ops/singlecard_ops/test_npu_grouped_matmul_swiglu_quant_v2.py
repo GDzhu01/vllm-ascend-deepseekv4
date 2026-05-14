@@ -111,6 +111,8 @@ class TestNpuGroupedMatmulSwigluQuant(TestCase):
         output1_valid = output1[:groupList[-1]]
         print(f"{weight.storage().size()=}")
         weight_npu = torch_npu.npu_format_cast(weight.npu(), 29)
+        self.assertEqual(torch.ops._C_ascend.get_npu_storage_format(weight_npu), 29)
+        self.assertEqual(torch.ops._C_ascend.get_npu_storage_shape(weight_npu), [E, N // 64, K // 16, 16, 32])
         print(f"{weight_npu.size()=}")
         weight_npu_list=[weight_npu]
         output0_npu, output1_npu = torch.ops._C_ascend.grouped_matmul_swiglu_quant_v2(x.npu(), weight_npu_list, [weightScale.npu()], xScale.npu(), groupList.npu(),swiglu_limit=swiglu_limit)
