@@ -67,9 +67,9 @@ class AscendW8A8MXFP8DSDynamicLinearMethod(AscendW8A8MXFP8DynamicLinearMethod):
         layer.weight.data = layer.weight.data.transpose(0, 1)
         layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1)
         
-        # if layer.prefix.endswith('wo_a'):
-        #     layer.weight.data=layer.weight.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1).transpose(1, 2).contiguous()
-        #     layer.weight_scale.data = layer.weight_scale.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1, 2).transpose(1, 2).contiguous()
+        if layer.prefix.endswith('wo_a'):
+            layer.weight.data=layer.weight.data.T.reshape(self.n_local_groups, self.o_lora_rank, -1).transpose(1, 2).contiguous()
+            layer.weight_scale.data = layer.weight_scale.data.transpose(0, 1).reshape(self.n_local_groups, self.o_lora_rank, -1, 2).transpose(1, 2).contiguous()
 
 
 @register_scheme("FP8", "w4a8_moe")
