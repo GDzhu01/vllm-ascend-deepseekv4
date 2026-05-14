@@ -1235,6 +1235,26 @@ class NPUModelRunner(GPUModelRunner):
                         scheduler_output.num_common_prefix_blocks,
                     )
 
+                def _has_new_compressed_tokens() -> bool:
+                    if not self.use_compress or num_scheduled_tokens_compressed_list is None:
+                        return False
+                    for compressed_counts, kv_cache_group in zip(
+                        num_scheduled_tokens_compressed_list,
+                        self.kv_cache_config.kv_cache_groups,
+                    ):
+                        kv_cache_spec = kv_cache_group.kv_cache_spec
+                        if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
+                            kv_cache_spec = next(iter(kv_cache_spec.kv_cache_specs.values()))
+                        if getattr(kv_cache_spec, "compress_ratio", 1) > 1 and np.any(compressed_counts > 0):
+                            return True
+                    return False
+
+                force_eager_for_compressor_decode = (
+                    self.use_compress
+                    and not self.with_prefill
+                    and _has_new_compressed_tokens()
+                )
+
                 (
                     cudagraph_mode,
                     batch_desc,
@@ -1247,7 +1267,7 @@ class NPUModelRunner(GPUModelRunner):
                     num_scheduled_tokens_np=num_scheduled_tokens_np,
                     max_num_scheduled_tokens=max_num_scheduled_tokens,
                     use_cascade_attn=cascade_attn_prefix_lens is not None,
-                    force_eager=self.model_config.enforce_eager,
+                    force_eager=self.model_config.enforce_eager or force_eager_for_compressor_decode,
                     num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
                 )
 
@@ -2476,7 +2496,9 @@ class NPUModelRunner(GPUModelRunner):
             pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
             # check how to build dummy
             if self.use_compress:
-                self.positions.np.fill(127)
+                # Capture the common non-boundary compressed-decode graph
+                # without the compressor op. Boundary steps force eager.
+                self.positions.np.fill(0)
                 self.positions.copy_to_gpu()
             attn_metadata, _ = self._build_attention_metadata(
                 num_tokens=num_tokens_unpadded,
