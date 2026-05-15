@@ -233,6 +233,7 @@ struct RunInfo {
 
     uint32_t kStartIdx = 0;
     uint32_t dealKSize = 0;
+    uint32_t hStart = 0;
 
     uint32_t bEnd = 0;
     uint32_t sEnd = 0;

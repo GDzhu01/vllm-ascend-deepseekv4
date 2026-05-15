@@ -325,7 +325,6 @@ __aicore__ inline void CompressorBlockCube<COMP>::CopyOutMm1Res(const RunInfo &i
     uint64_t gmOffset = constInfo_.dIdx * constInfo_.dBaseSize + coffId * constInfo_.headDim + mStart * fixParams.dstStride + dbOffset;
     uint32_t kvOffset = (mDealSize + 15) / 16 * 16 * nStart;
     uint32_t scoreOffset = (mDealSize + 15) / 16 * 16 * ((nStart + constInfo_.dBaseSize) % (2 * constInfo_.dBaseSize));
-
     if (nStart < constInfo_.dBaseSize) {
         fixParams.nSize = min(constInfo_.dBaseSize - nStart, nDealSize);
         Fixpipe(kvMm1ResGm[gmOffset], cL0Tensor[kvOffset], fixParams);
@@ -352,12 +351,15 @@ __aicore__ inline void CompressorBlockCube<COMP>::ComputeMm1(const RunInfo &info
     uint32_t nCoff = (uint32_t)COMP::coff;
 
     // hSize为K_SIZE=512的倍数
-    uint32_t hStart = info.kStartIdx * info.dealKSize;
+    // uint32_t hStart = info.kStartIdx * info.dealKSize;
+    uint32_t hStart = info.hStart;
     uint32_t hSize = info.dealKSize;
     uint32_t hIdxStart = (constInfo_.aiCoreIdx % constInfo_.dBasicBlockNum) * K_L1_BASE; // 每组核内的h循环起始不同
     uint32_t kSize = K_L1_BASE;
+    
     for (uint32_t h = 0; h < hSize; h += kSize) {
-        uint32_t hIdx = (h + hIdxStart) % hSize; // h方向错位搬运
+        // uint32_t hIdx = (h + hIdxStart) % hSize; // h方向错位搬运
+        uint32_t hIdx = h;
         if (hIdx + K_L1_BASE > hSize) {
             kSize = hSize - hIdx;
         } else {
