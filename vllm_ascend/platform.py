@@ -439,8 +439,31 @@ class NPUPlatform(Platform):
             recompute_scheduler_config = RecomputeSchedulerConfig.initialize_from_config(vllm_config)
             vllm_config.scheduler_config = recompute_scheduler_config
 
+        model_uses_compressor = bool(
+            model_config is not None
+            and hasattr(getattr(model_config, "hf_config", None), "compress_ratios")
+        )
+        if model_uses_compressor and not ascend_config.recompute_scheduler_enable:
+            scheduler_cls = (
+                "vllm_ascend.core.scheduler_dynamic_batch.AsyncCompressorScheduler"
+                if vllm_config.scheduler_config.async_scheduling
+                else "vllm_ascend.core.scheduler_dynamic_batch.CompressorScheduler"
+            )
+            vllm_config.scheduler_config.scheduler_cls = scheduler_cls
+            vllm_config.scheduler_config.SLO_limits_for_dynamic_batch = (
+                ascend_config.SLO_limits_for_dynamic_batch
+            )
+            logger.info(
+                "Compressor-aware scheduler enabled for homogeneous "
+                "compressed decode batches: %s",
+                scheduler_cls,
+            )
+
         # Extend original scheduler_config to use SchedulerDynamicBatch.
-        if ascend_config.SLO_limits_for_dynamic_batch != -1:
+        if (
+            ascend_config.SLO_limits_for_dynamic_batch != -1
+            and not model_uses_compressor
+        ):
             vllm_config.scheduler_config.scheduler_cls = (
                 "vllm_ascend.core.scheduler_dynamic_batch.SchedulerDynamicBatch"
             )

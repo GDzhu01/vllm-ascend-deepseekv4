@@ -23,6 +23,7 @@ from vllm.distributed.kv_events import KVEventBatch
 from vllm.logger import logger
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.output import NewRequestData, SchedulerOutput
 from vllm.v1.core.sched.request_queue import SchedulingPolicy, create_request_queue
 from vllm.v1.core.sched.scheduler import Scheduler
@@ -30,6 +31,8 @@ from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputManager
+
+from vllm_ascend.core.compressor_schedule import CompressorScheduleGroup
 
 
 class BudgetRefiner:
@@ -185,6 +188,7 @@ class SchedulerDynamicBatch(Scheduler):
 
         # For logging.
         scheduled_timestamp = time.monotonic()
+        compressor_group = CompressorScheduleGroup(self.kv_cache_config)
 
         # First, schedule the RUNNING requests.
         req_index = 0
@@ -226,6 +230,11 @@ class SchedulerDynamicBatch(Scheduler):
                 # in v1 scheduler, we strictly follow the FCFS scheduling policy.
                 req_index += 1
                 break
+
+            compressor_key = compressor_group.get_key(request, num_new_tokens)
+            if not compressor_group.can_accept(compressor_key):
+                req_index += 1
+                continue
 
             while True:
                 new_blocks = self.kv_cache_manager.allocate_slots(
@@ -272,6 +281,7 @@ class SchedulerDynamicBatch(Scheduler):
             num_scheduled_tokens[request.request_id] = num_new_tokens
             token_budget -= num_new_tokens
             req_index += 1
+            compressor_group.accept(compressor_key)
 
             # Speculative decode related.
             if request.spec_token_ids:
@@ -418,6 +428,14 @@ class SchedulerDynamicBatch(Scheduler):
                             # The request cannot be scheduled.
                             break
 
+                compressor_key = compressor_group.get_key(
+                    request,
+                    num_new_tokens,
+                    num_computed_tokens,
+                )
+                if not compressor_group.can_accept(compressor_key):
+                    break
+
                 # Handles an edge case when P/D Disaggregation
                 # is used with Spec Decoding where an
                 # extra block gets allocated which
@@ -486,6 +504,7 @@ class SchedulerDynamicBatch(Scheduler):
                 req_to_new_blocks[request.request_id] = self.kv_cache_manager.get_blocks(request.request_id)
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
+                compressor_group.accept(compressor_key)
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
                 # Count the number of prefix cached tokens.
@@ -574,3 +593,11 @@ class SchedulerDynamicBatch(Scheduler):
 
         self._update_after_schedule(scheduler_output)
         return scheduler_output
+
+
+class CompressorScheduler(SchedulerDynamicBatch):
+    """SchedulerDynamicBatch with compressor-state homogeneous batching."""
+
+
+class AsyncCompressorScheduler(AsyncScheduler, CompressorScheduler):
+    pass
