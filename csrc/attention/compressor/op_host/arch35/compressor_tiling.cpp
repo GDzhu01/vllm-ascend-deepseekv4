@@ -957,11 +957,17 @@ ge::graphStatus CompressorTiling::CheckDtypeConsistency() const
     if (CheckDtypeConsistencyX(context_->wkv.desc, WKV_NAME) != ge::GRAPH_SUCCESS ||
         CheckDtypeConsistencyX(context_->wgate.desc, WGATE_NAME) != ge::GRAPH_SUCCESS ||
         CheckDtypeConsistencyX(context_->normWeight.desc, NORM_WEIGHT_NAME) != ge::GRAPH_SUCCESS ||
-        CheckDtypeConsistencyX(context_->ropeSin.desc, ROPE_SIN_NAME) != ge::GRAPH_SUCCESS ||
-        CheckDtypeConsistencyX(context_->ropeCos.desc, ROPE_COS_NAME) != ge::GRAPH_SUCCESS ||
         CheckDtypeConsistencyX(context_->cmpKv.desc, CMP_KV_NAME) != ge::GRAPH_SUCCESS) {
         return ge::GRAPH_FAILED;
     }
+    auto ropeSinDtype = context_->ropeSin.desc->GetDataType();
+    auto ropeCosDtype = context_->ropeCos.desc->GetDataType();
+    OP_CHECK_IF(ropeSinDtype != ropeCosDtype,
+                OP_LOGE(context_->opName,
+                        "rope_sin and rope_cos datatype should be the same, but got %s and %s",
+                        DataTypeToSerialString(ropeSinDtype).c_str(),
+                        DataTypeToSerialString(ropeCosDtype).c_str()),
+                return ge::GRAPH_FAILED);
     return ge::GRAPH_SUCCESS;
 }
 
