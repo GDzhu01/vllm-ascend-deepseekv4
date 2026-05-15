@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Optional, Tuple, Type, TypeVar
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torch_npu
 import vllm.envs as envs_vllm
@@ -24,12 +25,13 @@ from vllm_ascend.attention.attention_mask import AttentionMaskBuilder
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import (AscendCommonAttentionMetadata,
                                          split_decodes_and_prefills)
+from vllm_ascend.distributed.parallel_state import get_otp_group
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinearMethod
 from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream, extract_dsv4_layer_index, get_dsv4_compress_ratio, 
                                get_ascend_device_type, npu_stream_switch,
-                               olora_tp_enable)
+                               oproj_tp_enable)
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 
 if TYPE_CHECKING:
@@ -1231,8 +1233,36 @@ class AscendDSAImpl(DSAAttentionImpl):
 
         # o
         o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if olora_tp_enable():
-            o_proj_input = self.wo_a(o_proj_input)
+        if oproj_tp_enable():
+            oproj_group = get_otp_group()
+            oproj_tp_size = oproj_group.world_size
+            if self.n_local_groups % oproj_tp_size != 0:
+                raise ValueError(
+                    "n_local_groups must be divisible by "
+                    f"oproj_tensor_parallel_size, got {self.n_local_groups} "
+                    f"and {oproj_tp_size}.")
+
+            groups_per_oproj_rank = self.n_local_groups // oproj_tp_size
+            o_proj_input = o_proj_input.view(num_tokens, oproj_tp_size,
+                                             groups_per_oproj_rank, -1)
+            send = o_proj_input.transpose(1, 0).contiguous().view(-1)
+            recv = torch.empty_like(send)
+            dist.all_to_all_single(recv, send, group=oproj_group.device_group)
+            o_proj_input = recv.view(oproj_tp_size * num_tokens,
+                                     groups_per_oproj_rank, -1)
+            o_proj_input = torch_npu.npu_transpose_batchmatmul(
+                o_proj_input,
+                self.wo_a.weight,
+                bias=None,
+                scale=None,
+                perm_x1=(1, 0, 2),
+                perm_x2=(0, 1, 2),
+                perm_y=(1, 0, 2),
+                batch_split_factor=1)
+            o_proj_input = o_proj_input.reshape(oproj_tp_size * num_tokens,
+                                                -1)
+            o_proj_output = self.wo_b(o_proj_input)
+            output[...] = oproj_group.reduce_scatter(o_proj_output, dim=0)
         else:
             # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
             # o = torch.einsum("tgd,grd->tgr", o, wo_a)
@@ -1246,7 +1276,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 perm_y=(1, 0, 2),
                 batch_split_factor=1)
             o_proj_input = o_proj_input.reshape(num_tokens, -1)
-        output[...] = self.wo_b(o_proj_input)
+            output[...] = self.wo_b(o_proj_input)
 
         return output_padded
 

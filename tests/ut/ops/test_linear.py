@@ -10,6 +10,7 @@ from tests.ut.base import TestBase
 from vllm_ascend import ascend_config
 from vllm_ascend.distributed import parallel_state
 from vllm_ascend.ops.linear import (AscendMergedColumnParallelLinear,
+                                    AscendColumnParallelLinear,
                                     AscendReplicatedLinear,
                                     AscendRowParallelLinear,
                                     AscendUnquantizedLinearMethod)
@@ -123,6 +124,26 @@ class TestAscendRowParallelLinear(BaseLinearTest):
         input_tensor = torch.randn(16, 8)
         linear(input_tensor)
 
+    @patch("vllm_ascend.ops.linear_op.get_weight_prefetch_method",
+           return_value=MagicMock())
+    def test_dsv4_wo_b_oproj_tp(self, mock_get_weight_prefetch_method):
+
+        ascend_config._ASCEND_CONFIG = MagicMock()
+        ascend_config._ASCEND_CONFIG.recompute_scheduler_enable = False
+        finegrained_tp_config = ascend_config._ASCEND_CONFIG.finegrained_tp_config
+        finegrained_tp_config.oproj_tensor_parallel_size = 2
+        ascend_config._ASCEND_CONFIG.ascend_scheduler_config.enabled = False
+
+        linear = AscendRowParallelLinear(
+            input_size=16,
+            output_size=8,
+            prefix="wo_b",
+        )
+        self.assertEqual(linear.custom_op.comm_group, parallel_state._OTP)
+
+        input_tensor = torch.randn(16, 8)
+        linear(input_tensor)
+
 
 class TestAscendMergedColumnParallelLinear(BaseLinearTest):
 
@@ -139,6 +160,30 @@ class TestAscendMergedColumnParallelLinear(BaseLinearTest):
             prefix="gate_up_proj",
         )
         self.assertEqual(linear.custom_op.comm_group, parallel_state._MLP_TP)
+
+
+class TestAscendColumnParallelLinear(BaseLinearTest):
+
+    def test_dsv4_wo_a_oproj_tp_init(self):
+
+        config._current_vllm_config = MagicMock()
+        hf_config = config._current_vllm_config.model_config.hf_text_config
+        hf_config.o_groups = 4
+        hf_config.o_lora_rank = 2
+
+        ascend_config._ASCEND_CONFIG = MagicMock()
+        ascend_config._ASCEND_CONFIG.recompute_scheduler_enable = False
+        finegrained_tp_config = ascend_config._ASCEND_CONFIG.finegrained_tp_config
+        finegrained_tp_config.oproj_tensor_parallel_size = 2
+        ascend_config._ASCEND_CONFIG.ascend_scheduler_config.enabled = False
+
+        linear = AscendColumnParallelLinear(
+            input_size=8,
+            output_size=8,
+            prefix="wo_a",
+        )
+        self.assertEqual(linear.custom_op.comm_group, parallel_state._OTP)
+        self.assertEqual(linear.n_local_groups, 2)
 
 
 class TestAscendReplicatedLinear(BaseLinearTest):
