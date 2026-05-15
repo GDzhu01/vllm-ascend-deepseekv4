@@ -142,13 +142,19 @@ class ComplexExpRotaryEmbedding(nn.Module):
             _ROPE_STATE.registry_summary[config_key].add(grp)
 
         if config_key not in _ROPE_STATE.static_cache:
-            complex_cis = self.precompute_freqs_cis(rotary_dim,
-                                                    max_position_embeddings,
-                                                    max_position_embeddings,
-                                                    base, scaling_factor,
-                                                    beta_fast, beta_slow)
-            cos = complex_cis.real.repeat_interleave(2, dim=-1)
-            sin = complex_cis.imag.repeat_interleave(2, dim=-1)
+            inv_freq = self.precompute_freqs_cis(rotary_dim,
+                                                max_position_embeddings,
+                                                max_position_embeddings,
+                                                base, scaling_factor,
+                                                beta_fast, beta_slow)
+            t = torch.arange(
+                max_position_embeddings * scaling_factor,
+                device=current_platform.device_type,
+                dtype=torch.float32,
+            )
+            freqs = torch.einsum("i,j -> ij", t, inv_freq)
+            cos = freqs.real.repeat_interleave(2, dim=-1)
+            sin = freqs.imag.repeat_interleave(2, dim=-1)
 
             cos = cos.to(current_platform.device_type)
             sin = sin.to(current_platform.device_type)
@@ -182,36 +188,104 @@ class ComplexExpRotaryEmbedding(nn.Module):
     def precompute_freqs_cis(dim, seqlen, original_seq_len, base, factor,
                              beta_fast, beta_slow):
 
-        def find_correction_dim(num_rotations, dim, base, max_seq_len):
-            return (dim * math.log(max_seq_len /
-                                   (num_rotations * 2 * math.pi)) /
-                    (2 * math.log(base)))
+        # def find_correction_dim(num_rotations, dim, base, max_seq_len):
+        #     return (dim * math.log(max_seq_len /
+        #                            (num_rotations * 2 * math.pi)) /
+        #             (2 * math.log(base)))
 
-        def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
-            low = math.floor(
-                find_correction_dim(low_rot, dim, base, max_seq_len))
-            high = math.ceil(
-                find_correction_dim(high_rot, dim, base, max_seq_len))
-            return max(low, 0), min(high, dim - 1)
+        # def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
+        #     low = math.floor(
+        #         find_correction_dim(low_rot, dim, base, max_seq_len))
+        #     high = math.ceil(
+        #         find_correction_dim(high_rot, dim, base, max_seq_len))
+        #     return max(low, 0), min(high, dim - 1)
 
-        def linear_ramp_factor(min, max, dim):
-            if min == max:
-                max += 0.001
-            linear_func = (torch.arange(dim, dtype=torch.float32) -
-                           min) / (max - min)
-            return torch.clamp(linear_func, 0, 1)
+        # def linear_ramp_factor(min, max, dim):
+        #     if min == max:
+        #         max += 0.001
+        #     linear_func = (torch.arange(dim, dtype=torch.float32) -
+        #                    min) / (max - min)
+        #     return torch.clamp(linear_func, 0, 1)
 
-        freqs = 1.0 / (base
-                       **(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-        if original_seq_len > 0:
-            low, high = find_correction_range(beta_fast, beta_slow, dim, base,
-                                              original_seq_len)
-            smooth = 1 - linear_ramp_factor(low, high, dim // 2)
-            freqs = freqs / factor * (1 - smooth) + freqs * smooth
+        # freqs = 1.0 / (base
+        #                **(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        # if original_seq_len > 0:
+        #     low, high = find_correction_range(beta_fast, beta_slow, dim, base,
+        #                                       original_seq_len)
+        #     smooth = 1 - linear_ramp_factor(low, high, dim // 2)
+        #     freqs = freqs / factor * (1 - smooth) + freqs * smooth
 
-        t = torch.arange(seqlen)
-        freqs = torch.outer(t, freqs)
-        return torch.polar(torch.ones_like(freqs), freqs)
+        # t = torch.arange(seqlen)
+        # freqs = torch.outer(t, freqs)
+        # return torch.polar(torch.ones_like(freqs), freqs)
+    
+        def yarn_find_correction_dim(
+            num_rotations: int,
+            dim: int,
+            base: float = 10000,
+            max_position_embeddings: int = 2048,
+        ) -> float:
+            return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (
+                2 * math.log(base)
+            )
+
+
+        # Find dim range bounds based on rotations
+        def yarn_find_correction_range(
+            low_rot: int,
+            high_rot: int,
+            dim: int,
+            base: float = 10000,
+            max_position_embeddings: int = 2048,
+            truncate: bool = True,
+        ) -> tuple[float | int, float | int]:
+            low = yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings)
+            high = yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings)
+            if truncate:
+                low = math.floor(low)
+                high = math.ceil(high)
+            return max(low, 0), min(high, dim - 1)  # Clamp values just in case
+
+        def yarn_linear_ramp_mask(
+            low: float, high: float, dim: int, dtype: torch.dtype
+        ) -> torch.Tensor:
+            if low == high:
+                high += 0.001  # Prevent singularity
+
+            linear_func = (torch.arange(dim, dtype=dtype) - low) / (high - low)
+            ramp_func = torch.clamp(linear_func, 0, 1)
+            return ramp_func
+
+        # freqs = 1.0 / (base
+        #                **(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        # if original_seq_len > 0:
+        #     low, high = find_correction_range(beta_fast, beta_slow, dim, base,
+        #                                       original_seq_len)
+        #     smooth = 1 - linear_ramp_factor(low, high, dim // 2)
+        #     freqs = freqs / factor * (1 - smooth) + freqs * smooth
+
+        # t = torch.arange(seqlen)
+        # freqs = torch.outer(t, freqs)
+
+        pos_freqs = base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim)
+        inv_freq_extrapolation = 1.0 / pos_freqs
+        inv_freq_interpolation = 1.0 / (factor * pos_freqs)
+
+        low, high = yarn_find_correction_range(
+            beta_fast,
+            beta_slow,
+            dim,
+            base,
+            original_seq_len,
+        )
+        inv_freq_mask = (
+            1
+            - yarn_linear_ramp_mask(low, high, dim // 2, dtype=torch.float32)
+        ) * 1
+        inv_freq = (
+            inv_freq_interpolation * (1 - inv_freq_mask)
+            + inv_freq_extrapolation * inv_freq_mask)
+        return inv_freq
 
     def forward(
         self,
