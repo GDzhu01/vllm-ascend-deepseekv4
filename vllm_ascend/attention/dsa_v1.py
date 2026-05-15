@@ -1434,11 +1434,14 @@ class AscendDSAImpl(DSAAttentionImpl):
         sin = attn_metadata[0].sin[layer_name]
         num_tokens = o_proj_input.shape[0]
 
+        orig_dtype = o_proj_input.dtype
+        o_proj_fp32 = o_proj_input.float()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            o_proj_input.unsqueeze(1), cos, -sin,
+            o_proj_fp32.unsqueeze(1), cos, -sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        o_proj_input.copy_(o_proj_fp32.to(orig_dtype))
 
         # o
         o = o_proj_input.view(num_tokens, self.n_local_groups, -1)
@@ -1498,26 +1501,32 @@ class AscendDSAImpl(DSAAttentionImpl):
         q = self.q_norm_without_weight(q)
         # q = triton_q_rms(q, self.eps)
 
+        orig_dtype = q.dtype
+        q_fp32 = q.float()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1),
+            q_fp32.unsqueeze(1),
             cos,
             sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        q.copy_(q_fp32.to(orig_dtype))
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
         assert self.rope_head_dim is not None
         kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
+        orig_dtype = kv.dtype
+        kv_fp32 = kv.float()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            kv.unsqueeze(1),
+            kv_fp32.unsqueeze(1),
             cos,
             sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        kv.copy_(kv_fp32.to(orig_dtype))
 
         # swa exec kv
         if get_ascend_device_type() in {AscendDeviceType.A5}:
@@ -1784,13 +1793,16 @@ class AscendDSAImpl(DSAAttentionImpl):
         # q = triton_q_rms(q, self.eps)
         q = self.q_norm_without_weight(q)
 
+        orig_dtype = q.dtype
+        q_fp32 = q.float()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1),
+            q_fp32.unsqueeze(1),
             cos,
             sin,
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        q.copy_(q_fp32.to(orig_dtype))
 
         with npu_stream_switch(attention_calculation_stream(),
                                enabled=self.multistream_dsa_preprocess):
@@ -1804,13 +1816,16 @@ class AscendDSAImpl(DSAAttentionImpl):
             assert self.rope_head_dim is not None
             kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
+            orig_dtype = kv.dtype
+            kv_fp32 = kv.float()
             torch.ops._C_ascend.inplace_partial_rotary_mul(
-                kv.unsqueeze(1),
+                kv_fp32.unsqueeze(1),
                 cos,
                 sin,
                 rotary_mode="interleave",
                 partial_slice=[self.nope_head_dim, self.head_dim],
             )
+            kv.copy_(kv_fp32.to(orig_dtype))
 
             # swa exec kv
             if get_ascend_device_type() in {AscendDeviceType.A5}:
@@ -2054,8 +2069,10 @@ class AscendDSAImpl(DSAAttentionImpl):
             q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
 
+        orig_dtype = q.dtype
+        q_fp32 = q.float()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
-            q.unsqueeze(1),
+            q_fp32.unsqueeze(1),
             cos,
             sin,
             rotary_mode="interleave",
@@ -2064,6 +2081,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                 self.indexcom_head_dim
             ],
         )
+        q.copy_(q_fp32.to(orig_dtype))
 
         q = rotate_activation(q, indexer_kv_scale_metadata.hadamard)
         coff = 2 if self.compressor_overlap else 1
