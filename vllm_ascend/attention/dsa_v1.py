@@ -1543,8 +1543,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             torch_npu.npu_scatter_nd_update_(
                 swa_kv_cache,
                 swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
-        compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
-        compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
+        compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name].to(torch.bfloat16)
+        compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name].to(torch.bfloat16)
         if self.compress_ratio > 1:
             compress_topk_idxs = None
             if self.compress_ratio == 4:
@@ -1850,8 +1850,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             torch.npu.current_stream().wait_event(wait_attention_cal_event)
 
         if self.compress_ratio > 1:
-            compress_cos = compress_common_attn_metadata.decode.compress_cos[layer_name]
-            compress_sin = compress_common_attn_metadata.decode.compress_sin[layer_name]
+            compress_cos = compress_common_attn_metadata.decode.compress_cos[layer_name].to(torch.bfloat16)
+            compress_sin = compress_common_attn_metadata.decode.compress_sin[layer_name].to(torch.bfloat16)
             compress_topk_idxs = None
             if self.compress_ratio == 4:
                 compress_topk_idxs = self.indexer_select_qli(
