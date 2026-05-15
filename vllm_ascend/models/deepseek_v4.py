@@ -77,6 +77,73 @@ from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
 logger = init_logger(__name__)
+    
+import importlib
+import threading
+from dataclasses import dataclass
+
+import os
+
+def _env_is_true(name: str) -> bool:
+    return os.environ.get(name, "0").lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# 算子注册表（只判断"是否启用"）
+# ---------------------------------------------------------------------------
+@dataclass
+class CustomOpSpec:
+    name: str            # 逻辑名，例如 "hc_pre"
+    env_var: str         # 控制开关的环境变量名
+    import_module: str   # 触发 TORCH_LIBRARY 注册的模块名
+
+
+_op_registry: dict[str, CustomOpSpec] = {}
+_enabled_cache: dict[str, bool] = {}
+
+
+def register_custom_op(spec: CustomOpSpec):
+    _op_registry[spec.name] = spec
+
+
+def _check_enabled(spec: CustomOpSpec) -> bool:
+    if not _env_is_true(spec.env_var):
+        print(f"[custom_op] '{spec.name}': {spec.env_var} not set, "
+                  f"use default implementation.")
+        return False
+    try:
+        importlib.import_module(spec.import_module)
+    except ImportError as e:
+        print(f"[custom_op] '{spec.name}': failed to import "
+                  f"'{spec.import_module}' ({e}); use default implementation.")
+        return False
+    print(f"[custom_op] '{spec.name}': enabled.")
+    return True
+
+
+def is_custom_op_enabled(name: str) -> bool:
+    """业务代码用这个函数决定走自定义路径还是默认路径。"""
+    if name in _enabled_cache:
+        return _enabled_cache[name]
+
+    if name not in _op_registry:
+        raise KeyError(f"custom op '{name}' not registered")
+    _enabled_cache[name] = _check_enabled(_op_registry[name])
+    return _enabled_cache[name]
+
+
+def reset_custom_op_cache():
+    _enabled_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# 注册所有算子（集中维护）
+# ---------------------------------------------------------------------------
+register_custom_op(CustomOpSpec(
+    name="hc_pre",
+    env_var="USE_CUSTOM_HC_PRE",
+    import_module="custom_ops",
+))
 
 
 def hadamard_transform_ref(x: torch.Tensor, scale=1.0):
@@ -788,13 +855,31 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.hc_attn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
         self.hc_ffn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
 
+        # 检测变量必须放到init中，否则在compile时会出问题，出cuda break
+        self.is_custom_hc_pre_enabled = is_custom_op_enabled("hc_pre")
+        if self.is_custom_hc_pre_enabled:
+            print("Using custom hc_pre implementation.")
+        else:
+            print("Using default hc_pre implementation.")
+
+
+
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor,
                hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        y = torch.ops._C_ascend.npu_hc_pre(x, hc_fn, hc_scale, hc_base,
-                                           self.hc_mult,
-                                           self.hc_sinkhorn_iters,
-                                           self.norm_eps, self.hc_eps)
-        return y
+        if self.is_custom_hc_pre_enabled:
+            return torch.ops.custom.npu_hc_pre(
+                x, hc_fn, hc_scale, hc_base,
+                hc_mult=self.hc_mult,
+                hc_sinkhorn_iters=self.hc_sinkhorn_iters,
+                norm_eps=self.norm_eps,
+                hc_eps=self.hc_eps,
+            )
+        # 默认：原始算子
+        return torch.ops._C_ascend.npu_hc_pre(
+            x, hc_fn, hc_scale, hc_base,
+            self.hc_mult, self.hc_sinkhorn_iters,
+            self.norm_eps, self.hc_eps,
+        )
 
     def hc_post(self, x: torch.Tensor, residual: torch.Tensor,
                 post: torch.Tensor, comb: torch.Tensor):
@@ -838,6 +923,8 @@ class DeepseekV4Model(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
+
+        print('This is version 4 of DeepSeek!')
 
         config = vllm_config.model_config.hf_config
         quant_config = vllm_config.quant_config
@@ -1004,6 +1091,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
+        print('This is Ascend DeepSeek V4 for Causal LM!')
         config = vllm_config.model_config.hf_config
         quant_config = vllm_config.quant_config
         self.config = config
