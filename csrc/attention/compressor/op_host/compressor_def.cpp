@@ -54,12 +54,12 @@ public:
             .AutoContiguous();
         this->Input("rope_sin")
             .ParamType(REQUIRED)
-            .DataType({ge::DT_BF16, ge::DT_FLOAT16, ge::DT_FLOAT})
+            .DataType({ge::DT_BF16, ge::DT_FLOAT16})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         this->Input("rope_cos")
             .ParamType(REQUIRED)
-            .DataType({ge::DT_BF16, ge::DT_FLOAT16, ge::DT_FLOAT})
+            .DataType({ge::DT_BF16, ge::DT_FLOAT16})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         this->Input("state_block_table")

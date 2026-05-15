@@ -31,7 +31,7 @@ using namespace Compressor;
         op.Process();                                                                                                  \
     } while (0)
 
-template<uint8_t XLayout, uint8_t XDType, uint8_t Coff, uint8_t RotaryMode, uint8_t RopeDtype, uint8_t CacheMode, uint8_t TemplateId>
+template<uint8_t XLayout, uint8_t XDType, uint8_t Coff, uint8_t RotaryMode, uint8_t CacheMode, uint8_t TemplateId>
 __global__ __aicore__ void compressor(
     __gm__ uint8_t *x,
     __gm__ uint8_t *wKv,
