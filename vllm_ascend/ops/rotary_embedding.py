@@ -73,8 +73,8 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype, devi
 
     if model_config.use_mla:
         rope_dim = model_config.hf_text_config.qk_rope_head_dim
-        _cos_mla = torch.ones(max_num_batched_tokens, 1, 1, rope_dim, dtype=dtype, device=device)
-        _sin_mla = torch.zeros(max_num_batched_tokens, 1, 1, rope_dim, dtype=dtype, device=device)
+        _cos_mla = torch.ones(max_num_batched_tokens, 1, 1, rope_dim, dtype=torch.float32, device=device)
+        _sin_mla = torch.zeros(max_num_batched_tokens, 1, 1, rope_dim, dtype=torch.float32, device=device)
     elif not is_vl_model(vllm_config) and has_rope(vllm_config):
         rope_dim = model_config.get_head_size()
         # For models using partial rope like Qwen3-Next.
@@ -438,9 +438,7 @@ class AscendDeepseekScalingRotaryEmbedding(DeepseekScalingRotaryEmbedding):
         freqs = torch.outer(t, inv_freq)
         cos_cached = torch.cat([freqs, freqs], dim=-1).cos() * self.mscale
         sin_cached = torch.cat([freqs, freqs], dim=-1).sin() * self.mscale
-        cos_cached = cos_cached.to(dtype)
-        sin_cached = sin_cached.to(dtype)
-        cache = torch.cat([freqs.cos() * self.mscale, freqs.sin() * self.mscale], dim=-1).to(dtype)
+        cache = torch.cat([freqs.cos() * self.mscale, freqs.sin() * self.mscale], dim=-1)
         self.register_buffer("cos_sin_cache", cache, persistent=False)
         self.register_buffer("cos_cached", cos_cached, persistent=False)
         self.register_buffer("sin_cached", sin_cached, persistent=False)
