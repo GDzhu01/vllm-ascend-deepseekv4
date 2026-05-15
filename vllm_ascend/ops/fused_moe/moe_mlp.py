@@ -27,6 +27,7 @@ from vllm_ascend.device.mxfp_compat import (
 )
 from vllm_ascend.ops.activation import AscendSwigluOAIAndMul
 from vllm_ascend.ops.fused_moe.moe_runtime_args import MoEMlpComputeInput
+from vllm_ascend.quantization.quant_type import QuantType
 from vllm_ascend.utils import (
     dispose_tensor,
     enable_custom_op,
@@ -102,6 +103,7 @@ def quant_apply_mlp(
     per_token_scale_type: torch.dtype | None = None,
     use_bf16: bool = True,
     swiglu_limit: int = 0,
+    quant_type: QuantType | None = None,
 ) -> torch.Tensor:
     input_hidden_dtype = hidden_states.dtype
     use_gmm_swiglu_quant_fusion = use_mxfp_quant or (fusion and not dynamic_eplb)
@@ -250,7 +252,19 @@ def quant_apply_mlp(
             # TODO w4a8 scene: dynamic acquisition of dtype in the future
             _output_dtype = torch.bfloat16
 
-        if _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
+        if quant_type == QuantType.W4A8 and enable_custom_op():
+            hidden_states, swiglu_out_scale = torch.ops._C_ascend.grouped_matmul_swiglu_quant_v2(
+                x=hidden_states,
+                weight=w1,
+                weight_scale=w1_scale if isinstance(w1_scale, list) else [w1_scale],
+                x_scale=pertoken_scale,
+                group_list=group_list,
+                weight_assist_matrix=bias1,
+                dequant_mode=0,
+                group_list_type=group_list_type,
+                swiglu_limit=swiglu_limit,
+            )
+        elif _custom_gmm_swiglu_enabled(fusion, dynamic_eplb) and not use_mxfp_quant:
             # gmm1: gate_up_proj & act_fn: swiglu
             hidden_states, swiglu_out_scale, _ = torch.ops._C_ascend.grouped_matmul_swiglu_quant_weight_nz_tensor_list(
                 x=hidden_states,
@@ -448,4 +462,5 @@ def unified_apply_mlp(*, mlp_compute_input: MoEMlpComputeInput) -> torch.Tensor:
         per_token_scale_type=per_token_scale_type,
         use_bf16=use_bf16,
         swiglu_limit=swiglu_limit,
+        quant_type=mlp_compute_input.quant.quant_type,
     )

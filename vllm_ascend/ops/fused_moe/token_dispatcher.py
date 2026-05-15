@@ -40,6 +40,7 @@ from vllm_ascend.ops.fused_moe.moe_runtime_args import (
     MoETokenDispatchOutput,
     TMoECombineMetadata,
 )
+from vllm_ascend.quantization.quant_type import QuantType
 from vllm_ascend.utils import (
     AscendDeviceType,
     get_ascend_device_type,
@@ -158,6 +159,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher[MoEMC2CombineMetadata]):
         else:
             quant_mode = 0
         self.moe_expert_num = len(expert_map) + global_redundant_expert_num
+        expert_token_nums_type = 1 if token_dispatch_input.quant.quant_type == QuantType.W4A8 else 0
         kwargs_mc2 = {
             "x": hidden_states,
             "expert_ids": topk_ids,
@@ -165,7 +167,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher[MoEMC2CombineMetadata]):
             "shared_expert_rank_num": 0,
             "moe_expert_num": self.moe_expert_num,
             "global_bs": self.global_bs,
-            "expert_token_nums_type": 0,
+            "expert_token_nums_type": expert_token_nums_type,
         }
         if self.global_bs == 0:
             kwargs_mc2["x_active_mask"] = token_dispatch_input.routing.mc2_mask
@@ -226,7 +228,7 @@ class TokenDispatcherWithMC2(MoETokenDispatcher[MoEMC2CombineMetadata]):
             expand_scales,
         ) = output[0:7]
 
-        group_list_type = 0
+        group_list_type = kwargs_mc2["expert_token_nums_type"]
         return MoETokenDispatchOutput(
             hidden_states=expand_x,
             dynamic_scale=dynamic_scale,

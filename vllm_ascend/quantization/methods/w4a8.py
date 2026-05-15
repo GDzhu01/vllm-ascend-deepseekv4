@@ -554,6 +554,8 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
 
         self.update_bias(layer, w13_bias, w2_bias)
 
+        if self.is_per_channel_weight:
+            layer.w13_weight_scale.data = layer.w13_weight_scale.data.squeeze(1)
         layer.w13_weight.data = maybe_trans_nz(layer.w13_weight.data)
         layer.w2_weight.data = maybe_trans_nz(layer.w2_weight.data)
 

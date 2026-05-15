@@ -308,7 +308,6 @@ protected:
     virtual aclnnStatus CovertDataContiguous()
     {
         aclTensorList *emptyWeightAssistMatrixList = nullptr;
-        CheckOptionalTensorListEmpty(gmmDsqParams_.weightAssistMatrix);
         CreateEmptyTensor(aclDataType::ACL_FLOAT, gmmDsqParams_.weightAssistMatrix,
             emptyWeightAssistMatrixList);
 
