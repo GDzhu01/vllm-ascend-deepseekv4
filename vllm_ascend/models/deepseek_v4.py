@@ -857,10 +857,6 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         # 检测变量必须放到init中，否则在compile时会出问题，出cuda break
         self.is_custom_hc_pre_enabled = is_custom_op_enabled("hc_pre")
-        if self.is_custom_hc_pre_enabled:
-            print("Using custom hc_pre implementation.")
-        else:
-            print("Using default hc_pre implementation.")
 
 
 

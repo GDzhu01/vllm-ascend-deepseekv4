@@ -1174,7 +1174,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_stream = torch.npu.Stream()
         else:
             self.compressor_prefetch = False
-        print(f"Compressor prefetch: {self.compressor_prefetch}")
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
