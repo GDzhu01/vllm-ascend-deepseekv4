@@ -31,6 +31,7 @@ from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream, e
                                get_ascend_device_type, npu_stream_switch,
                                olora_tp_enable)
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
+import os
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -1142,6 +1143,14 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_norm = self.compressor.norm
             self.compressor_norm_eps = self.compressor.norm_eps
 
+        
+        if os.environ.get("USE_COMPRESSOR_PREFETCH", "0").lower() in ("1", "true", "yes", "on"):
+            self.compressor_prefetch = True
+            self.compressor_stream = torch.npu.Stream()
+        else:
+            self.compressor_prefetch = False
+        print(f"Compressor prefetch: {self.compressor_prefetch}")
+
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
@@ -1296,6 +1305,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
+        
         # win kv & tok_dis
         kv = self.wkv(hidden_states)
         kv = self.kv_norm(kv)
@@ -1316,6 +1326,21 @@ class AscendDSAImpl(DSAAttentionImpl):
             swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
+
+        if self.compressor_prefetch and self.compress_ratio > 1:
+            # 用 qr（或 q）作为 dependency,prefetch 与后续 RoPE / wkv / scatter 并行
+            with torch.npu.stream(self.compressor_stream):
+                torch_npu.npu_prefetch(
+                    self.compressor_wkv.weight,
+                    qr,                                      # 锚点:在 qr 产出后开始预取
+                    self.compressor_wkv.weight.numel() *
+                    self.compressor_wkv.weight.element_size(),
+                    0,                                       # offset
+                )
+                torch_npu.npu_prefetch(self.compressor_wgate.weight, qr,
+                                self.compressor_wgate.weight.numel() *
+                                self.compressor_wgate.weight.element_size())
+
         if self.compress_ratio > 1:
             compress_topk_idxs = None
             if self.compress_ratio == 4:
@@ -1527,6 +1552,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             compress_sin = compress_common_attn_metadata.decode.compress_sin[layer_name]
             compress_topk_idxs = None
             if self.compress_ratio == 4:
+                # 注意:indexer_select_qli 内部已经对 self.compressor_wkv/wgate/norm
+                # 发过 prefetch(在其内部 indexcom_* compressor 之后、返回之前),
+                # 这里不再重复 prefetch,避免浪费 prefetch 槽位。
                 compress_topk_idxs = self.indexer_select_qli(
                     x=hidden_states,
                     qr=qr,
@@ -1540,6 +1568,22 @@ class AscendDSAImpl(DSAAttentionImpl):
                     actual_seq_lengths_key=actual_seq_lengths_key,
                     with_prefill=False,
                     qr_pertoken_scale=qr_pertoken_scale)
+            else:
+                if self.compressor_prefetch:
+                    # ratio == 128 等不走 indexer_select_qli 的分支:
+                    # 在此处为紧接其后的主 compressor 发 prefetch。
+                    # 此时 wkv / swa scatter 已结束(已 wait_event),L2 干净;
+                    # 后续只剩 dict 查询 + coff 赋值等轻量操作,不会再冲刷 L2,
+                    # 能保证权重在 compressor kernel 启动时驻留在 L2 中。
+                    w_cwkv  = self.compressor_wkv.weight
+                    w_cgate = self.compressor_wgate.weight
+                    w_cnorm = self.compressor_norm.weight
+                    torch_npu.npu_prefetch(w_cwkv,  hidden_states,
+                                        w_cwkv.numel()  * w_cwkv.element_size())
+                    torch_npu.npu_prefetch(w_cgate, hidden_states,
+                                        w_cgate.numel() * w_cgate.element_size())
+                    torch_npu.npu_prefetch(w_cnorm, hidden_states,
+                                        w_cnorm.numel() * w_cnorm.element_size())
 
             coff = 2 if self.compressor_overlap else 1
 
@@ -1659,6 +1703,24 @@ class AscendDSAImpl(DSAAttentionImpl):
         else:
             q = self.inderxer_wq_b(qr)
         q = q.view(-1, self.indexer_heads, self.indexcom_head_dim)  # [T, N, D]
+
+        if self.compressor_prefetch:
+            # ================================================================
+            # Prefetch:把后面 compressor 要用的权重提前搬进 L2。
+            # 位置选择理由:
+            #   - wq_b 的 MatMul 已完成,它对 L2 的抢占已结束,不会立刻把我们挤掉;
+            #   - 后面的 partial_rotary_mul + rotate_activation + block_table
+            #     选择,作用在 q 上,不碰 indexcom_* 权重,形成干净的 overlap 窗口;
+            #   - 搬完的时刻刚好接近 compressor 启动时刻,L2 命中率最高。
+            # 依赖锚点用 q(已产出,确保合法);搬运起点由本行位置决定。
+            # ap e/ norm 很小,放不放都行;这里一起搬,代价可忽略。
+            # ================================================================
+            w_cwkv  = self.indexcom_wkv.weight
+            w_cgate = self.indexcom_wgate.weight
+            w_cnorm = self.indexcom_norm.weight
+            torch_npu.npu_prefetch(w_cwkv,  q, w_cwkv.numel()  * w_cwkv.element_size())
+            torch_npu.npu_prefetch(w_cgate, q, w_cgate.numel() * w_cgate.element_size())
+            torch_npu.npu_prefetch(w_cnorm, q, w_cnorm.numel() * w_cnorm.element_size())
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
