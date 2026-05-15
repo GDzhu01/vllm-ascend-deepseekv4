@@ -638,6 +638,14 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         return shared_gate_up
 
     def _shared_experts_part2(self, hidden_states: torch.Tensor, shared_gate_up: torch.Tensor):
+
+        gate = shared_gate_up[:, :shared_gate_up.shape[-1] // 2]
+        up = shared_gate_up[:, shared_gate_up.shape[-1] // 2:]
+        up = torch.clamp(up, min=-10.0, max=10.0)
+        gate = torch.clamp(gate, max=10.0)
+
+        shared_gate_up[:, :shared_gate_up.shape[-1] // 2] = gate
+        shared_gate_up[:, shared_gate_up.shape[-1] // 2:] = up
         shared_act = self._shared_experts.act_fn(shared_gate_up)  # type: ignore
         shared_out, _ = self._shared_experts.down_proj(shared_act)  # type: ignore
 
