@@ -78,6 +78,12 @@ enum class X_DTYPE : std::uint8_t {
     FP16 = static_cast<std::uint8_t>(1)
 };
 
+enum class ROPE_DTYPE : std::uint8_t {
+    BF16 = static_cast<std::uint8_t>(0),
+    FP16 = static_cast<std::uint8_t>(1),
+    FP32 = static_cast<std::uint8_t>(2)
+};
+
 enum class COFF : std::uint8_t {
     DISABLE = static_cast<std::uint8_t>(1),
     OVERLAP = static_cast<std::uint8_t>(2)
@@ -99,12 +105,13 @@ enum class TEMPLATE_ID : uint8_t {
     PERF = 2
 };
 
-template <X_LAYOUT X_L, X_DTYPE X_T, COFF C, ROTARY_MODE Rotary_Mode, typename... Args>
+template <X_LAYOUT X_L, X_DTYPE X_T, COFF C, ROTARY_MODE Rotary_Mode, ROPE_DTYPE ROPE_T, typename... Args>
 struct COMPType {
     static constexpr X_LAYOUT xLayout = X_L;
     static constexpr X_DTYPE xDtype = X_T;
     static constexpr COFF coff = C;
     static constexpr ROTARY_MODE rotaryMode = Rotary_Mode;
+    static constexpr ROPE_DTYPE ropeDtype = ROPE_T;
 };
 
 struct ConstInfo {

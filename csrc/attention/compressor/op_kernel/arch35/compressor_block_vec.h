@@ -43,6 +43,8 @@ public:
     // 中间计算数据类型为float，高精度模式
     using T = float;
     using X_T = typename AscendC::Conditional<X_DTYPE, bfloat16_t, half>::type;
+    using ROPE_T = typename AscendC::Conditional<COMP::ropeDtype == ROPE_DTYPE::FP16, half,
+                     typename AscendC::Conditional<COMP::ropeDtype == ROPE_DTYPE::FP32, float, bfloat16_t>::type>::type;
 
     __aicore__ inline CompressorBlockVector(){};
     // =================================设置参数=================================
@@ -200,8 +202,8 @@ private:
     GlobalTensor<T> stateCacheGm_;
     GlobalTensor<T> apeGm_;
     GlobalTensor<X_T> normWeightGm_;
-    GlobalTensor<X_T> ropeSinGm_;
-    GlobalTensor<X_T> ropeCosGm_;
+    GlobalTensor<ROPE_T> ropeSinGm_;
+    GlobalTensor<ROPE_T> ropeCosGm_;
     GlobalTensor<X_T> cmpKvOutGm_;
 
     // ================================Local Buffer区====================================
@@ -245,8 +247,8 @@ __aicore__ inline void CompressorBlockVector<COMP>::Init(__gm__ uint8_t *x, __gm
     stateCacheGm_.SetGlobalBuffer((__gm__ T *)stateCache);
     apeGm_.SetGlobalBuffer((__gm__ T *)ape);
     normWeightGm_.SetGlobalBuffer((__gm__ X_T *)normWeight);
-    ropeSinGm_.SetGlobalBuffer((__gm__ X_T *)ropeSin);
-    ropeCosGm_.SetGlobalBuffer((__gm__ X_T *)ropeCos);
+    ropeSinGm_.SetGlobalBuffer((__gm__ ROPE_T *)ropeSin);
+    ropeCosGm_.SetGlobalBuffer((__gm__ ROPE_T *)ropeCos);
     cmpKvOutGm_.SetGlobalBuffer((__gm__ X_T *)cmpKvOut);
     isExistSeqUsed_ = (seqUsed != nullptr);
     isExistStartPos_ = (startPos != nullptr);
@@ -1330,14 +1332,14 @@ __aicore__ inline void CompressorBlockVector<COMP>::CalRope(const LocalTensor<X_
             uint64_t SinCosOffset = sliceInfo.padScIdx * constInfo_.ropeHeadDim;
 
             // sin与cos各占一半, 实际分别最多只会用8K,总占用16K
-            LocalTensor<X_T> cosUb = inputQue2.AllocTensor<X_T>();
-            LocalTensor<X_T> sinUb = cosUb[BUFFER_SIZE_BYTE_8K / sizeof(X_T)];
+            LocalTensor<ROPE_T> cosUb = inputQue2.AllocTensor<ROPE_T>();
+            LocalTensor<ROPE_T> sinUb = cosUb[BUFFER_SIZE_BYTE_8K / sizeof(ROPE_T)];
             DataCopy(cosUb, ropeCosGm_[SinCosOffset], computeSize);
             DataCopy(sinUb, ropeSinGm_[SinCosOffset], computeSize);
             inputQue2.EnQue(sinUb);
-            inputQue2.DeQue<X_T>();
+            inputQue2.DeQue<ROPE_T>();
 
-            RopeVF<COMP::rotaryMode>(sinUb, cosUb, normResUb[sliceInfo.loopDealedScCnt * constInfo_.headDim],
+            RopeVF<COMP::rotaryMode, T, ROPE_T, X_T>(sinUb, cosUb, normResUb[sliceInfo.loopDealedScCnt * constInfo_.headDim],
                                      outputUb[sliceInfo.loopDealedScCnt * constInfo_.headDim], sliceInfo.curDealScNum,
                                      constInfo_.ropeHeadDim, constInfo_.headDim,
                                      constInfo_.headDim - constInfo_.ropeHeadDim);

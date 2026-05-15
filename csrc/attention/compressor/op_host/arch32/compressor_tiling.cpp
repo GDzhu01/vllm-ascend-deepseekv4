@@ -340,6 +340,15 @@ ge::graphStatus CompressorTiling::GenTilingKey() const
     } else if (xDtype == ge::DT_FLOAT16) {
         dtype = 1;
     }
+    auto ropeDtypeVal = context_->ropeSin.desc->GetDataType();
+    uint8_t ropeDtype = 0;
+    if (ropeDtypeVal == ge::DT_BF16) {
+        ropeDtype = 0;
+    } else if (ropeDtypeVal == ge::DT_FLOAT16) {
+        ropeDtype = 1;
+    } else if (ropeDtypeVal == ge::DT_FLOAT) {
+        ropeDtype = 2;
+    }
     auto xDimNum = context_->x.shape->GetStorageShape().GetDimNum();
     if (xDimNum == COMPRESSOR_DIM_NUM_3) {
         layout = 0;
@@ -352,6 +361,7 @@ ge::graphStatus CompressorTiling::GenTilingKey() const
         dtype,
         coff,
         rotaryMode,
+        ropeDtype,
         cacheMode,
         templateId
     );
