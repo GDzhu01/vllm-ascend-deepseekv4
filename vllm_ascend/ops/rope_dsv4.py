@@ -153,8 +153,8 @@ class ComplexExpRotaryEmbedding(nn.Module):
                 dtype=torch.float32,
             )
             freqs = torch.einsum("i,j -> ij", t, inv_freq)
-            cos = freqs.real.repeat_interleave(2, dim=-1)
-            sin = freqs.imag.repeat_interleave(2, dim=-1)
+            cos = freqs.cos().repeat_interleave(2, dim=-1)
+            sin = freqs.sin().repeat_interleave(2, dim=-1)
 
             cos = cos.to(current_platform.device_type)
             sin = sin.to(current_platform.device_type)
