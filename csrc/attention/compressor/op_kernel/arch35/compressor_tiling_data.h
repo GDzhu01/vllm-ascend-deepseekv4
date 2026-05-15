@@ -18,7 +18,7 @@
 #include <cstdint>
 #include "kernel_tiling/kernel_tiling.h"
 
-const uint32_t CMP_MAX_AIC_CORE_NUM = 32;
+const uint32_t CMP_MAX_AIC_CORE_NUM = 36;
 
 namespace optiling {
     struct CompressorSplitCoreParams {
