@@ -376,10 +376,7 @@ class AscendW4A8DynamicFusedMoEMethod(AscendMoEScheme):
         # to avoid accumulating too much tokens on a single rank.
         # currently it is only activated when doing profile runs.
         if enable_force_load_balance:
-            random_matrix = torch.rand(
-                topk_ids.size(0), global_num_experts - global_redundant_expert_num, device=topk_ids.device
-            )
-            topk_ids = torch.argsort(random_matrix, dim=1)[:, : topk_ids.size(1)].to(topk_ids.dtype)
+            topk_ids = layer.force_load_balance_routed_topk_ids[: topk_ids.shape[0]]
 
         topk_weights = topk_weights.to(x.dtype)
 

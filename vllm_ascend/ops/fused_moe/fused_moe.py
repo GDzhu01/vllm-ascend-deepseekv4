@@ -164,8 +164,7 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
         # to avoid accumulating too much tokens on a single rank.
         # currently it is only activated when doing profile runs.
         if enable_force_load_balance:
-            random_matrix = torch.rand(topk_ids.size(0), global_num_experts, device=topk_ids.device)
-            topk_ids = torch.argsort(random_matrix, dim=1)[:, : topk_ids.size(1)].to(topk_ids.dtype)
+            topk_ids = layer.force_load_balance_topk_ids[: topk_ids.shape[0]]
 
         moe_comm_method = _EXTRA_CTX.moe_comm_method
         # NOTE: In the MoECommType.FUSED_MC2 branch, we wrap weights (w1, w2) into lists
@@ -302,6 +301,7 @@ class AscendMoERunner(DefaultMoERunner):
 class AscendFusedMoE(FusedMoE):
     moe_counter = -1
     gate_stream: torch.npu.Stream | None = None
+    force_load_balance_ids_cache: dict[tuple[int, int, int, int], torch.Tensor] = {}
 
     def __init__(self, *args, **kwargs):
         _ = kwargs.pop('hash') if 'hash' in kwargs else None
@@ -380,6 +380,7 @@ class AscendFusedMoE(FusedMoE):
         self.moe_config.num_experts = self.global_num_experts
         self.moe_config.num_local_experts = self.local_num_experts
         self.moe_config.global_redundant_expert_num = self.global_redundant_expert_num
+        self._init_force_load_balance_ids()
         # TODO(qcs): check the default value of ops.
         self.swiglu_limit= getattr(self.vllm_config.model_config.hf_config, "swiglu_limit", 1000000)
         moe_quant_params = {
@@ -400,6 +401,25 @@ class AscendFusedMoE(FusedMoE):
         setup_moe_comm_method(self.moe_config)
         self.quant_type = self._get_quant_type()
         self.runner = self._init_runner()
+
+    def _get_force_load_balance_ids(self, num_experts: int) -> torch.Tensor:
+        max_num_tokens = self.vllm_config.scheduler_config.max_num_batched_tokens
+        max_num_tokens *= max(getattr(self.moe_config, "dp_size", 1), getattr(self.moe_config, "ep_size", 1))
+        max_num_tokens *= getattr(self.moe_config, "pcp_size", 1)
+        device_id = torch.npu.current_device()
+        cache_key = (device_id, max_num_tokens, self.top_k, num_experts)
+        cached_ids = AscendFusedMoE.force_load_balance_ids_cache.get(cache_key)
+        if cached_ids is None:
+            cached_ids = torch.arange(max_num_tokens * self.top_k, device=f"npu:{device_id}", dtype=torch.int32)
+            cached_ids.remainder_(num_experts)
+            cached_ids = cached_ids.view(max_num_tokens, self.top_k)
+            AscendFusedMoE.force_load_balance_ids_cache[cache_key] = cached_ids
+        return cached_ids
+
+    def _init_force_load_balance_ids(self):
+        self.force_load_balance_topk_ids = self._get_force_load_balance_ids(self.global_num_experts)
+        routed_num_experts = self.global_num_experts - self.global_redundant_expert_num
+        self.force_load_balance_routed_topk_ids = self._get_force_load_balance_ids(routed_num_experts)
 
     def _init_runner(self):
         # Storing the runner in the FusedMoE is an intermediate state, eventually
