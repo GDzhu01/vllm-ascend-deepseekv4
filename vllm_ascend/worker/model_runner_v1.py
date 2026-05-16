@@ -238,6 +238,38 @@ class ExecuteModelState(NamedTuple):
     batch_desc: BatchDescriptor
 
 
+@dataclass(frozen=True)
+class AscendBatchDescriptor:
+    """Ascend graph key with optional Compressor decode state.
+
+    vLLM's BatchDescriptor only differentiates shape/LoRA state. Compressor
+    decode changes the captured operator path for the same shape, so the graph
+    key needs one more static dimension when a compressed boundary is present.
+    """
+
+    num_tokens: int
+    num_reqs: int | None = None
+    uniform: bool = False
+    has_lora: bool = False
+    num_active_loras: int = 0
+    compressor_decode_key: tuple[int, ...] | None = None
+
+    @classmethod
+    def from_batch_descriptor(
+        cls,
+        batch_desc: BatchDescriptor,
+        compressor_decode_key: tuple[int, ...],
+    ) -> "AscendBatchDescriptor":
+        return cls(
+            num_tokens=batch_desc.num_tokens,
+            num_reqs=batch_desc.num_reqs,
+            uniform=batch_desc.uniform,
+            has_lora=batch_desc.has_lora,
+            num_active_loras=batch_desc.num_active_loras,
+            compressor_decode_key=compressor_decode_key,
+        )
+
+
 class NPUModelRunner(GPUModelRunner):
     def __init__(self, vllm_config: VllmConfig, device: torch.device):
         # TODO(qcs): These manual pad and unpad for GPUModelRunner are
@@ -461,6 +493,88 @@ class NPUModelRunner(GPUModelRunner):
     @property
     def use_cp(self) -> bool:
         return self.pcp_size * self.dcp_size > 1
+
+    def _iter_compress_ratios(self) -> tuple[int, ...]:
+        if not self.use_compress or not hasattr(self, "kv_cache_config"):
+            return ()
+        ratios: list[int] = []
+        for kv_cache_group in self.kv_cache_config.kv_cache_groups:
+            kv_cache_spec = kv_cache_group.kv_cache_spec
+            if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
+                kv_cache_spec = next(iter(kv_cache_spec.kv_cache_specs.values()))
+            ratio = int(getattr(kv_cache_spec, "compress_ratio", 1))
+            if ratio > 1:
+                ratios.append(ratio)
+        return tuple(ratios)
+
+    def _compressor_decode_graph_keys(self) -> set[tuple[int, ...]]:
+        ratios = self._iter_compress_ratios()
+        if not ratios:
+            return set()
+
+        period = 1
+        for ratio in ratios:
+            period = math.lcm(period, ratio)
+
+        graph_keys: set[tuple[int, ...]] = set()
+        for position in range(period):
+            key = tuple(1 if (position + 1) % ratio == 0 else 0 for ratio in ratios)
+            if any(key):
+                graph_keys.add(key)
+        return graph_keys
+
+    def _dummy_compressor_decode_position(
+        self,
+        compressor_decode_key: tuple[int, ...] | None,
+    ) -> int:
+        if compressor_decode_key is None:
+            return 0
+
+        ratios = self._iter_compress_ratios()
+        if len(ratios) != len(compressor_decode_key):
+            return 0
+
+        period = 1
+        for ratio in ratios:
+            period = math.lcm(period, ratio)
+
+        for position in range(period):
+            key = tuple(1 if (position + 1) % ratio == 0 else 0 for ratio in ratios)
+            if key == compressor_decode_key:
+                return position
+        return 0
+
+    def _get_compressor_decode_key(
+        self,
+        num_scheduled_tokens_compressed_list: list[np.ndarray] | None,
+        num_reqs: int,
+    ) -> tuple[tuple[int, ...] | None, bool]:
+        if not self.use_compress or num_scheduled_tokens_compressed_list is None:
+            return None, True
+
+        key: list[int] = []
+        homogeneous = True
+        for compressed_counts, kv_cache_group in zip(
+            num_scheduled_tokens_compressed_list,
+            self.kv_cache_config.kv_cache_groups,
+        ):
+            kv_cache_spec = kv_cache_group.kv_cache_spec
+            if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
+                kv_cache_spec = next(iter(kv_cache_spec.kv_cache_specs.values()))
+            if int(getattr(kv_cache_spec, "compress_ratio", 1)) <= 1:
+                continue
+
+            counts = compressed_counts[:num_reqs]
+            if counts.size == 0:
+                key.append(0)
+                continue
+
+            first_count = int(counts[0])
+            if not np.all(counts == first_count):
+                homogeneous = False
+            key.append(first_count)
+
+        return (tuple(key) if key else None), homogeneous
 
     def _init_device_properties(self) -> None:
         self.num_sms = None
@@ -1235,24 +1349,32 @@ class NPUModelRunner(GPUModelRunner):
                         scheduler_output.num_common_prefix_blocks,
                     )
 
-                def _has_new_compressed_tokens() -> bool:
-                    if not self.use_compress or num_scheduled_tokens_compressed_list is None:
-                        return False
-                    for compressed_counts, kv_cache_group in zip(
-                        num_scheduled_tokens_compressed_list,
-                        self.kv_cache_config.kv_cache_groups,
-                    ):
-                        kv_cache_spec = kv_cache_group.kv_cache_spec
-                        if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
-                            kv_cache_spec = next(iter(kv_cache_spec.kv_cache_specs.values()))
-                        if getattr(kv_cache_spec, "compress_ratio", 1) > 1 and np.any(compressed_counts > 0):
-                            return True
-                    return False
-
+                (
+                    compressor_decode_key,
+                    compressor_decode_homogeneous,
+                ) = self._get_compressor_decode_key(
+                    num_scheduled_tokens_compressed_list,
+                    num_reqs,
+                )
+                has_compressor_decode_tokens = (
+                    compressor_decode_key is not None
+                    and any(count > 0 for count in compressor_decode_key)
+                )
+                compressor_decode_graphable = (
+                    has_compressor_decode_tokens
+                    and not self.with_prefill
+                    and compressor_decode_homogeneous
+                    and compressor_decode_key in self._compressor_decode_graph_keys()
+                    and self.compilation_config.cudagraph_mode.has_full_cudagraphs()
+                )
+                graph_compressor_decode_key = (
+                    compressor_decode_key if compressor_decode_graphable else None
+                )
                 force_eager_for_compressor_decode = (
                     self.use_compress
                     and not self.with_prefill
-                    and _has_new_compressed_tokens()
+                    and has_compressor_decode_tokens
+                    and not compressor_decode_graphable
                 )
 
                 (
@@ -1269,6 +1391,7 @@ class NPUModelRunner(GPUModelRunner):
                     use_cascade_attn=cascade_attn_prefix_lens is not None,
                     force_eager=self.model_config.enforce_eager or force_eager_for_compressor_decode,
                     num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
+                    compressor_decode_key=graph_compressor_decode_key,
                 )
 
                 logger.debug(
@@ -1964,6 +2087,7 @@ class NPUModelRunner(GPUModelRunner):
         force_has_lora: bool | None = None,
         force_num_active_loras: int | None = None,
         num_encoder_reqs: int = 0,
+        compressor_decode_key: tuple[int, ...] | None = None,
     ) -> tuple[CUDAGraphMode, BatchDescriptor, bool, torch.Tensor | None, CUDAGraphStat | None]:
         num_tokens_padded = self._pad_for_sequence_parallelism(num_tokens)
         is_all_decode = np.all(self.input_batch.num_computed_tokens_cpu[:num_reqs] > 0)
@@ -2028,6 +2152,11 @@ class NPUModelRunner(GPUModelRunner):
                 # Assert to make sure the agreed upon token count is correct otherwise
                 # num_tokens_across_dp will no-longer be valid
                 assert batch_descriptor.num_tokens == num_tokens_padded
+        if compressor_decode_key is not None and cudagraph_mode == CUDAGraphMode.FULL:
+            batch_descriptor = AscendBatchDescriptor.from_batch_descriptor(
+                batch_descriptor,
+                compressor_decode_key,
+            )
         cudagraph_stats = None
         if self.vllm_config.observability_config.cudagraph_metrics:
             cudagraph_stats = CUDAGraphStat(
@@ -2368,6 +2497,7 @@ class NPUModelRunner(GPUModelRunner):
         is_graph_capturing: bool = False,
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
+        compressor_decode_key: tuple[int, ...] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # only support eager mode and piecewise graph now
         assert cudagraph_runtime_mode is None or cudagraph_runtime_mode.valid_runtime_modes()
@@ -2431,6 +2561,7 @@ class NPUModelRunner(GPUModelRunner):
             # LoRA state when determining the batch descriptor for capture
             force_has_lora=num_active_loras > 0,
             force_num_active_loras=num_active_loras,
+            compressor_decode_key=compressor_decode_key,
         )
         if self.use_cp:
             self.pcp_manager.init_batch_info(
@@ -2482,6 +2613,11 @@ class NPUModelRunner(GPUModelRunner):
                     if is_graph_capturing and using_paged_attention(num_tokens, self.vllm_config)
                     else max_query_len
                 )  # type: ignore[assignment]
+            dummy_compressor_decode_position = self._dummy_compressor_decode_position(
+                compressor_decode_key
+            )
+            if compressor_decode_key is not None:
+                seq_lens = max(seq_lens, dummy_compressor_decode_position + 1)
             self.seq_lens.np[:num_reqs_padded] = seq_lens
             self.seq_lens.np[num_reqs_padded:] = 0
             self.seq_lens.copy_to_gpu()
@@ -2496,9 +2632,7 @@ class NPUModelRunner(GPUModelRunner):
             pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
             # check how to build dummy
             if self.use_compress:
-                # Capture the common non-boundary compressed-decode graph
-                # without the compressor op. Boundary steps force eager.
-                self.positions.np.fill(0)
+                self.positions.np.fill(dummy_compressor_decode_position)
                 self.positions.copy_to_gpu()
             attn_metadata, _ = self._build_attention_metadata(
                 num_tokens=num_tokens_unpadded,
@@ -2618,6 +2752,63 @@ class NPUModelRunner(GPUModelRunner):
                 self.positions.copy_to_gpu()
 
             return hidden_states, hidden_states
+
+    def _warmup_and_capture(
+        self,
+        desc: BatchDescriptor,
+        cudagraph_runtime_mode: CUDAGraphMode,
+        profile_seq_lens: int | None = None,
+        allow_microbatching: bool = False,
+        num_warmups: int | None = None,
+    ):
+        super()._warmup_and_capture(
+            desc,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+            profile_seq_lens=profile_seq_lens,
+            allow_microbatching=allow_microbatching,
+            num_warmups=num_warmups,
+        )
+
+        if (
+            not self.use_compress
+            or cudagraph_runtime_mode != CUDAGraphMode.FULL
+            or not desc.uniform
+        ):
+            return
+
+        compressor_decode_keys = self._compressor_decode_graph_keys()
+        if not compressor_decode_keys:
+            return
+
+        if num_warmups is None:
+            num_warmups = self.compilation_config.cudagraph_num_of_warmups
+        force_attention = cudagraph_runtime_mode == CUDAGraphMode.FULL
+
+        for compressor_decode_key in sorted(compressor_decode_keys):
+            for _ in range(num_warmups):
+                self._dummy_run(
+                    desc.num_tokens,
+                    cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                    force_attention=force_attention,
+                    uniform_decode=desc.uniform,
+                    allow_microbatching=allow_microbatching,
+                    skip_eplb=True,
+                    remove_lora=False,
+                    num_active_loras=desc.num_active_loras,
+                    compressor_decode_key=compressor_decode_key,
+                )
+            self._dummy_run(
+                desc.num_tokens,
+                cudagraph_runtime_mode=cudagraph_runtime_mode,
+                uniform_decode=desc.uniform,
+                allow_microbatching=allow_microbatching,
+                skip_eplb=True,
+                remove_lora=False,
+                num_active_loras=desc.num_active_loras,
+                is_graph_capturing=True,
+                profile_seq_lens=profile_seq_lens,
+                compressor_decode_key=compressor_decode_key,
+            )
 
     @torch.inference_mode()
     def _dummy_sampler_run(
