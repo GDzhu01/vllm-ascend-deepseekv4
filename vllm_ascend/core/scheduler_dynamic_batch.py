@@ -16,6 +16,7 @@
 #
 import os
 import time
+from collections import Counter
 
 import pandas as pd
 from vllm.config import VllmConfig
@@ -149,6 +150,76 @@ class SchedulerDynamicBatch(Scheduler):
             default_budget=self.scheduler_config.max_num_batched_tokens,
             slo_limit=self.scheduler_config.SLO_limits_for_dynamic_batch,
         )
+        self._last_compressor_decode_key: tuple[int, ...] | None = None
+        self._compressor_decode_key_repeats = 0
+        self._compressor_decode_key_max_repeats = max(
+            1,
+            int(os.getenv("VLLM_ASCEND_COMPRESSOR_DECODE_KEY_MAX_REPEATS", "3")),
+        )
+
+    def _choose_compressor_decode_key(
+        self,
+        requests: list[Request],
+        token_budget: int,
+    ) -> tuple[int, ...] | None:
+        compressor_group = CompressorScheduleGroup(self.kv_cache_config)
+        if not compressor_group.enabled or token_budget <= 0:
+            return None
+
+        key_counts: Counter[tuple[int, ...]] = Counter()
+        for request in requests:
+            if request.num_computed_tokens < request.num_prompt_tokens:
+                continue
+
+            num_new_tokens = (
+                request.num_tokens_with_spec
+                + request.num_output_placeholders
+                - request.num_computed_tokens
+            )
+            if 0 < self.scheduler_config.long_prefill_token_threshold < num_new_tokens:
+                num_new_tokens = self.scheduler_config.long_prefill_token_threshold
+            num_new_tokens = min(
+                num_new_tokens,
+                token_budget,
+                self.max_model_len - 1 - request.num_computed_tokens,
+            )
+            if num_new_tokens <= 0:
+                continue
+
+            key = compressor_group.get_key(request, num_new_tokens)
+            if key is not None:
+                key_counts[key] += 1
+
+        if not key_counts:
+            self._last_compressor_decode_key = None
+            self._compressor_decode_key_repeats = 0
+            return None
+
+        max_count = max(key_counts.values())
+        candidates = [key for key, count in key_counts.items() if count == max_count]
+        if len(candidates) == 1:
+            target_key = candidates[0]
+        elif self._last_compressor_decode_key in candidates:
+            last_index = candidates.index(self._last_compressor_decode_key)
+            target_key = candidates[(last_index + 1) % len(candidates)]
+        else:
+            target_key = candidates[0]
+
+        if (
+            target_key == self._last_compressor_decode_key
+            and self._compressor_decode_key_repeats >= self._compressor_decode_key_max_repeats
+            and len(key_counts) > 1
+        ):
+            # Avoid repeatedly advancing one compressor phase while another
+            # phase waits at the decode boundary.
+            alternatives = [
+                key for key, _ in key_counts.most_common()
+                if key != target_key
+            ]
+            if alternatives:
+                return alternatives[0]
+
+        return target_key
 
     def schedule(self) -> SchedulerOutput:
         # NOTE: This scheduling algorithm is developed based on the "super.schedule()"
@@ -188,7 +259,14 @@ class SchedulerDynamicBatch(Scheduler):
 
         # For logging.
         scheduled_timestamp = time.monotonic()
-        compressor_group = CompressorScheduleGroup(self.kv_cache_config)
+        target_compressor_decode_key = self._choose_compressor_decode_key(
+            self.running,
+            token_budget,
+        )
+        compressor_group = CompressorScheduleGroup(
+            self.kv_cache_config,
+            target_decode_key=target_compressor_decode_key,
+        )
 
         # First, schedule the RUNNING requests.
         req_index = 0
@@ -592,6 +670,12 @@ class SchedulerDynamicBatch(Scheduler):
             self.kv_event_publisher.publish(batch)
 
         self._update_after_schedule(scheduler_output)
+        if compressor_group.enabled and compressor_group.decode_key is not None:
+            if compressor_group.decode_key == self._last_compressor_decode_key:
+                self._compressor_decode_key_repeats += 1
+            else:
+                self._last_compressor_decode_key = compressor_group.decode_key
+                self._compressor_decode_key_repeats = 1
         return scheduler_output
 
 

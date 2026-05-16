@@ -28,10 +28,14 @@ class CompressorScheduleGroup:
     per-KV-cache compressed-token delta in the current scheduling step.
     """
 
-    def __init__(self, kv_cache_config: KVCacheConfig) -> None:
+    def __init__(
+        self,
+        kv_cache_config: KVCacheConfig,
+        target_decode_key: tuple[int, ...] | None = None,
+    ) -> None:
         self.kv_cache_config = kv_cache_config
+        self._target_decode_key = target_decode_key
         self._decode_key: tuple[int, ...] | None = None
-        self._has_non_decode = False
 
     @cached_property
     def compress_ratios(self) -> tuple[int, ...]:
@@ -46,6 +50,10 @@ class CompressorScheduleGroup:
     @property
     def enabled(self) -> bool:
         return len(self.compress_ratios) > 0
+
+    @property
+    def decode_key(self) -> tuple[int, ...] | None:
+        return self._decode_key
 
     def get_key(
         self,
@@ -75,9 +83,10 @@ class CompressorScheduleGroup:
             return True
 
         if key is None:
-            return self._decode_key is None
+            # Prefill/chunked-prefill is not a CompressorDecode request.
+            return True
 
-        if self._has_non_decode:
+        if self._target_decode_key is not None and key != self._target_decode_key:
             return False
 
         return self._decode_key is None or self._decode_key == key
@@ -86,8 +95,5 @@ class CompressorScheduleGroup:
         if not self.enabled:
             return
 
-        if key is None:
-            self._has_non_decode = True
-        elif self._decode_key is None:
+        if key is not None and self._decode_key is None:
             self._decode_key = key
-
