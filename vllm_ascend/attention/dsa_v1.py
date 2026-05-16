@@ -1150,6 +1150,13 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_norm = self.compressor.norm
             self.compressor_norm_eps = self.compressor.norm_eps
 
+    def _use_dual_stream(self):
+        return self._multistream_dsv4_dsa_overlap
+
+    def _is_w8a8_layer(self, layer) -> bool:
+        return (hasattr(layer, 'weight_scale')
+                and layer.weight.dtype == torch.int8)
+
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
