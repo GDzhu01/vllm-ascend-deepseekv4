@@ -49,7 +49,6 @@ from vllm.utils.torch_utils import get_dtype_size
 from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
 from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadataBuilder
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
-from vllm.v1.attention.selector import get_attn_backend  # type: ignore
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.worker.utils import select_common_block_size
 from vllm.v1.kv_cache_interface import (
@@ -93,6 +92,7 @@ from vllm.v1.worker.utils import AttentionGroup
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata, using_paged_attention
+from vllm_ascend.patch.platform.patch_selector import get_attn_backend
 
 # yapf conflicts with isort for this block
 # yapf: disable
@@ -2048,13 +2048,13 @@ class NPUModelRunner(GPUModelRunner):
             return {}, None
         num_tokens_padded = num_tokens_padded or num_tokens
         num_reqs_padded = num_reqs_padded or num_reqs
-        
+
         # check
         # attn_metadata: PerLayerAttnMetadata = {}
-        attn_metadata: dict[str, Any] = defaultdict(list)
-        
+        attn_metadata: dict[str, Any] = defaultdict(list) if self.use_compress else {}
+
         if ubatch_slices is not None:
-            attn_metadata = [dict() for _ in range(len(ubatch_slices))]
+            attn_metadata = [defaultdict(list) if self.use_compress else {} for _ in range(len(ubatch_slices))]
         if for_cudagraph_capture:
             # For some attention backends (e.g. FA) with sliding window models we need
             # to make sure the backend see a max_seq_len that is larger to the sliding
@@ -2245,7 +2245,10 @@ class NPUModelRunner(GPUModelRunner):
                 attn_metadata_dict = attn_metadata[ubid]
 
             for layer_name in attn_group.layer_names:
-                attn_metadata_dict[layer_name].append(attn_metadata_i)
+                if self.use_compress:
+                    attn_metadata_dict[layer_name].append(attn_metadata_i)
+                else:
+                    attn_metadata_dict[layer_name] = attn_metadata_i
 
         # Prepare the attention metadata for each KV cache group and make layers
         # in the same group share the same metadata.
@@ -2279,7 +2282,7 @@ class NPUModelRunner(GPUModelRunner):
                 cm.block_table_tensor, cm.slot_mapping = _get_block_table_and_slot_mapping(kv_cache_gid, total_num_scheduled_tokens_compressed_list)
             if self.speculative_config and spec_decode_common_attn_metadata is None:
                 if isinstance(self.drafter, AscendEagleProposer | AscendDraftModelProposer):
-                    if self.drafter.attn_layer_names[0] in kv_cache_group.layer_names:
+                    if getattr(self.drafter, "kv_cache_gid", None) == kv_cache_gid:
                         spec_decode_common_attn_metadata = cm
                 else:
                     spec_decode_common_attn_metadata = cm
@@ -2301,10 +2304,18 @@ class NPUModelRunner(GPUModelRunner):
             if isinstance(attn_metadata, list):
                 for ub_metadata in attn_metadata:
                     for _metadata in ub_metadata.values():
-                        _metadata.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
+                        if self.use_compress:
+                            for metadata_i in _metadata:
+                                metadata_i.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
+                        else:
+                            _metadata.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
             else:
                 for _metadata in attn_metadata.values():
-                    _metadata.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
+                    if self.use_compress:
+                        for metadata_i in _metadata:
+                            metadata_i.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
+                    else:
+                        _metadata.mm_prefix_range = req_doc_ranges  # type: ignore[attr-defined]
 
         if spec_decode_common_attn_metadata is not None and (
             num_reqs != num_reqs_padded or num_tokens != num_tokens_padded
@@ -2961,7 +2972,7 @@ class NPUModelRunner(GPUModelRunner):
                     assert num_blocks == kv_cache_config.num_blocks, \
                         f"num_blocks: {num_blocks} should be equal to " \
                         f"kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
-                    kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                    kv_cache_shape = attn_backend.get_kv_cache_shape(
                         num_blocks, current_kv_cache_spec.block_size,
                         current_kv_cache_spec.num_kv_heads,
                         current_kv_cache_spec.head_size)
@@ -2981,11 +2992,11 @@ class NPUModelRunner(GPUModelRunner):
                     assert num_blocks == kv_cache_config.num_blocks, \
                         f"num_blocks: {num_blocks} should be equal to " \
                         f"kv_cache_config.num_blocks: {kv_cache_config.num_blocks}"
-                    indexer_kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+                    indexer_kv_cache_shape = attn_backend.get_kv_cache_shape(
                         num_blocks, current_kv_cache_spec.block_size,
                         current_kv_cache_spec.num_kv_heads,
                         current_kv_cache_spec.head_size)
-                    indexer_scale_cache_shape = self.attn_backend.get_kv_cache_shape(
+                    indexer_scale_cache_shape = attn_backend.get_kv_cache_shape(
                         num_blocks, current_kv_cache_spec.block_size,
                         current_kv_cache_spec.num_kv_heads,
                         current_kv_cache_spec.indexer_scale_dim)
@@ -3040,8 +3051,14 @@ class NPUModelRunner(GPUModelRunner):
                     assert num_blocks >= kv_cache_config.num_blocks
 
                     if hasattr(attn_backend, "get_supported_kernel_block_sizes") and self.use_hybrid_blocks:
-                        block_size = attn_backend.get_supported_kernel_block_sizes()[0]
-
+                        if group.kv_cache_group_id >= len(self.kernel_block_sizes):
+                            block_size = attn_backend.get_supported_kernel_block_sizes()[0]
+                        else:
+                            kernel_block_size = self.kernel_block_sizes[group.kv_cache_group_id]
+                            if isinstance(kernel_block_size, list):
+                                block_size = int(kernel_block_size[0])
+                            else:
+                                block_size = int(kernel_block_size)
                         block_size_chunk = current_kv_cache_spec.block_size // block_size
                         kv_cache_shape = attn_backend.get_kv_cache_shape(
                             num_blocks * block_size_chunk,
@@ -3195,32 +3212,34 @@ class NPUModelRunner(GPUModelRunner):
                 # This is an attention backend that supports virtual
                 # block splitting. Get the supported block sizes from
                 # the backend.
-                
+
                 # This is an attention backend that supports virtual
                 # block splitting. Get the supported block sizes from
                 # all backends in the group.
-                attn_groups = self.attn_groups[kv_cache_group_id]
-                kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
-                selected_kernel_size = select_common_block_size(
-                    kv_manager_block_size, [attn_group.backend for attn_group in attn_groups]
-                )
-                self.kernel_block_sizes.append([selected_kernel_size])
-                
-                # try:
-                #     attn_groups = self.attn_groups[kv_cache_group_id]
-                # except IndexError:
-                #     attn_groups = None
-                # if attn_groups and self.use_hybrid_blocks:
-                #     # Use the backend's supported block size list
-                #     backend = attn_groups[0].backend
-                #     supported_sizes = backend.get_supported_kernel_block_sizes()
-                #     # If no specific sizes supported, use cache config
-                #     # block_size
-                #     kernel_block_size_list = supported_sizes if supported_sizes else [self.cache_config.block_size]
-                # else:
-                #     # Fallback to cache config block_size if no backend found
-                #     kernel_block_size_list = [self.cache_config.block_size]
-                # self.kernel_block_sizes.append(kernel_block_size_list)
+                if self.use_compress:
+                    attn_groups = self.attn_groups[kv_cache_group_id]
+                    kv_manager_block_size = kv_cache_group.kv_cache_spec.block_size
+                    selected_kernel_size = select_common_block_size(
+                        kv_manager_block_size,
+                        [attn_group.backend for attn_group in attn_groups],
+                    )
+                    self.kernel_block_sizes.append([selected_kernel_size])
+                else:
+                    try:
+                        attn_groups = self.attn_groups[kv_cache_group_id]
+                    except IndexError:
+                        attn_groups = None
+                    if attn_groups and self.use_hybrid_blocks:
+                        # Use the backend's supported block size list
+                        backend = attn_groups[0].backend
+                        supported_sizes = backend.get_supported_kernel_block_sizes()
+                        # If no specific sizes supported, use cache config
+                        # block_size
+                        kernel_block_size_list = supported_sizes if supported_sizes else [self.cache_config.block_size]
+                    else:
+                        # Fallback to cache config block_size if no backend found
+                        kernel_block_size_list = [self.cache_config.block_size]
+                    self.kernel_block_sizes.append(kernel_block_size_list)
             else:
                 # This is likely Mamba or other non-attention cache,
                 # no splitting.
@@ -3244,7 +3263,7 @@ class NPUModelRunner(GPUModelRunner):
             max_num_blocks.append(max_num_blocks_per_req)
 
         if block_sizes != [self.cache_config.block_size] or self.kernel_block_sizes != [[self.cache_config.block_size]] \
-            or len(kv_cache_config.kv_cache_groups) > 1:
+            or (self.use_compress and len(kv_cache_config.kv_cache_groups) > 1):
             assert self.offload_config.uva.cpu_offload_gb == 0, (
                 "Cannot re-initialize the input batch when CPU weight "
                 "offloading is enabled. See https://github.com/vllm-project/vllm/pull/18298 "  # noqa: E501
