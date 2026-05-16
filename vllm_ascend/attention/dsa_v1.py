@@ -134,6 +134,15 @@ def pad_to_blocks(x: torch.Tensor,
     return out
 
 
+def _get_oproj_static_exchange_tokens(vllm_config: VllmConfig) -> int:
+    compilation_config = vllm_config.compilation_config
+    capture_sizes = compilation_config.cudagraph_capture_sizes
+    if capture_sizes:
+        return int(compilation_config.max_cudagraph_capture_size
+                   or max(capture_sizes))
+    return int(vllm_config.scheduler_config.max_num_batched_tokens)
+
+
 class AscendDSABackend(AttentionBackend):
     accept_output_buffer: bool = True
 
@@ -1168,6 +1177,80 @@ class AscendDSAImpl(DSAAttentionImpl):
             x = x_rot.reshape(1, num_tokens, -1, rotary_dim)
         return x
 
+    def _forward_o_proj(self, o_proj_input: torch.Tensor,
+                        output: torch.Tensor) -> torch.Tensor:
+        num_tokens = o_proj_input.shape[0]
+        group_hidden_dim = (
+            o_proj_input.shape[1] * o_proj_input.shape[2] //
+            self.n_local_groups)
+        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups,
+                                         group_hidden_dim)
+        if oproj_tp_enable():
+            oproj_group = get_otp_group()
+            oproj_tp_size = oproj_group.world_size
+            if self.n_local_groups % oproj_tp_size != 0:
+                raise ValueError(
+                    "n_local_groups must be divisible by "
+                    f"oproj_tensor_parallel_size, got {self.n_local_groups} "
+                    f"and {oproj_tp_size}.")
+
+            groups_per_oproj_rank = self.n_local_groups // oproj_tp_size
+            local_num_tokens = num_tokens
+            exchange_num_tokens = _get_oproj_static_exchange_tokens(
+                self.vllm_config)
+            if exchange_num_tokens < local_num_tokens:
+                raise ValueError(
+                    "oproj_tensor_parallel_size requires static exchange "
+                    "capacity to cover local tokens, got "
+                    f"{exchange_num_tokens} and {local_num_tokens}.")
+
+            o_proj_input = o_proj_input.view(local_num_tokens, oproj_tp_size,
+                                             groups_per_oproj_rank,
+                                             group_hidden_dim)
+            if exchange_num_tokens == local_num_tokens:
+                send = o_proj_input.transpose(1, 0).contiguous().view(-1)
+            else:
+                # Keep OTP collectives graph-static across uneven DP ranks.
+                send = o_proj_input.new_zeros(
+                    (oproj_tp_size, exchange_num_tokens,
+                     groups_per_oproj_rank, group_hidden_dim))
+                send[:, :local_num_tokens].copy_(
+                    o_proj_input.transpose(1, 0))
+                send = send.view(-1)
+            recv = torch.empty_like(send)
+            dist.all_to_all_single(recv, send, group=oproj_group.device_group)
+            o_proj_input = recv.view(oproj_tp_size * exchange_num_tokens,
+                                     groups_per_oproj_rank, group_hidden_dim)
+            o_proj_input = torch_npu.npu_transpose_batchmatmul(
+                o_proj_input,
+                self.wo_a.weight,
+                bias=None,
+                scale=None,
+                perm_x1=(1, 0, 2),
+                perm_x2=(0, 1, 2),
+                perm_y=(1, 0, 2),
+                batch_split_factor=1)
+            o_proj_input = o_proj_input.reshape(
+                oproj_tp_size * exchange_num_tokens, -1)
+            o_proj_output = self.wo_b(o_proj_input)
+            o_proj_output = oproj_group.reduce_scatter(o_proj_output, dim=0)
+            output[...] = o_proj_output[:local_num_tokens]
+        else:
+            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
+            o_proj_input = torch_npu.npu_transpose_batchmatmul(
+                o_proj_input,
+                self.wo_a.weight,
+                bias=None,
+                scale=None,
+                perm_x1=(1, 0, 2),
+                perm_x2=(0, 1, 2),
+                perm_y=(1, 0, 2),
+                batch_split_factor=1)
+            o_proj_input = o_proj_input.reshape(num_tokens, -1)
+            output[...] = self.wo_b(o_proj_input)
+        return output
+
     def forward(  # type: ignore[override]
         self,
         layer_name,
@@ -1178,12 +1261,19 @@ class AscendDSAImpl(DSAAttentionImpl):
         output: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         assert output is not None, "Output tensor must be provided."
+        output_padded = output
         if attn_metadata is None:
             # Profiling run.
-            return output.fill_(0)
+            if not oproj_tp_enable():
+                return output.fill_(0)
+            o_proj_input_shape = (output.shape[0], self.n_local_heads,
+                                  self.head_dim)
+            o_proj_input = torch.zeros(o_proj_input_shape,
+                                       dtype=hidden_states.dtype,
+                                       device=hidden_states.device)
+            return self._forward_o_proj(o_proj_input, output_padded)
         if not isinstance(attn_metadata, list):
             attn_metadata = [attn_metadata]
-        output_padded = output
         # Process for Flash Comm V1
         hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
             hidden_states, need_gather_q_kv)
@@ -1232,51 +1322,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         )
 
         # o
-        o_proj_input = o_proj_input.view(num_tokens, self.n_local_groups, -1)
-        if oproj_tp_enable():
-            oproj_group = get_otp_group()
-            oproj_tp_size = oproj_group.world_size
-            if self.n_local_groups % oproj_tp_size != 0:
-                raise ValueError(
-                    "n_local_groups must be divisible by "
-                    f"oproj_tensor_parallel_size, got {self.n_local_groups} "
-                    f"and {oproj_tp_size}.")
-
-            groups_per_oproj_rank = self.n_local_groups // oproj_tp_size
-            o_proj_input = o_proj_input.view(num_tokens, oproj_tp_size,
-                                             groups_per_oproj_rank, -1)
-            send = o_proj_input.transpose(1, 0).contiguous().view(-1)
-            recv = torch.empty_like(send)
-            dist.all_to_all_single(recv, send, group=oproj_group.device_group)
-            o_proj_input = recv.view(oproj_tp_size * num_tokens,
-                                     groups_per_oproj_rank, -1)
-            o_proj_input = torch_npu.npu_transpose_batchmatmul(
-                o_proj_input,
-                self.wo_a.weight,
-                bias=None,
-                scale=None,
-                perm_x1=(1, 0, 2),
-                perm_x2=(0, 1, 2),
-                perm_y=(1, 0, 2),
-                batch_split_factor=1)
-            o_proj_input = o_proj_input.reshape(oproj_tp_size * num_tokens,
-                                                -1)
-            o_proj_output = self.wo_b(o_proj_input)
-            output[...] = oproj_group.reduce_scatter(o_proj_output, dim=0)
-        else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
-            o_proj_input = torch_npu.npu_transpose_batchmatmul(
-                o_proj_input,
-                self.wo_a.weight,
-                bias=None,
-                scale=None,
-                perm_x1=(1, 0, 2),
-                perm_x2=(0, 1, 2),
-                perm_y=(1, 0, 2),
-                batch_split_factor=1)
-            o_proj_input = o_proj_input.reshape(num_tokens, -1)
-            output[...] = self.wo_b(o_proj_input)
+        self._forward_o_proj(o_proj_input, output)
 
         return output_padded
 
