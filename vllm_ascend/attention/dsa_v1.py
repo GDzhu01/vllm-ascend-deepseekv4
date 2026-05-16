@@ -1151,6 +1151,12 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.multistream_dsv4_dsa_overlap = ascend_config.multistream_dsv4_dsa_overlap
         self.vllm_config = get_current_vllm_config()
 
+        # 纯DP情况下，多流标志位强制设置为False
+        parallel_config = self.vllm_config.parallel_config
+        is_pure_dp = parallel_config.data_parallel_size > 1 and parallel_config.tensor_parallel_size <= 1
+        if is_pure_dp:
+            self.multistream_dsv4_dsa_overlap = False
+
         # indexer param
         if self.indexer is not None:
             self.indexer_heads: int = self.indexer.n_heads
