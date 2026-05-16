@@ -149,12 +149,10 @@ class AscendUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
         global_redundant_expert_num: int = 0,
         pertoken_scale: torch.Tensor | None = None,
         mc2_mask: torch.Tensor | None = None,
-        input_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
-        if input_ids is None:
-            input_ids = get_forward_context().input_ids
+        input_ids = get_forward_context().input_ids
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -491,7 +489,6 @@ class AscendFusedMoE(FusedMoE):
         self, hidden_states: torch.Tensor, router_logits: torch.Tensor,
         return_with_event: bool = False,
         overlap_events=None, microbatch_role: str | None = None,
-        input_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | FusedMoEResult:
         assert self.quant_method is not None
 
@@ -541,8 +538,8 @@ class AscendFusedMoE(FusedMoE):
                     routed_scaling_factor=self.routed_scaling_factor,
                     e_score_correction_bias=self.e_score_correction_bias,
                     global_num_experts=self.global_num_experts,
-                    input_ids=input_ids,
-                    tid2eid=self.tid2eid,
+                    input_ids=input_ids,  # Note: get ids from forward context
+                    tid2eid=self.tid2eid,  #
                 )
 
                 if isinstance(_EXTRA_CTX.moe_comm_method, AllGatherCommImpl):
@@ -603,7 +600,6 @@ class AscendFusedMoE(FusedMoE):
             log2phy=self.log2phy,
             global_redundant_expert_num=self.global_redundant_expert_num,
             mc2_mask=mc2_mask,
-            input_ids=input_ids,
         )
 
         if self.dynamic_eplb:
@@ -943,9 +939,11 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         hidden_states_b1 = hidden_states[mid:]
         router_logits_b0 = router_logits[:mid]
         router_logits_b1 = router_logits[mid:]
-        input_ids = get_forward_context().input_ids
-        input_ids_b0 = input_ids[:mid] if input_ids is not None else None
-        input_ids_b1 = input_ids[mid:] if input_ids is not None else None
+
+        forward_context = get_forward_context()
+        original_input_ids = forward_context.input_ids
+        input_ids_b0 = original_input_ids[:mid] if original_input_ids is not None else None
+        input_ids_b1 = original_input_ids[mid:] if original_input_ids is not None else None
 
         mb_stream = microbatch_overlap_stream()
 
@@ -954,6 +952,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         overlap_events = MicrobatchOverlapEvents()
 
         # Run the full batch0 pipeline on the main stream.
+        forward_context.input_ids = input_ids_b0
         fused_moe_results_b0 = AscendFusedMoE.forward_impl(
             self,
             hidden_states=hidden_states_b0,
@@ -961,11 +960,11 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
             return_with_event=True,
             overlap_events=overlap_events,
             microbatch_role="batch0",
-            input_ids=input_ids_b0,
         )
         routed_out_b0 = fused_moe_results_b0.routed_out
 
         # Run the full batch1 pipeline on the microbatch stream.
+        forward_context.input_ids = input_ids_b1
         with npu_stream_switch(mb_stream):
             fused_moe_results_b1 = AscendFusedMoE.forward_impl(
                 self,
@@ -974,10 +973,10 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
                 return_with_event=True,
                 overlap_events=overlap_events,
                 microbatch_role="batch1",
-                input_ids=input_ids_b1,
             )
             routed_out_b1 = fused_moe_results_b1.routed_out
 
+        forward_context.input_ids = original_input_ids
         evt_b1_all_done = mb_stream.record_event()
 
         # Defer ReduceScatter so RS-b0 does not block AG-b1, then run RS-b1
