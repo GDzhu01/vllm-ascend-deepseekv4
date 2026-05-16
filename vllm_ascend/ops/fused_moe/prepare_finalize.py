@@ -273,6 +273,18 @@ class PrepareAndFinalizeWithMC2(PrepareAndFinalizeWithAll2All):
             # Also slice mc2_mask
             split_mc2_mask = torch.tensor_split(mc2_mask, self.tp_size, dim=0)
             mc2_mask = split_mc2_mask[self.tp_rank]
+        if (replace_allreduce and _EXTRA_CTX.is_draft_model
+                and mc2_mask is not None
+                and mc2_mask.shape[0] != hidden_states.shape[0]):
+            local_mask_len = hidden_states.shape[0]
+            full_mask_len = local_mask_len * self.tp_size
+            full_mask = _EXTRA_CTX.mc2_mask[:full_mask_len]
+            if full_mask.shape[0] < full_mask_len:
+                full_mask = nn.functional.pad(
+                    full_mask, (0, full_mask_len - full_mask.shape[0]),
+                    value=False)
+            mc2_mask = torch.tensor_split(full_mask, self.tp_size,
+                                          dim=0)[self.tp_rank]
 
         padded_hidden_states_shape = hidden_states.shape
         if not self.replace_allreduce:
