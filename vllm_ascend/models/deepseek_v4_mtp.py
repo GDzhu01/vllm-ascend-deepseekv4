@@ -122,21 +122,21 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         inputs_embeds = torch.where(
             positions.unsqueeze(-1) == 0, 0, inputs_embeds)
         inputs_embeds = self.enorm(inputs_embeds)
+        if previous_hidden_states.shape[-1] == self.config.hidden_size:
+            previous_hidden_states = previous_hidden_states.unsqueeze(1).repeat(
+                1, self.hc_mult, 1)
+        else:
+            previous_hidden_states = previous_hidden_states.view(
+                -1, self.hc_mult, self.config.hidden_size)
         previous_hidden_states = self.hnorm(previous_hidden_states)
-
-        hidden_states = (self.e_proj(inputs_embeds) +
+        hidden_states = (self.e_proj(inputs_embeds).unsqueeze(1) +
                          self.h_proj(previous_hidden_states))
-
-        hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult, 1)
 
         hidden_states, residual = self.mtp_block(positions=positions,
                                                  hidden_states=hidden_states,
                                                  residual=None)
 
-        hidden_states = self.hc_head(hidden_states, self.hc_head_fn,
-                                     self.hc_head_scale, self.hc_head_base)
-
-        return hidden_states
+        return hidden_states.flatten(1)
 
     def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor,
                 hc_scale: torch.Tensor, hc_base: torch.Tensor):
@@ -175,6 +175,23 @@ class DeepSeekMultiTokenPredictor(nn.Module):
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
+    @staticmethod
+    def _select_local_tokens(tensor: torch.Tensor,
+                             target_num_tokens: int) -> torch.Tensor:
+        if tensor.shape[0] == target_num_tokens:
+            return tensor
+        tp_world_size = get_tensor_model_parallel_world_size()
+        tp_rank = get_tensor_model_parallel_rank()
+        chunk_size = (tensor.shape[0] + tp_world_size - 1) // tp_world_size
+        start = chunk_size * tp_rank
+        local_tensor = tensor[start:start + chunk_size]
+        if local_tensor.shape[0] == target_num_tokens:
+            return local_tensor
+        output = tensor.new_zeros((target_num_tokens, *tensor.shape[1:]))
+        num_tokens = min(local_tensor.shape[0], target_num_tokens)
+        output[:num_tokens].copy_(local_tensor[:num_tokens])
+        return output
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -186,7 +203,19 @@ class DeepSeekMultiTokenPredictor(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
         current_step_idx = spec_step_idx % self.num_mtp_layers
-        return self.layers[str(current_step_idx)](
+        mtp_layer = self.layers[str(current_step_idx)]
+        if previous_hidden_states.shape[-1] == mtp_layer.config.hidden_size:
+            target_num_tokens = previous_hidden_states.shape[0]
+        else:
+            target_num_tokens = (previous_hidden_states.numel() //
+                                 (mtp_layer.hc_mult *
+                                  mtp_layer.config.hidden_size))
+        if inputs_embeds.shape[0] != target_num_tokens:
+            inputs_embeds = self._select_local_tokens(inputs_embeds,
+                                                      target_num_tokens)
+        if positions.dim() == 1 and positions.shape[0] != target_num_tokens:
+            positions = self._select_local_tokens(positions, target_num_tokens)
+        return mtp_layer(
             input_ids,
             positions,
             previous_hidden_states,
@@ -201,6 +230,11 @@ class DeepSeekMultiTokenPredictor(nn.Module):
     ) -> torch.Tensor:
         current_step_idx = spec_step_idx % self.num_mtp_layers
         mtp_layer = self.layers[str(current_step_idx)]
+        hidden_states = hidden_states.view(
+            -1, mtp_layer.hc_mult, mtp_layer.config.hidden_size)
+        hidden_states = mtp_layer.hc_head(hidden_states, mtp_layer.hc_head_fn,
+                                          mtp_layer.hc_head_scale,
+                                          mtp_layer.hc_head_base)
         logits = self.logits_processor(mtp_layer.shared_head.head,
                                        mtp_layer.shared_head(hidden_states))
         return logits
@@ -208,7 +242,6 @@ class DeepSeekMultiTokenPredictor(nn.Module):
 
 @support_torch_compile
 class DeepSeekV4MTP(nn.Module, SupportsPP, DeepseekV2MixtureOfExperts):
-
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         self.config = vllm_config.model_config.hf_config

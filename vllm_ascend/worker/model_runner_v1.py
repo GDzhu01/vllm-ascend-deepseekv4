@@ -1801,7 +1801,7 @@ class NPUModelRunner(GPUModelRunner):
         hidden_states = tensor_model_parallel_all_gather(hidden_states, 0)
         pad_size = get_forward_context().pad_size
         if pad_size > 0:
-            hidden_states = hidden_states[:-pad_size, :]
+            hidden_states = hidden_states[:-pad_size]
 
         return hidden_states
 

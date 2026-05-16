@@ -91,6 +91,18 @@ class SpecDecodeBaseProposer(EagleProposer):
     def __init__(self, vllm_config: VllmConfig, device: torch.device, pass_hidden_states_to_model: bool, runner=None):
         super().__init__(vllm_config, device, runner)
 
+        draft_hf_config = self.draft_model_config.hf_config
+        if (self.method == "mtp"
+                and getattr(draft_hf_config, "model_type", None)
+                == "deepseek_v4"
+                and hasattr(draft_hf_config, "hc_mult")):
+            self.hidden_size *= draft_hf_config.hc_mult
+            self.hidden_states = torch.zeros(
+                (self.max_num_tokens, self.hidden_size),
+                dtype=self.dtype,
+                device=device,
+            )
+
         self.use_async_scheduling = self.vllm_config.scheduler_config.async_scheduling
         self.use_compress = hasattr(self.vllm_config.model_config.hf_config, "compress_ratios")
         self.pass_hidden_states_to_model = pass_hidden_states_to_model
@@ -176,6 +188,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             self.positions = torch.zeros(self.max_num_tokens, dtype=torch.int32, device=device)
 
         self.token_arange_np = np.arange(self.max_num_tokens + 1)
+        self.mtp_initial_hidden_states: torch.Tensor | None = None
 
     def _get_model(self) -> nn.Module:
         """
@@ -618,14 +631,10 @@ class SpecDecodeBaseProposer(EagleProposer):
         common_attn_metadata.slot_mapping = self.slot_mapping_group[0]
         common_attn_metadata.num_input_tokens = num_input_tokens
         # FIXME(woosuk): The below two ops cause synchronization. Optimize.
-        assert len(self.draft_attn_groups) > 0
-        builder = self.draft_attn_groups[0].get_metadata_builder()
         extra_attn_metadata_args = dict(
                     prefill_ratio_to_sas_metadata=dict(),
                     decode_ratio_to_sas_metadata=dict(),
                     common_ratio_to_sas_metadata=dict())
-        attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model(), **extra_attn_metadata_args)
-        attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
 
         if self.uses_mrope:
             used_update_positions = self.mrope_positions[:, token_indices_to_sample]
@@ -633,8 +642,14 @@ class SpecDecodeBaseProposer(EagleProposer):
             used_update_positions = self.positions[token_indices_to_sample]
         per_layer_attn_metadata = dict()
         # The first step of speculative.
-        for layer_name in self.attn_layer_names:
-            per_layer_attn_metadata[layer_name] = [attn_metadata]
+        assert len(self.draft_attn_groups) > 0
+        for attn_group in self.draft_attn_groups:
+            builder = attn_group.get_metadata_builder()
+            attn_metadata = builder.build(
+                0, common_attn_metadata, self.runner.get_model(), **extra_attn_metadata_args)
+            attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
+            for layer_name in attn_group.layer_names:
+                per_layer_attn_metadata[layer_name] = [attn_metadata]
         multi_steps_attn_metadata = [per_layer_attn_metadata]
 
         # Copy the old attn_metadata and update
@@ -695,7 +710,7 @@ class SpecDecodeBaseProposer(EagleProposer):
                 if not self.parallel_drafting:
                     for draft_step in range(1, self.num_speculative_tokens):
                         per_layer_attn_metadata = dict()
-                        for attn_group in self.draft_attn_groups:
+                        for group_idx, attn_group in enumerate(self.draft_attn_groups):
                             common_attn_metadata, attn_metadata = self.attn_update_stack_num_spec_norm(
                                 draft_step,
                                 attn_metadata,
@@ -707,10 +722,12 @@ class SpecDecodeBaseProposer(EagleProposer):
                                 ori_seq_len,
                                 slot_indices,
                                 mtp_slot_mapping,
+                                num_rejected_tokens_gpu=num_rejected_tokens_gpu,
+                                advance_metadata=group_idx == 0,
                                 attn_group=attn_group,
                             )
                             attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
-                            for layer_name in self.attn_layer_names:
+                            for layer_name in attn_group.layer_names:
                                 per_layer_attn_metadata[layer_name] = [attn_metadata]
                         multi_steps_attn_metadata.append(per_layer_attn_metadata)
         else:
@@ -718,7 +735,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             if not self.parallel_drafting:
                 for draft_step in range(1, self.num_speculative_tokens):
                     per_layer_attn_metadata = dict()
-                    for attn_group in self.draft_attn_groups:
+                    for group_idx, attn_group in enumerate(self.draft_attn_groups):
                         common_attn_metadata, attn_metadata = self.attn_update_stack_num_spec_norm(
                             draft_step,
                             attn_metadata,
@@ -727,10 +744,12 @@ class SpecDecodeBaseProposer(EagleProposer):
                             num_input_tokens,
                             used_update_positions,
                             aclgraph_runtime_mode,
+                            num_rejected_tokens_gpu=num_rejected_tokens_gpu,
+                            advance_metadata=group_idx == 0,
                             attn_group=attn_group,
                         )
                         attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
-                        for layer_name in self.attn_layer_names:
+                        for layer_name in attn_group.layer_names:
                             per_layer_attn_metadata[layer_name] = [attn_metadata]
                     multi_steps_attn_metadata.append(per_layer_attn_metadata)
 
@@ -793,7 +812,11 @@ class SpecDecodeBaseProposer(EagleProposer):
         }
 
         if self.pass_hidden_states_to_model:
-            model_hidden_states = self.hidden_states[:num_input_tokens]
+            if self.method == "mtp" and self.mtp_initial_hidden_states is not None:
+                model_hidden_states = self._pad_tensor(
+                    self.mtp_initial_hidden_states, num_input_tokens)
+            else:
+                model_hidden_states = self.hidden_states[:num_input_tokens]
             model_hidden_states, model_positions = self.maybe_pad_and_reduce(model_hidden_states, model_positions)
             model_kwargs["hidden_states"] = model_hidden_states
             if self.method == "mtp":
@@ -819,7 +842,16 @@ class SpecDecodeBaseProposer(EagleProposer):
                 hidden_states, 0, self.runner.pcp_manager.pcp_allgather_restore_idx.gpu[: hidden_states.shape[0]]
             )
             if self.method == "mtp":
-                last_hidden_states = hidden_states
+                if last_hidden_states.shape == hidden_states.shape:
+                    last_hidden_states = hidden_states
+                else:
+                    last_hidden_states = last_hidden_states[:num_tokens]
+                    last_hidden_states = get_pcp_group().all_gather(last_hidden_states, 0)
+                    last_hidden_states = torch.index_select(
+                        last_hidden_states,
+                        0,
+                        self.runner.pcp_manager.pcp_allgather_restore_idx.gpu[: last_hidden_states.shape[0]],
+                    )
             else:
                 # eagle and eagle3 need allgather last_hidden_states.
                 last_hidden_states = last_hidden_states[:num_tokens]
@@ -909,7 +941,6 @@ class SpecDecodeBaseProposer(EagleProposer):
             # copy inputs to buffer for cudagraph
             self.input_ids[:batch_size] = input_ids
             self._set_positions(batch_size, clamped_positions)
-            self.hidden_states[:batch_size] = hidden_states
             if self.supports_mm_inputs:
                 self.inputs_embeds[:batch_size] = self.model.embed_input_ids(input_ids)
 
@@ -926,7 +957,12 @@ class SpecDecodeBaseProposer(EagleProposer):
             # `model_hidden_states` represent the speculative model inputs.
             model_input_ids = self.input_ids[:input_batch_size]
             model_positions = self._get_positions(input_batch_size)
-            model_hidden_states = self.hidden_states[:input_batch_size]
+            if (self.method == "mtp"
+                    and hidden_states.shape[1:] != self.hidden_states.shape[1:]):
+                model_hidden_states = self._pad_tensor(hidden_states, input_batch_size)
+            else:
+                self.hidden_states[:batch_size] = hidden_states
+                model_hidden_states = self.hidden_states[:input_batch_size]
 
             model_hidden_states, model_positions = self.maybe_pad_and_reduce(model_hidden_states, model_positions)
 
@@ -1075,7 +1111,12 @@ class SpecDecodeBaseProposer(EagleProposer):
                 target_positions = target_positions[0]
 
             self._set_positions(num_tokens, target_positions)
-            self.hidden_states[:num_tokens] = target_hidden_states
+            if (self.method == "mtp"
+                    and target_hidden_states.shape[1:] != self.hidden_states.shape[1:]):
+                self.mtp_initial_hidden_states = target_hidden_states
+            else:
+                self.mtp_initial_hidden_states = None
+                self.hidden_states[:num_tokens] = target_hidden_states
 
             return num_tokens, token_indices_to_sample, cad, (query_lens_d, ori_token_indices_to_sample)
         else:
@@ -1159,7 +1200,8 @@ class SpecDecodeBaseProposer(EagleProposer):
             return total_num_output_tokens, token_indices_to_sample, new_cad, None
 
     def model_returns_tuple(self) -> bool:
-        return self.method not in ("mtp", "draft_model")
+        return self.method not in ("mtp", "draft_model") or getattr(
+            self.model, "returns_hidden_states_tuple", False)
 
     def attn_update_stack_num_spec_norm(
         self,
@@ -1174,13 +1216,15 @@ class SpecDecodeBaseProposer(EagleProposer):
         ori_seq_len=None,
         slot_indices=None,
         mtp_slot_mapping=None,
+        num_rejected_tokens_gpu=None,
+        advance_metadata=True,
         attn_group=None,
     ):
         assert draft_step > 0
         assert attn_group is not None, "vllm-ascend v0.17.0rc1 requires attn_group"
         common_attn_metadata = self.shallow_copy_metadata(old_common_metadata)
 
-        if draft_step == 1:
+        if advance_metadata and draft_step == 1:
             if aclgraph_runtime_mode == CUDAGraphMode.FULL:
                 common_attn_metadata.num_reqs = input_batch_size
                 common_attn_metadata.block_table_tensor = self._pad_tensor(
@@ -1212,93 +1256,110 @@ class SpecDecodeBaseProposer(EagleProposer):
             common_attn_metadata.graph_pad_size = -1
             common_attn_metadata.num_input_tokens = input_batch_size
 
-        # The loop part
-        used_update_positions += 1
+        if advance_metadata:
+            # The loop part
+            used_update_positions += 1
 
-        # Clone the data so that when calculating the data at position 2 and position 3
-        # in the merged graph, it does not affect position 1
-        # FIXME(lilinsiman)
-        common_attn_metadata.seq_lens = common_attn_metadata.seq_lens.clone()
-        common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu.clone()
-        common_attn_metadata.num_computed_tokens_cpu = common_attn_metadata.num_computed_tokens_cpu.clone()
-        common_attn_metadata.positions = common_attn_metadata.positions.clone()
+            # Clone the data so that when calculating the data at position 2 and position 3
+            # in the merged graph, it does not affect position 1
+            # FIXME(lilinsiman)
+            common_attn_metadata.seq_lens = common_attn_metadata.seq_lens.clone()
+            common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu.clone()
+            common_attn_metadata.num_computed_tokens_cpu = common_attn_metadata.num_computed_tokens_cpu.clone()
+            common_attn_metadata.positions = common_attn_metadata.positions.clone()
+            common_attn_metadata.positions_cpu = common_attn_metadata.positions_cpu.clone()
 
-        # NOTE(woosuk): We should handle the case where the draft model
-        # generates tokens beyond the max model length. Since it is complex
-        # to remove such requests from the batch, we keep them in the batch
-        # but adjust the position ids and slot mappings to avoid the
-        # out-of-range access during the model execution. The draft tokens
-        # generated with this adjustment should be ignored.
-        if self.uses_mrope:
-            exceeds_max_model_len = used_update_positions[0] >= self.max_model_len
-            # Mask out the position ids that exceed the max model length.
-            # Otherwise, we may get out-of-range error in RoPE.
-            clamped_positions = torch.where(
-                exceeds_max_model_len.unsqueeze(0), torch.zeros_like(used_update_positions), used_update_positions
+            # NOTE(woosuk): We should handle the case where the draft model
+            # generates tokens beyond the max model length. Since it is complex
+            # to remove such requests from the batch, we keep them in the batch
+            # but adjust the position ids and slot mappings to avoid the
+            # out-of-range access during the model execution. The draft tokens
+            # generated with this adjustment should be ignored.
+            if self.uses_mrope:
+                exceeds_max_model_len = used_update_positions[0] >= self.max_model_len
+                # Mask out the position ids that exceed the max model length.
+                # Otherwise, we may get out-of-range error in RoPE.
+                clamped_positions = torch.where(
+                    exceeds_max_model_len.unsqueeze(0),
+                    torch.zeros_like(used_update_positions),
+                    used_update_positions)
+            else:
+                exceeds_max_model_len = used_update_positions >= self.max_model_len
+                clamped_positions = torch.where(exceeds_max_model_len, 0, used_update_positions)
+
+            # For data integrity when async scheduling, we shouldn't use in place
+            # operations in case they are modified in next step's `prepare_input`
+            # of main model.
+            # Increment the sequence lengths.
+            seq_len_delta = 1
+            if draft_step == 1 and num_rejected_tokens_gpu is not None:
+                seq_len_delta = 1 - num_rejected_tokens_gpu[:batch_size]
+
+            common_attn_metadata.seq_lens[:batch_size] += seq_len_delta
+            # For the requests that exceed the max model length, we set the
+            # sequence length to 1 to minimize their overheads in attention.
+            common_attn_metadata.seq_lens[:batch_size].masked_fill_(exceeds_max_model_len, 1)
+
+            if isinstance(seq_len_delta, torch.Tensor):
+                seq_len_delta_cpu = seq_len_delta.cpu()
+            else:
+                seq_len_delta_cpu = seq_len_delta
+            common_attn_metadata.seq_lens_cpu[:batch_size] = (
+                common_attn_metadata.seq_lens_cpu[:batch_size] + seq_len_delta_cpu
             )
-        else:
-            exceeds_max_model_len = used_update_positions >= self.max_model_len
-            clamped_positions = torch.where(exceeds_max_model_len, 0, used_update_positions)
+            exceeds_mask = common_attn_metadata.seq_lens_cpu[:batch_size] >= self.max_model_len
+            common_attn_metadata.seq_lens_cpu[:batch_size].masked_fill_(exceeds_mask, 1)
+            common_attn_metadata.num_computed_tokens_cpu[:batch_size] += seq_len_delta_cpu
+            if self.uses_mrope:
+                common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
+                common_attn_metadata.positions_cpu[:batch_size] = clamped_positions[0].cpu()
+            else:
+                common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
+                common_attn_metadata.positions_cpu[:batch_size] = clamped_positions.cpu()
 
-        # For data integrity when async scheduling, we shouldn't use in place
-        # operations in case they are modified in next step's `prepare_input`
-        # of main model.
-        # Increment the sequence lengths.
-        common_attn_metadata.seq_lens[:batch_size] += 1
-        # For the requests that exceed the max model length, we set the
-        # sequence length to 1 to minimize their overheads in attention.
-        common_attn_metadata.seq_lens[:batch_size].masked_fill_(exceeds_max_model_len, 1)
+            if self.pcp_size * self.dcp_size > 1:
+                # update slot_mapping
+                slot_indices += self.pcp_size
+                slot_mapping = mtp_slot_mapping[slot_indices]
+                self.slot_mapping_group[draft_step][: batch_size * self.pcp_size] = slot_mapping
+                common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
+            else:
+                # NOTE: In vllm, `block_size = attn_metadata_builder.kv_cache_spec.block_size`.
+                # However, in vllm-ascend, the above value can be multiple of `kernel_block_size`,
+                # which is not correct for computing `slot_mapping` below.
+                block_size = self.kernel_block_size
+                if not isinstance(block_size, int):
+                    block_size = 128
 
-        common_attn_metadata.seq_lens_cpu[:batch_size] = common_attn_metadata.seq_lens_cpu[:batch_size] + 1
-        exceeds_mask = common_attn_metadata.seq_lens_cpu[:batch_size] >= self.max_model_len
-        common_attn_metadata.seq_lens_cpu[:batch_size].masked_fill_(exceeds_mask, 1)
-        common_attn_metadata.num_computed_tokens_cpu[:batch_size] += 1
-        if self.uses_mrope:
-            common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
-        else:
-            common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
+                # Compute the slot mapping.
+                if self.uses_mrope:
+                    block_numbers = clamped_positions[0] // block_size
+                else:
+                    block_numbers = clamped_positions // block_size
+                block_ids = old_common_metadata.block_table_tensor.gather(dim=1, index=block_numbers.view(-1, 1))
+                block_ids = block_ids.view(-1)
+                if self.uses_mrope:
+                    slot_mapping = block_ids * block_size + clamped_positions[0] % block_size
+                else:
+                    slot_mapping = block_ids * block_size + clamped_positions % block_size
+
+                # Mask out the slot mappings that exceed the max model length.
+                # Otherwise, the KV cache will be inadvertently updated with the
+                # padding tokens.
+                slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
+                self.slot_mapping_group[draft_step][: slot_mapping.shape[0]].copy_(slot_mapping.to(torch.int32))
+                self.slot_mapping_group[draft_step][slot_mapping.shape[0] :].fill_(PADDING_SLOT_ID)
+                # Set the address of the attn_metadata.slot_mapping to the self.slot_mapping_group[idx]
+                common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
 
         if self.pcp_size * self.dcp_size > 1:
             num_computed_tokens_of_pcp_dcp = self.runner.pcp_manager._get_cp_local_seq_lens(
-                ori_seq_len + draft_step + 1,
+                common_attn_metadata.seq_lens[:batch_size],
                 self.pcp_size,
                 self.dcp_size,
                 self.runner.parallel_config.cp_kv_cache_interleave_size,
             )
             cp_seq_len = num_computed_tokens_of_pcp_dcp[:, self.pcp_rank, self.dcp_rank]
-            # update slot_mapping
-            slot_indices += self.pcp_size
-            slot_mapping = mtp_slot_mapping[slot_indices]
-            self.slot_mapping_group[draft_step][: batch_size * self.pcp_size] = slot_mapping
-            common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
-        else:
-            # NOTE: In vllm, `block_size = attn_metadata_builder.kv_cache_spec.block_size`.
-            # However, in vllm-ascend, the above value can be multiple of `kernel_block_size`,
-            # which is not correct for computing `slot_mapping` below.
-            block_size = self.kernel_block_size
-            if not isinstance(block_size, int):
-                block_size = 128
-
-            # Compute the slot mapping.
-            if self.uses_mrope:
-                block_numbers = clamped_positions[0] // block_size
-            else:
-                block_numbers = clamped_positions // block_size
-            block_ids = old_common_metadata.block_table_tensor.gather(dim=1, index=block_numbers.view(-1, 1))
-            block_ids = block_ids.view(-1)
-            if self.uses_mrope:
-                slot_mapping = block_ids * block_size + clamped_positions[0] % block_size
-            else:
-                slot_mapping = block_ids * block_size + clamped_positions % block_size
-
-            # Mask out the slot mappings that exceed the max model length.
-            # Otherwise, the KV cache will be inadvertently updated with the
-            # padding tokens.
-            slot_mapping.masked_fill_(exceeds_max_model_len, PADDING_SLOT_ID)
-            self.slot_mapping_group[draft_step][: slot_mapping.shape[0]].copy_(slot_mapping.to(torch.int32))
-            self.slot_mapping_group[draft_step][slot_mapping.shape[0] :].fill_(PADDING_SLOT_ID)
-            # Set the address of the attn_metadata.slot_mapping to the self.slot_mapping_group[idx]
-            common_attn_metadata.slot_mapping = self.slot_mapping_group[draft_step]
 
         attn_metadata_builder = attn_group.get_metadata_builder()
         extra_attn_metadata_args = dict(
@@ -1458,7 +1519,8 @@ class SpecDecodeBaseProposer(EagleProposer):
         #  q1 + 0, q1 + 1, q1 + 2, q1 + 3,       // req 2
         #  q1 + q2 + 0, q1 + q2 + 1, q1 + q2 + 2] // req 3
         token_indices_np = token_offsets + old_query_start_locs_expanded
-        token_indices = torch.from_numpy(token_indices_np).to(device, non_blocking=True)
+        token_indices_cpu = torch.from_numpy(token_indices_np)
+        token_indices = token_indices_cpu.to(device, non_blocking=True)
 
         common_attn_metadata.slot_mapping[: token_indices.shape[0]].copy_(
             common_attn_metadata.slot_mapping[token_indices]
@@ -1482,7 +1544,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
-            positions_cpu=common_attn_metadata.positions_cpu[token_indices],
+            positions_cpu=common_attn_metadata.positions_cpu[token_indices_cpu],
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             max_seq_len=0,
@@ -1688,7 +1750,12 @@ class SpecDecodeBaseProposer(EagleProposer):
                 )
                 positions = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(positions.contiguous(), True)
                 if hidden_states is not None:
-                    hidden_states = last_hidden_states
+                    if hidden_states.shape == last_hidden_states.shape:
+                        hidden_states = last_hidden_states
+                    else:
+                        hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                            hidden_states.contiguous(), True
+                        )
         else:
             if _EXTRA_CTX.flash_comm_v1_enabled:
                 last_hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
