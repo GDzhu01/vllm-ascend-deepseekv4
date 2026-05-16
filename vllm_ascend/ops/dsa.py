@@ -225,9 +225,6 @@ def dsa_forward(
                                        dtype=hidden_states.dtype,
                                        device=hidden_states.device)
                 _ = impl.kv_norm(kv_dummy)
-                # Warmup indexer weights_proj if c4 layer
-                if impl.indexer is not None:
-                    _ = impl.weights_proj(dummy)
             torch.npu.current_stream().wait_stream(aux_stream)
         output.fill_(0)
         return
