@@ -1541,7 +1541,9 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             coff = 2 if self.compressor_overlap else 1
 
-            # compressor
+            # The compressor op updates state_cache on every decode token.
+            # Non-boundary steps may return an empty compressed_kv, but skipping
+            # the op loses the accumulated state needed by the next boundary.
             compressed_kv = torch.ops._C_ascend.compressor(
                 hidden_states,
                 self.compressor_wkv.weight,
@@ -1562,10 +1564,11 @@ class AscendDSAImpl(DSAAttentionImpl):
                 rotary_mode=2,
                 cache_mode=1)
             # kv_compress_epilog
-            torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                compress_kv_cache,
-                compressor_attn_metadata.decode.slot_mapping,
-                compressed_kv)
+            if compressed_kv.numel() > 0:
+                torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                    compress_kv_cache,
+                    compressor_attn_metadata.decode.slot_mapping,
+                    compressed_kv)
         if self.compress_ratio <= 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1675,10 +1678,12 @@ class AscendDSAImpl(DSAAttentionImpl):
             assert indexer_kv_scale_metadata.prefill is not None
             kv_block_table = indexer_kv_state_metadata.prefill.block_table
             start_pos = indexer_kv_scale_metadata.prefill.start_pos
+            slot_mapping = indexer_kv_scale_metadata.prefill.slot_mapping
         else:
             assert indexer_kv_scale_metadata.decode is not None
             kv_block_table = indexer_kv_state_metadata.decode.block_table
             start_pos = indexer_kv_scale_metadata.decode.start_pos
+            slot_mapping = indexer_kv_scale_metadata.decode.slot_mapping
 
         kv = torch.ops._C_ascend.compressor(
             x,
