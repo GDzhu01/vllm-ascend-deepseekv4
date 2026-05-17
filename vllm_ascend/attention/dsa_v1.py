@@ -1523,8 +1523,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.compress_ratio > 1:
             compress_cos = compress_common_attn_metadata.decode.compress_cos[layer_name]
             compress_sin = compress_common_attn_metadata.decode.compress_sin[layer_name]
-            has_compressor_decode_tokens = (
-                compressor_attn_metadata.decode.slot_mapping.numel() > 0)
             compress_topk_idxs = None
             if self.compress_ratio == 4:
                 compress_topk_idxs = self.indexer_select_qli(
@@ -1543,33 +1541,34 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             coff = 2 if self.compressor_overlap else 1
 
-            if has_compressor_decode_tokens:
-                # compressor
-                compressed_kv = torch.ops._C_ascend.compressor(
-                    hidden_states,
-                    self.compressor_wkv.weight,
-                    self.compressor_wgate.weight,
-                    state_cache.squeeze(-2),
-                    self.compressor_ape,
-                    self.compressor_norm.weight,
-                    compress_sin.view(-1, compress_sin.shape[-1]),
-                    compress_cos.view(-1, compress_cos.shape[-1]),
-                    state_block_table=compressor_kv_state_metadata.decode.block_table,
-                    cu_seqlens=actual_seq_lengths_query,
-                    seqused=None,
-                    start_pos=compress_common_attn_metadata.decode.start_pos,
-                    rope_head_dim=self.rope_head_dim,
-                    cmp_ratio=self.compress_ratio,
-                    coff=coff,
-                    norm_eps=self.compressor_norm_eps,
-                    rotary_mode=2,
-                    cache_mode=1)
-                # kv_compress_epilog
-                if compressed_kv.numel() > 0:
-                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
-                        compress_kv_cache,
-                        compressor_attn_metadata.decode.slot_mapping,
-                        compressed_kv)
+            # The compressor op updates state_cache on every decode token.
+            # Non-boundary steps may return an empty compressed_kv, but skipping
+            # the op loses the accumulated state needed by the next boundary.
+            compressed_kv = torch.ops._C_ascend.compressor(
+                hidden_states,
+                self.compressor_wkv.weight,
+                self.compressor_wgate.weight,
+                state_cache.squeeze(-2),
+                self.compressor_ape,
+                self.compressor_norm.weight,
+                compress_sin.view(-1, compress_sin.shape[-1]),
+                compress_cos.view(-1, compress_cos.shape[-1]),
+                state_block_table=compressor_kv_state_metadata.decode.block_table,
+                cu_seqlens=actual_seq_lengths_query,
+                seqused=None,
+                start_pos=compress_common_attn_metadata.decode.start_pos,
+                rope_head_dim=self.rope_head_dim,
+                cmp_ratio=self.compress_ratio,
+                coff=coff,
+                norm_eps=self.compressor_norm_eps,
+                rotary_mode=2,
+                cache_mode=1)
+            # kv_compress_epilog
+            if compressed_kv.numel() > 0:
+                torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                    compress_kv_cache,
+                    compressor_attn_metadata.decode.slot_mapping,
+                    compressed_kv)
         if self.compress_ratio <= 1:
             attn_output = torch.ops._C_ascend.npu_sparse_attn_sharedkv(
                 q,
@@ -1686,32 +1685,30 @@ class AscendDSAImpl(DSAAttentionImpl):
             start_pos = indexer_kv_scale_metadata.decode.start_pos
             slot_mapping = indexer_kv_scale_metadata.decode.slot_mapping
 
-        kv = None
-        if slot_mapping.numel() > 0:
-            kv = torch.ops._C_ascend.compressor(
-                x,
-                self.indexcom_wkv.weight,
-                self.indexcom_wgate.weight,
-                indexer_state_cache.squeeze(-2),
-                self.indexcom_ape,
-                self.indexcom_norm.weight,
-                compressed_sin.view(-1, compressed_sin.shape[-1]),
-                compressed_cos.view(-1, compressed_cos.shape[-1]),
-                state_block_table=kv_block_table,
-                cu_seqlens=actual_seq_lengths_query,
-                seqused=None,
-                start_pos=start_pos,
-                rope_head_dim=self.rope_head_dim,
-                cmp_ratio=self.compress_ratio,
-                coff=coff,
-                norm_eps=self.compressor_norm_eps,
-                rotary_mode=2,
-                cache_mode=1)
+        kv = torch.ops._C_ascend.compressor(
+            x,
+            self.indexcom_wkv.weight,
+            self.indexcom_wgate.weight,
+            indexer_state_cache.squeeze(-2),
+            self.indexcom_ape,
+            self.indexcom_norm.weight,
+            compressed_sin.view(-1, compressed_sin.shape[-1]),
+            compressed_cos.view(-1, compressed_cos.shape[-1]),
+            state_block_table=kv_block_table,
+            cu_seqlens=actual_seq_lengths_query,
+            seqused=None,
+            start_pos=start_pos,
+            rope_head_dim=self.rope_head_dim,
+            cmp_ratio=self.compress_ratio,
+            coff=coff,
+            norm_eps=self.compressor_norm_eps,
+            rotary_mode=2,
+            cache_mode=1)
 
-            if kv.numel() == 0:
-                kv = None
-            elif self.indexer.compressor.rotate:
-                kv = rotate_activation(kv, indexer_kv_scale_metadata.hadamard)
+        if kv.numel() == 0:
+            kv = None
+        elif self.indexer.compressor.rotate:
+            kv = rotate_activation(kv, indexer_kv_scale_metadata.hadamard)
 
         weights = self.weights_proj(x) * (self.indexer_softmax_scale *
                                           self.indexer_heads ** -0.5)
