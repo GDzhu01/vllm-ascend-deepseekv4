@@ -34,10 +34,10 @@ from vllm.utils.torch_utils import direct_register_custom_op
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 from vllm_ascend.utils import (
     AscendDeviceType,
-    dsv4_dsa_overlap_stream,
     get_ascend_device_type,
     npu_stream_switch,
 )
+from vllm_ascend.attention.dsa_v1 import dsv4_dsa_overlap_stream
 
 from vllm_ascend.models.layer.attention.layer import DSAAttention
 
@@ -199,7 +199,7 @@ def dsa_forward(
         # that have never been exercised during profiling. This warmup ensures
         # all aux-stream op patterns are captured for ACL graph compatibility.
         impl = self.dsa_attn.impl
-        if impl._use_dual_stream():
+        if impl.multistream_dsv4_dsa_overlap:
             dummy = torch.zeros(1, hidden_states.shape[-1],
                                 dtype=hidden_states.dtype,
                                 device=hidden_states.device)
@@ -208,7 +208,7 @@ def dsa_forward(
             with npu_stream_switch(aux_stream, enabled=True):
                 torch.npu.current_stream().wait_event(e_warmup)
                 # Part1 aux: kv_quant (npu_dynamic_quant)
-                if impl._is_w8a8_layer(impl.wkv):
+                if hasattr(impl.wkv, 'weight_scale') and impl.wkv.weight.dtype == torch.int8:
                     kv_q_dummy, kv_s_dummy = torch_npu.npu_dynamic_quant(dummy)
                     # Part2 aux: kv_proj (npu_quant_matmul)
                     _ = torch_npu.npu_quant_matmul(

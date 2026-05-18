@@ -109,7 +109,6 @@ _GRAPH_PRINT_STREAM = None
 _GRAPH_PRINT_STREAM_LOCK = Lock()
 _HAS_ROPE = None
 _ATNN_CALCULATION_STREAM = None
-_DSV4_DSA_OVERLAP_STREAM = None
 _CUSTOM_OP_VENDOR_DIR = "custom_transformer"
 _CUSTOM_OP_BASE_DIR = (
     os.path.dirname(__file__) if os.path.isabs(__file__) else os.path.abspath(os.path.dirname(__file__))
@@ -456,12 +455,6 @@ def attention_calculation_stream() -> torch.npu.Stream:
     if _ATNN_CALCULATION_STREAM is None:
         _ATNN_CALCULATION_STREAM = torch_npu.npu.Stream()
     return _ATNN_CALCULATION_STREAM
-
-def dsv4_dsa_overlap_stream() -> torch.npu.Stream:
-    global _DSV4_DSA_OVERLAP_STREAM
-    if _DSV4_DSA_OVERLAP_STREAM is None:
-        _DSV4_DSA_OVERLAP_STREAM = torch_npu.npu.Stream()
-    return _DSV4_DSA_OVERLAP_STREAM
 
 def adapt_patch(is_global_patch: bool = False):
     if is_global_patch:
