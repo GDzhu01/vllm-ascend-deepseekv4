@@ -56,6 +56,61 @@ else:
 BUILD_METADATA_STEP_PREFILL = 0
 BUILD_METADATA_STEP_DECODE = 1
 
+from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+from vllm.distributed.parallel_state import get_tp_group
+import torch
+from vllm.distributed.communication_op import tensor_model_parallel_all_gather
+
+# 选择 device 模块（CUDA 或 NPU）
+try:
+    import torch_npu  # noqa
+    _dev = torch.npu
+except ImportError:
+    _dev = torch.cuda
+
+# 全局通信流（每个 device 一条就够，按需懒初始化）
+_comm_stream = None
+def _get_comm_stream():
+    global _comm_stream
+    if _comm_stream is None:
+        _comm_stream = _dev.Stream()
+    return _comm_stream
+
+
+def async_tp_all_gather(x: torch.Tensor, pad_size: int, do_gather: bool = True):
+    """
+    异步版 tensor_model_parallel_all_gather.
+    返回 (out_tensor, event, pad_size). 用 wait_and_unpad 拿结果.
+    """
+    if not do_gather:
+        return x, None, 0
+
+    comm_stream = _get_comm_stream()
+    cur_stream = _dev.current_stream()
+
+    # ① 让 comm_stream 等待 x 在 cur_stream 上的生产完成
+    comm_stream.wait_stream(cur_stream)
+
+    with _dev.stream(comm_stream):
+        # ② 防止 x 的内存被 cur_stream 提前释放
+        x.record_stream(comm_stream)
+        # ③ 直接复用 vllm 原封装, 保留所有内部逻辑
+        out = tensor_model_parallel_all_gather(x, 0)
+
+    # ④ 记录完成事件
+    event = comm_stream.record_event()
+    return out, event, pad_size
+
+def wait_and_unpad(out: torch.Tensor, event, pad_size: int) -> torch.Tensor:
+    if event is None:
+        return out
+    # ⑤ 当前计算流等通信完成
+    _dev.current_stream().wait_event(event)
+    # ⑥ 防止 out 被 comm_stream 在还没被 cur_stream 用完时回收
+    out.record_stream(_dev.current_stream())
+    if pad_size > 0:
+        out = out[:-pad_size]
+    return out
 
 def _scatter_nd_update_asc(var: torch.Tensor, indices: torch.Tensor,
                            update: torch.Tensor) -> None:
@@ -1504,61 +1559,49 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_key = compress_common_attn_metadata.prefill.seq_lens
 
         num_prefill_tokens = cos.shape[0]   # 真实 (unpadded) prefill token 数
+        do_gather = _EXTRA_CTX.flash_comm_v1_enabled and (get_tp_group().world_size > 1)
+        pad_size = _EXTRA_CTX.pad_size
 
-        if defer_gather:
-            # ---- 优化1: 先派发 hidden_states 的 gather (它后续才被用) ----
-            # 让它在通信流上和下面的 wq_a / q_norm / wkv / kv_norm overlap
-            hidden_states_full = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                hidden_states, need_gather_q_kv)
+        # ① 派发 hidden_states 的 gather
+        hs_buf, hs_handle, _ = async_tp_all_gather(hidden_states, pad_size, do_gather=do_gather)
 
-            # ---- 阶段1: SP 分片上的本地计算 (用 sharded hidden_states) ----
-            qr = self.q_norm(self.wq_a(hidden_states))   # [T_local, q_lora_rank]
+        # ② 在通信进行中, 计算流跑 wq_a / q_norm / wkv / kv_norm
+        qr = self.q_norm(self.wq_a(hidden_states))      # 用 sharded
 
-            # ---- 优化1续: 派发 qr 的 gather, 与下面 kv 的本地计算 overlap ----
-            qr = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                qr, need_gather_q_kv)
+        # ③ 派发 qr 的 gather
+        qr_buf, qr_handle, _ = async_tp_all_gather(qr, pad_size, do_gather=do_gather)
 
-            kv = self.wkv(hidden_states)
-            kv = self.kv_norm(kv)
-            assert self.rope_head_dim is not None
-            kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
+        kv = self.kv_norm(self.wkv(hidden_states))      # 用 sharded
+        kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
-            # ---- 阶段2: kv gather (统一 2D, 避免 unpad 走错分支) ----
-            kv_inner = kv.shape[-1]
-            kv_2d = kv.reshape(kv.shape[0], kv_inner)
-            kv_2d = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                kv_2d, need_gather_q_kv)
-            kv = kv_2d.view(-1, 1, kv_inner)
+        # ④ 派发 kv 的 gather (用 2D 形状)
+        kv_inner = kv.shape[-1]
+        kv_2d = kv.reshape(kv.shape[0], kv_inner)
+        kv_buf, kv_handle, _ = async_tp_all_gather(kv_2d, pad_size, do_gather=do_gather)
 
-            # ---- unpad 兜底: 注意是对 hidden_states_full 切, 不是 hidden_states ----
-            if qr.shape[0] != num_prefill_tokens:
-                qr                 = qr[:num_prefill_tokens]
-                kv                 = kv[:num_prefill_tokens]
-                hidden_states_full = hidden_states_full[:num_prefill_tokens]
+        # ⑤ 此时三个 collective 都在通信流排队/执行
+        #    计算流可以做"不依赖任何 gather 结果"的工作
+        #    (如果有的话, 比如其他无关 prep). 没有就直接 wait.
 
-            # 用 full 替换 sharded, 后续阶段3全部基于 full sequence
-            hidden_states = hidden_states_full
+        # ⑥ 等 qr, 立刻算 wq_b (大 GEMM, 与 kv 的 gather overlap)
+        qr_full = wait_and_unpad(qr_buf, qr_handle, pad_size)
+        if qr_full.shape[0] != num_prefill_tokens:
+            qr_full = qr_full[:num_prefill_tokens]
+        qr = qr_full
+        
+        q = self.wq_b(qr_full).unflatten(-1, (self.n_local_heads, self.head_dim))
+        q = triton_q_rms(q, self.eps)   # 这步在计算流, kv_handle 仍在通信流
 
-            # ---- 优化2: 用 full-seq qr 本地算 q (省掉 q 的 all_gather) ----
-            q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-            q = triton_q_rms(q, self.eps)
+        # ⑦ 真正要用 kv 时再 wait
+        kv_full_2d = wait_and_unpad(kv_buf, kv_handle, pad_size)
+        if kv_full_2d.shape[0] != num_prefill_tokens:
+            kv_full_2d = kv_full_2d[:num_prefill_tokens]
+        kv = kv_full_2d.view(-1, 1, kv_inner)
 
-        else:
-            # 非 SP 路径: 与原始实现等价, 不做任何 gather
-            qr = self.q_norm(self.wq_a(hidden_states))
-            q  = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-            q  = triton_q_rms(q, self.eps)
-
-            kv = self.wkv(hidden_states)
-            kv = self.kv_norm(kv)
-            assert self.rope_head_dim is not None
-            kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
-
-        # 调试期断言
-        assert q.shape[0] == cos.shape[0], (
-            f"size mismatch: q={q.shape}, cos={cos.shape}, "
-            f"kv={kv.shape}, hidden={hidden_states.shape}"
-        )
+        # ⑧ hidden_states_full 在最后才 wait
+        hidden_states = wait_and_unpad(hs_buf, hs_handle, pad_size)
+        if hidden_states.shape[0] != num_prefill_tokens:
+            hidden_states = hidden_states[:num_prefill_tokens]
 
         # ------------------------------------------------------------------
         # 阶段 3:RoPE / scatter / compressor / indexer / attention
