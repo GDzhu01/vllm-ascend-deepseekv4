@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+import torch_npu
 from torch import nn
 from vllm.v1.attention.backend import AttentionMetadata
 from vllm.config import CacheConfig, get_current_vllm_config
@@ -34,7 +35,9 @@ from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 from vllm_ascend.utils import (
     AscendDeviceType,
     get_ascend_device_type,
+    npu_stream_switch,
 )
+from vllm_ascend.attention.dsa_v1 import dsv4_dsa_overlap_stream
 
 from vllm_ascend.models.layer.attention.layer import DSAAttention
 
@@ -191,7 +194,38 @@ def dsa_forward(
         attn_metadata = forward_context.attn_metadata
 
     if attn_metadata is None:
-        # Profiling run.
+        # Profiling run — lightweight sub-stream warmup (1 token).
+        # When dual-stream is enabled, the aux stream runs ops during forward
+        # that have never been exercised during profiling. This warmup ensures
+        # all aux-stream op patterns are captured for ACL graph compatibility.
+        impl = self.dsa_attn.impl
+        if impl.multistream_dsv4_dsa_overlap:
+            dummy = torch.zeros(1, hidden_states.shape[-1],
+                                dtype=hidden_states.dtype,
+                                device=hidden_states.device)
+            aux_stream = dsv4_dsa_overlap_stream()
+            e_warmup = torch.npu.current_stream().record_event()
+            with npu_stream_switch(aux_stream, enabled=True):
+                torch.npu.current_stream().wait_event(e_warmup)
+                # Part1 aux: kv_quant (npu_dynamic_quant)
+                if hasattr(impl.wkv, 'weight_scale') and impl.wkv.weight.dtype == torch.int8:
+                    kv_q_dummy, kv_s_dummy = torch_npu.npu_dynamic_quant(dummy)
+                    # Part2 aux: kv_proj (npu_quant_matmul)
+                    _ = torch_npu.npu_quant_matmul(
+                        kv_q_dummy,
+                        impl.wkv.weight,
+                        impl.wkv.weight_scale,
+                        pertoken_scale=kv_s_dummy,
+                        output_dtype=hidden_states.dtype)
+                else:
+                    _ = impl.cv_wkv.quantize(dummy)
+                    _ = impl.cv_wkv.matmul(dummy, None)
+                # Part3 aux: kv_norm + rope + scatter
+                kv_dummy = torch.zeros(1, impl.nope_head_dim + impl.rope_head_dim,
+                                       dtype=hidden_states.dtype,
+                                       device=hidden_states.device)
+                _ = impl.kv_norm(kv_dummy)
+            torch.npu.current_stream().wait_stream(aux_stream)
         output.fill_(0)
         return
 
