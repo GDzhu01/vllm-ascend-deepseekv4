@@ -1872,11 +1872,49 @@ at::Tensor construct_hc_pre_rsqrt_output_tensor(const at::Tensor& x, float epsil
     return yOut;
 }
 
+void check_hc_pre_shape_and_dtype(
+    const at::Tensor& x,
+    const at::Tensor& hc_fn,
+    const at::Tensor& hc_scale,
+    const at::Tensor& hc_base,
+    int64_t hc_mult)
+{
+    constexpr int64_t HC_SCALE_SIZE = 3;
+    auto x_dims = x.dim();
+    TORCH_CHECK(x_dims == 3 || x_dims == 4, "Input tensor x's dim num should be 3 or 4, actual ", x_dims, ".");
+    for (auto i = 0; i < x_dims; i++) {
+        TORCH_CHECK(x.size(i) > 0, "Input tensor x's shape should be positive, but x.shape[", i, "] is ",
+                    x.size(i), ".");
+    }
+
+    auto hc = x_dims == 4 ? x.size(2) : x.size(1);
+    auto d = x_dims == 4 ? x.size(3) : x.size(2);
+    TORCH_CHECK(hc == hc_mult, "The hc of x should be equal to hc_mult, actual hc is ", hc,
+                ", hc_mult is ", hc_mult, ".");
+    auto hc_mix = (2 + hc_mult) * hc_mult;
+    TORCH_CHECK(hc_fn.dim() == 2, "Input tensor hc_fn's dim num should be 2, actual ", hc_fn.dim(), ".");
+    TORCH_CHECK(hc_fn.size(0) == hc_mix, "The hc_fn.shape[0] should be (2 + hc_mult) * hc_mult, actual ",
+                hc_fn.size(0), ", expected ", hc_mix, ".");
+    TORCH_CHECK(hc_fn.size(1) == hc * d, "The hc_fn.shape[1] should be hc * d, actual hc_fn.shape[1] is ",
+                hc_fn.size(1), ", hc is ", hc, ", d is ", d, ".");
+    TORCH_CHECK(hc_scale.dim() == 1, "Input tensor hc_scale's dim num should be 1, actual ", hc_scale.dim(), ".");
+    TORCH_CHECK(hc_scale.size(0) == HC_SCALE_SIZE, "Input tensor hc_scale's shape should be [", HC_SCALE_SIZE,
+                "], actual [", hc_scale.size(0), "].");
+    TORCH_CHECK(hc_base.dim() == 1, "Input tensor hc_base's dim num should be 1, actual ", hc_base.dim(), ".");
+    TORCH_CHECK(hc_base.size(0) == hc_mix, "The hc_base.shape[0] should be (2 + hc_mult) * hc_mult, actual ",
+                hc_base.size(0), ", expected ", hc_mix, ".");
+
+    TORCH_CHECK(x.dtype() == at::kBFloat16, "x's dtype should be BFLOAT16.");
+    TORCH_CHECK(hc_fn.dtype() == at::kFloat, "hc_fn's dtype should be FLOAT32.");
+    TORCH_CHECK(hc_scale.dtype() == at::kFloat, "hc_scale's dtype should be FLOAT32.");
+    TORCH_CHECK(hc_base.dtype() == at::kFloat, "hc_base's dtype should be FLOAT32.");
+}
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
-    const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base, 
+    const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base,
     int64_t hc_mult, int64_t hc_sinkhorn_iters, double norm_eps, double hc_eps)
 {
+    check_hc_pre_shape_and_dtype(x, hc_fn, hc_scale, hc_base, hc_mult);
     auto xDims = x.dim();
     // call hc_pre_inv_rms
     auto rsqrt = construct_hc_pre_rsqrt_output_tensor(x, norm_eps);
@@ -1896,9 +1934,25 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_npu(
     at::Tensor y = std::get<0>(output_tensors);
     at::Tensor post = std::get<1>(output_tensors);
     at::Tensor comb_frag = std::get<2>(output_tensors);
-    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps,
                     y, post, comb_frag);
     y = y.to(original_type);
+
+    return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
+}
+std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_v2_npu(
+    const at::Tensor& x, const at::Tensor& hc_fn, const at::Tensor& hc_scale, const at::Tensor& hc_base,
+    int64_t hc_mult, int64_t hc_sinkhorn_iters, double norm_eps, double hc_eps)
+{
+    check_hc_pre_shape_and_dtype(x, hc_fn, hc_scale, hc_base, hc_mult);
+
+    // Keep npu_hc_pre as the composite path; v2 calls the fused HcPre op directly.
+    auto output_tensors = construct_hc_pre_output_tensor(x, hc_mult);
+    at::Tensor y = std::get<0>(output_tensors);
+    at::Tensor post = std::get<1>(output_tensors);
+    at::Tensor comb_frag = std::get<2>(output_tensors);
+    EXEC_NPU_CMD(aclnnHcPre, x, hc_fn, hc_scale, hc_base, hc_mult, hc_sinkhorn_iters, hc_eps, norm_eps,
+                    y, post, comb_frag);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
 }
@@ -1940,7 +1994,7 @@ at::Tensor npu_hc_pre_inv_rms_npu(const at::Tensor& x, double epsilon=1e-20)
 
     // Execute the NPU operation
     EXEC_NPU_CMD(aclnnHcPreInvRms, x, epsilon, yOut);
-    
+
     return yOut;
 }
 
@@ -1973,7 +2027,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_hc_pre_sinkhorn_output_
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_npu(
-    const at::Tensor& mixes, const at::Tensor& rsqrt, const at::Tensor& hc_scale, const at::Tensor& hc_base, 
+    const at::Tensor& mixes, const at::Tensor& rsqrt, const at::Tensor& hc_scale, const at::Tensor& hc_base,
     const at::Tensor& x, int64_t hc_mult, int64_t hc_sinkhorn_iters, double hc_eps)
 {
     // construct the output tensor
@@ -1982,7 +2036,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_hc_pre_sinkhorn_npu(
     at::Tensor post = std::get<1>(output_tensors);
     at::Tensor comb_frag = std::get<2>(output_tensors);
 
-    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps, 
+    EXEC_NPU_CMD(aclnnHcPreSinkhorn, mixes, rsqrt, hc_scale, hc_base, x, hc_mult, hc_sinkhorn_iters, hc_eps,
                     y, post, comb_frag);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, post, comb_frag);
@@ -2044,16 +2098,16 @@ std::tuple<at::Tensor, at::Tensor> npu_rms_norm_dynamic_quant_npu(
     int64_t* dst_type = nullptr;
     // Execute the NPU operation
     EXEC_NPU_CMD(aclnnRmsNormDynamicQuant, x, gamma, smooth_scale, smooth_scale2, beta, epsilon, output_mask, dst_type, y_out, y2_out, scale_out, scale2_out);
-    
+
     return std::make_tuple(y_out, scale_out);
 }
 
 void indexer_compress_epilog_npu(
-    at::Tensor& indexer_compress_cache, 
-    at::Tensor& indexer_compress_cache_scale, 
-    const at::Tensor& x, 
-    const at::Tensor& slot_mapping, 
-    int64_t quant_mode=1, 
+    at::Tensor& indexer_compress_cache,
+    at::Tensor& indexer_compress_cache_scale,
+    const at::Tensor& x,
+    const at::Tensor& slot_mapping,
+    int64_t quant_mode=1,
     bool round_scale=true)
 {
     EXEC_NPU_CMD(aclnnIndexerCompressEpilog, indexer_compress_cache, indexer_compress_cache_scale, x, slot_mapping, quant_mode, round_scale);
@@ -2157,11 +2211,11 @@ std::tuple<at::Tensor, at::Tensor> construct_temp_output_tensor(const at::Tensor
 std::tuple<at::Tensor, at::Tensor> npu_kv_quant_sparse_attn_sharedkv_npu(const at::Tensor &q, int64_t kv_quant_mode,
     const c10::optional<at::Tensor> &ori_kv, const c10::optional<at::Tensor> &cmp_kv,
     const c10::optional<at::Tensor> &ori_sparse_indices, const c10::optional<at::Tensor> &cmp_sparse_indices,
-    const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table, 
+    const c10::optional<at::Tensor> &ori_block_table, const c10::optional<at::Tensor> &cmp_block_table,
     const c10::optional<at::Tensor> &cu_seqlens_q, const c10::optional<at::Tensor> &cu_seqlens_ori_kv,
     const c10::optional<at::Tensor> &cu_seqlens_cmp_kv, const c10::optional<at::Tensor> &seqused_q,
     const c10::optional<at::Tensor> &seqused_kv, const c10::optional<at::Tensor> &sinks, const c10::optional<at::Tensor> &metadata,
-    int64_t tile_size, int64_t rope_head_dim, double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode, 
+    int64_t tile_size, int64_t rope_head_dim, double softmax_scale, int64_t cmp_ratio, int64_t ori_mask_mode,
     int64_t cmp_mask_mode, int64_t ori_win_left, int64_t ori_win_right, c10::string_view layout_q,
     c10::string_view layout_kv, bool return_softmax_lse)
 {
@@ -2251,9 +2305,9 @@ at::Tensor npu_kv_quant_sparse_attn_sharedkv_metadata_npu(
     char *layout_kv_ptr = const_cast<char *>(layout_kv_str.c_str());
 
     // 调用EXEC_NPU_CMD_V1
-    EXEC_NPU_CMD(aclnnKvQuantSparseAttnSharedkvMetadata, cu_seqlens_q_val, cu_seqlens_ori_kv_val, cu_seqlens_cmp_kv_val, 
-                    seqused_q_val, seqused_kv_val, num_heads_q, num_heads_kv, head_dim, batch_size, max_seqlen_q, max_seqlen_kv, 
-                    ori_topk, cmp_topk, kv_quant_mode, tile_size, rope_head_dim, cmp_ratio, ori_mask_mode, cmp_mask_mode, 
+    EXEC_NPU_CMD(aclnnKvQuantSparseAttnSharedkvMetadata, cu_seqlens_q_val, cu_seqlens_ori_kv_val, cu_seqlens_cmp_kv_val,
+                    seqused_q_val, seqused_kv_val, num_heads_q, num_heads_kv, head_dim, batch_size, max_seqlen_q, max_seqlen_kv,
+                    ori_topk, cmp_topk, kv_quant_mode, tile_size, rope_head_dim, cmp_ratio, ori_mask_mode, cmp_mask_mode,
                     ori_win_left, ori_win_right, layout_q_ptr, layout_kv_ptr, has_ori_kv, has_cmp_kv, output);
     return output;
 }
@@ -2283,9 +2337,9 @@ int64_t get_type_code(at::ScalarType dst_type)
 
 // 工具函数，推导输出shape
 std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_swiglu_group_quant_output_tensor(
-    const at::Tensor& x, 
-    int64_t dst_type, 
-    int64_t quant_mode, 
+    const at::Tensor& x,
+    int64_t dst_type,
+    int64_t quant_mode,
     bool ue8m0_scale)
 {
     const int SIZE = 8;
@@ -2312,7 +2366,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_swiglu_group_quant_outp
     } else {
         TORCH_CHECK(x_last_dim % 128 == 0, "In mx quant, the last dim of x should be divisible by 128, actual ", x_last_dim, ".");
     }
-    
+
     // Divide the last dimension by 2
     if (!y_size.empty()) {
         y_size.back() = y_size.back() / SWIGLU_FACTOR;
@@ -2338,16 +2392,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> construct_swiglu_group_quant_outp
     at::Tensor scale = at::empty(scale_size, x.options().dtype(scale_type));
 
     at::Tensor yOrigin = at::empty(y_size, x.options().dtype(x.dtype()));
-    
+
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(y, scale, yOrigin);
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> npu_swiglu_group_quant_npu(
-    const at::Tensor& x, 
-    const c10::optional<at::Tensor>& topk_weight, 
-    const c10::optional<at::Tensor>& group_index, 
-    at::ScalarType dst_type = at::ScalarType::Float8_e4m3fn, 
-    int64_t quant_mode = 1, 
+    const at::Tensor& x,
+    const c10::optional<at::Tensor>& topk_weight,
+    const c10::optional<at::Tensor>& group_index,
+    at::ScalarType dst_type = at::ScalarType::Float8_e4m3fn,
+    int64_t quant_mode = 1,
     int64_t group_size = 128,
     bool round_scale = false,
     bool ue8m0_scale = false,
@@ -2464,10 +2518,10 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
 
     //batch_matmul ops refer to sgl-kernel-npu
     ops.def(
-            "batch_matmul_transpose(Tensor tensor_a, Tensor tensor_b, Tensor tensor_c, str? format_mode=None, str? quant_mode=None) -> ()");    
+            "batch_matmul_transpose(Tensor tensor_a, Tensor tensor_b, Tensor tensor_c, str? format_mode=None, str? quant_mode=None) -> ()");
     ops.impl("batch_matmul_transpose", torch::kPrivateUse1, &vllm_ascend::batch_matmul_transpose);
 
-    ops.def("swap_blocks(Tensor! x, Tensor! y, Tensor z) -> ()");    
+    ops.def("swap_blocks(Tensor! x, Tensor! y, Tensor z) -> ()");
     ops.impl("swap_blocks", torch::kPrivateUse1, &vllm_ascend::swap_blocks);
     #endif
     ops.def(
@@ -2547,7 +2601,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "num_ranks) -> Tensor");
     ops.impl("combine_prefill", torch::kPrivateUse1,
              &vllm_ascend::combine_prefill);
-    
+
     ops.def(
         "npu_moe_init_routing_custom(Tensor x, Tensor expert_idx, *, Tensor? scale=None, Tensor? offset=None, int active_num=-1, "
         "                            int expert_capacity=-1, int expert_num=-1, int drop_pad_mode=0, int expert_tokens_num_type=0, "
@@ -2568,7 +2622,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
                             "float routed_scaling_factor, "
                             "float eps,"
                             "Tensor? bias_opt=None)"
-                            
+
         "-> (Tensor y ,Tensor expert_idx, Tensor out)"
         );
     ops.impl("moe_gating_top_k", torch::kPrivateUse1,&vllm_ascend::moe_gating_top_k);
@@ -2716,7 +2770,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "int pre_tokens=9223372036854775807, "
             "int next_tokens=9223372036854775807, "
             "int cmp_ratio=1, "
-            "str device='npu'"                     
+            "str device='npu'"
         ") -> Tensor"
     );
     ops.impl("npu_quant_lightning_indexer_metadata", torch::kPrivateUse1, &vllm_ascend::npu_quant_lightning_indexer_metadata_npu);
@@ -2739,6 +2793,15 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         ") -> (Tensor out0, Tensor out1, Tensor out2)"
         );
     ops.impl("npu_hc_pre", torch::kPrivateUse1, &vllm_ascend::npu_hc_pre_npu);
+
+    ops.def(
+        "npu_hc_pre_v2("
+            "Tensor x, Tensor hc_fn, Tensor hc_scale, Tensor hc_base, "
+            "int hc_mult, int hc_sinkhorn_iters, "
+            "float norm_eps, float hc_eps"
+        ") -> (Tensor out0, Tensor out1, Tensor out2)"
+        );
+    ops.impl("npu_hc_pre_v2", torch::kPrivateUse1, &vllm_ascend::npu_hc_pre_v2_npu);
 
     ops.def(
         "npu_hc_pre_inv_rms("

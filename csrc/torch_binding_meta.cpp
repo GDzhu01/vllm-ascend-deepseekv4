@@ -1266,6 +1266,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("npu_hc_post", &vllm_ascend::meta::npu_hc_post_meta);
     // npu_hc_pre
     ops.impl("npu_hc_pre", &vllm_ascend::meta::npu_hc_pre_meta);
+    // npu_hc_pre_v2
+    ops.impl("npu_hc_pre_v2", &vllm_ascend::meta::npu_hc_pre_meta);
     // npu_hc_pre_inv_rms
     ops.impl("npu_hc_pre_inv_rms", &vllm_ascend::meta::npu_hc_pre_inv_rms_meta);
     // npu_hc_pre_inv_rms
