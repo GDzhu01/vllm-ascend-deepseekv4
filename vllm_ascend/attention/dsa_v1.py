@@ -1352,28 +1352,55 @@ class AscendDSAImpl(DSAAttentionImpl):
         if not isinstance(attn_metadata, list):
             attn_metadata = [attn_metadata]
         output_padded = output
-        # Process for Flash Comm V1
-        hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-            hidden_states, need_gather_q_kv)
+
         has_prefill = attn_metadata[0].num_prefills > 0
         has_decode = attn_metadata[0].num_decodes > 0
         decode_tokens = attn_metadata[0].num_decode_tokens
         actual_tokens = attn_metadata[0].num_actual_tokens
-        prefill_hidden_states = hidden_states[decode_tokens:actual_tokens]
-        decode_hidden_states = hidden_states[:decode_tokens]
+
+        # ------------------------------------------------------------------
+        # SP 优化:
+        # 仅在「纯 prefill」(no decode) 且开启了 SP gather 的情况下,
+        # 推迟入口处的 all_gather。这样 wq_a / wq_b / wkv / q_norm / kv_norm
+        # 等逐 token 的算子能直接跑在 SP 分片上,每张卡只处理自己那一段,
+        # 然后在 _forward_prefill 内部、第一个 _scatter_nd_update_asc 之前
+        # 统一 all_gather,再做 RoPE / scatter / compressor / indexer / attn。
+        #
+        # 混合 prefill+decode 或纯 decode 时,prefill_hidden_states /
+        # decode_hidden_states 的切片必须基于完整 token 顺序,因此仍然在
+        # 入口处先 gather。
+        # ------------------------------------------------------------------
+        defer_gather_in_prefill = (has_prefill and not has_decode
+                                and need_gather_q_kv)
+
+        if defer_gather_in_prefill:
+            # 纯 prefill: hidden_states 仍是 SP 分片,
+            # decode_tokens == 0,所以分片整体就是 prefill 段。
+            prefill_hidden_states = hidden_states
+            decode_hidden_states = None
+        else:
+            hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                hidden_states, need_gather_q_kv)
+            prefill_hidden_states = hidden_states[decode_tokens:actual_tokens]
+            decode_hidden_states = hidden_states[:decode_tokens]
 
         forward_context = get_forward_context()
         o_proj_input_shape = (forward_context.num_tokens, self.n_local_heads,
-                              self.head_dim)
+                            self.head_dim)
         o_proj_input = torch.empty(o_proj_input_shape,
-                                   dtype=hidden_states.dtype,
-                                   device=hidden_states.device)
+                                dtype=hidden_states.dtype,
+                                device=hidden_states.device)
 
         if has_prefill:
             assert attn_metadata[0].prefill is not None
-            output_prefill = self._forward_prefill(layer_name,
-                                                   prefill_hidden_states,
-                                                   kv_cache, attn_metadata)
+            output_prefill = self._forward_prefill(
+                layer_name,
+                prefill_hidden_states,
+                kv_cache,
+                attn_metadata,
+                need_gather_q_kv=need_gather_q_kv,
+                defer_gather=defer_gather_in_prefill,
+            )
             o_proj_input[decode_tokens:actual_tokens] = output_prefill
             cos = attn_metadata[0].prefill.cos[layer_name]
             sin = attn_metadata[0].prefill.sin[layer_name]
@@ -1381,8 +1408,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         if has_decode:
             assert attn_metadata[0].decode is not None
             output_decode = self._forward_decode(layer_name,
-                                                 decode_hidden_states,
-                                                 kv_cache, attn_metadata)
+                                                decode_hidden_states,
+                                                kv_cache, attn_metadata)
             o_proj_input[:decode_tokens] = output_decode
             cos = attn_metadata[0].decode.cos[layer_name]
             sin = attn_metadata[0].decode.sin[layer_name]
@@ -1422,8 +1449,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         elif olora_tp_enable():
             o_proj_input = self.wo_a(o_proj_input)
         else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
             o_proj_input = torch_npu.npu_transpose_batchmatmul(
                 o_proj_input,
                 self.wo_a.weight,
@@ -1449,39 +1474,90 @@ class AscendDSAImpl(DSAAttentionImpl):
         hidden_states: torch.Tensor,
         kv_cache: Tuple,
         attn_metadata: AscendDSAMetadata,
+        need_gather_q_kv: bool = False,
+        defer_gather: bool = False,
     ):
         compress_common_attn_metadata = None
         if self.compress_ratio == 4:
-            # (swa_cache, compressor_attn_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            # (swa_metadata, compressor_attn_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
-            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state, compressor_score_state, _, _) = kv_cache
-            # print("c4", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
-            (compressor_attn_metadata, swa_metadata, _, compressor_kv_state_metadata, compressor_score_state_metadata, _, _) = attn_metadata
+            (compressor_attn_cache, swa_cache, _, _, compressor_kv_state,
+            compressor_score_state, _, _) = kv_cache
+            (compressor_attn_metadata, swa_metadata, _,
+            compressor_kv_state_metadata, compressor_score_state_metadata, _,
+            _) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         elif self.compress_ratio == 128:
-            (swa_cache, compressor_attn_cache, compressor_kv_state, compressor_score_state) = kv_cache
-            # print("c128", list(f"{k.shape=}, {k.dtype=}" for k in kv_cache))
-            (swa_metadata, compressor_attn_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
-            # (compressor_attn_cache, swa_cache, compressor_kv_state, compressor_score_state) = kv_cache
-            # (compressor_attn_metadata, swa_metadata, compressor_kv_state_metadata, compressor_score_state_metadata) = attn_metadata
+            (swa_cache, compressor_attn_cache, compressor_kv_state,
+            compressor_score_state) = kv_cache
+            (swa_metadata, compressor_attn_metadata,
+            compressor_kv_state_metadata,
+            compressor_score_state_metadata) = attn_metadata
             compress_common_attn_metadata = compressor_attn_metadata
         else:
-            (swa_cache,) = kv_cache
-            (swa_metadata,) = attn_metadata
+            (swa_cache, ) = kv_cache
+            (swa_metadata, ) = attn_metadata
             compress_common_attn_metadata = swa_metadata
-        
+
         assert compress_common_attn_metadata.prefill is not None
         cos = compress_common_attn_metadata.prefill.cos[layer_name]
         sin = compress_common_attn_metadata.prefill.sin[layer_name]
         actual_seq_lengths_query = compress_common_attn_metadata.prefill.query_start_loc
         actual_seq_lengths_key = compress_common_attn_metadata.prefill.seq_lens
 
+        # ------------------------------------------------------------------
+        # 阶段 1:在 SP 分片上跑逐 token 的线性 + 归一化(每卡只算自己那一段)
+        # ------------------------------------------------------------------
         # mlaprolog
-        # q
+        # q (sharded if defer_gather)
         qr = self.q_norm(self.wq_a(hidden_states))
         q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
         q = triton_q_rms(q, self.eps)
 
+        # win kv & tok_dis (sharded if defer_gather)
+        kv = self.wkv(hidden_states)
+        kv = self.kv_norm(kv)
+        assert self.rope_head_dim is not None
+        kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
+
+        # ------------------------------------------------------------------
+        # 阶段 2: SP all_gather  ——  统一以 2D [T, H] 形状调用,确保 unpad 正确生效
+        # ------------------------------------------------------------------
+        if defer_gather:
+            # ---- gather (统一走 2D, 确保即使 unpad 失效, 形状/语义也是清楚的) ----
+            hidden_states = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                hidden_states, need_gather_q_kv)
+            qr = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                qr, need_gather_q_kv)
+
+            n_local_heads, head_dim = q.shape[1], q.shape[2]
+            q_2d = q.reshape(q.shape[0], n_local_heads * head_dim)
+            q_2d = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                q_2d, need_gather_q_kv)
+            q = q_2d.view(-1, n_local_heads, head_dim)
+
+            kv_inner = kv.shape[-1]
+            kv_2d = kv.reshape(kv.shape[0], kv_inner)
+            kv_2d = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
+                kv_2d, need_gather_q_kv)
+            kv = kv_2d.view(-1, 1, kv_inner)
+
+            # ---- 手动 unpad: 真实 token 数 = cos.shape[0] ----
+            # (maybe_all_gather_and_maybe_unpad 的 unpad 分支可能只对入口那次生效,
+            #  这里兜底,确保 q/kv/qr/hidden_states 与 cos/sin 的 dim0 对齐)
+            num_prefill_tokens = cos.shape[0]
+            if q.shape[0] != num_prefill_tokens:
+                q = q[:num_prefill_tokens]
+                kv = kv[:num_prefill_tokens]
+                qr = qr[:num_prefill_tokens]
+                hidden_states = hidden_states[:num_prefill_tokens]
+
+            assert q.shape[0] == cos.shape[0], (
+                f"SP gather size mismatch: q={q.shape}, cos={cos.shape}, "
+                f"kv={kv.shape}, hidden={hidden_states.shape}"
+            )
+        # ------------------------------------------------------------------
+        # 阶段 3:RoPE / scatter / compressor / indexer / attention
+        # 全部基于 full sequence
+        # ------------------------------------------------------------------
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
             cos,
@@ -1489,12 +1565,6 @@ class AscendDSAImpl(DSAAttentionImpl):
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
-        
-        # win kv & tok_dis
-        kv = self.wkv(hidden_states)
-        kv = self.kv_norm(kv)
-        assert self.rope_head_dim is not None
-        kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             kv.unsqueeze(1),
@@ -1504,26 +1574,28 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
-        # swa exec kv
+        # swa exec kv  ——  第一个 _scatter_nd_update_asc,gather 必须在它之前完成
         _scatter_nd_update_asc(
             swa_cache.view(-1, kv.shape[-1]),
             swa_metadata.prefill.slot_mapping.unsqueeze(-1), kv)
+
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
 
         if self.compressor_prefetch and self.compress_ratio > 1:
-            # 用 qr（或 q）作为 dependency,prefetch 与后续 RoPE / wkv / scatter 并行
+            # 用 qr 作为 dependency,prefetch 与后续 compressor 并行
             with torch.npu.stream(self.compressor_stream):
                 torch_npu.npu_prefetch(
                     self.compressor_wkv.weight,
-                    qr,                                      # 锚点:在 qr 产出后开始预取
+                    qr,
                     self.compressor_wkv.weight.numel() *
                     self.compressor_wkv.weight.element_size(),
-                    0,                                       # offset
+                    0,
                 )
-                torch_npu.npu_prefetch(self.compressor_wgate.weight, qr,
-                                self.compressor_wgate.weight.numel() *
-                                self.compressor_wgate.weight.element_size())
+                torch_npu.npu_prefetch(
+                    self.compressor_wgate.weight, qr,
+                    self.compressor_wgate.weight.numel() *
+                    self.compressor_wgate.weight.element_size())
 
         if self.compress_ratio > 1:
             compress_topk_idxs = None
@@ -1623,8 +1695,8 @@ class AscendDSAImpl(DSAAttentionImpl):
                 cmp_block_table=compressor_attn_metadata.prefill.block_table,
                 cu_seqlens_q=actual_seq_lengths_query,
                 cu_seqlens_ori_kv=actual_seq_lengths_query,
-                cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill.
-                cu_c128_cmp_seqlen_list,
+                cu_seqlens_cmp_kv=compress_common_attn_metadata.prefill
+                .cu_c128_cmp_seqlen_list,
                 seqused_kv=actual_seq_lengths_key,
                 sinks=self.attn_sink,
                 metadata=compressor_attn_metadata.prefill.sas_metadata,
