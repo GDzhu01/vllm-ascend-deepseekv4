@@ -604,6 +604,7 @@ class DeepseekV4Attention(nn.Module):
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
         topk_indices_buffer: torch.Tensor | None = None,
+        skip_topk: bool = False,
     ) -> None:
         super().__init__()
         layer_idx = int(prefix.split(sep=".")[-2])
@@ -749,6 +750,8 @@ class DeepseekV4Attention(nn.Module):
             quant_config=quant_config,
             # prefix=f'{prefix}.attn',
             prefix=f'{prefix}',
+            # IndexCache: forward per-layer skip_topk decision to the impl.
+            skip_topk=skip_topk,
         )
 
     def forward(
@@ -786,6 +789,22 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.layer_idx = layer_idx
         self.norm_eps = config.rms_norm_eps
 
+        # =================================================================
+        # IndexCache: per-layer skip_topk decision (refer: vllm PR #37735)
+        # - index_topk_freq=N: every N layers re-compute, others reuse cache
+        # - index_topk_pattern='FFSFSSS...': explicit per-layer override
+        #   where 'F' = compute (Full), 'S' = reuse cached (Shared)
+        # First DSA layer (layer_idx=0) always computes (no cache yet).
+        # =================================================================
+        _skip_topk = False
+        if getattr(config, "use_index_cache", False):
+            _index_topk_freq = int(getattr(config, "index_topk_freq", 1))
+            _index_topk_pattern = getattr(config, "index_topk_pattern", None)
+            if _index_topk_pattern is None:
+                _skip_topk = max(layer_idx - 1, 0) % _index_topk_freq != 0
+            elif 0 <= layer_idx < len(_index_topk_pattern):
+                _skip_topk = _index_topk_pattern[layer_idx] == "S"
+
         attn_cls = DeepseekV4Attention
 
         self.self_attn = attn_cls(
@@ -796,6 +815,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
             topk_indices_buffer=topk_indices_buffer,
+            skip_topk=_skip_topk,
         )
 
         self.mlp = DeepseekV4MoE(

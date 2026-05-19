@@ -79,6 +79,7 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         cache_config: CacheConfig | None = None,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
+        skip_topk: bool = False,
     ) -> None:
         nn.Module.__init__(self)
         self.dim = dim
@@ -109,6 +110,9 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
         self.topk_indices_buffer = dsa_modules.topk_indices_buffer
         self.indexer_rotary_emb = dsa_modules.indexer_rotary_emb
         self.prefix = prefix
+        # IndexCache: layer-level skip_topk decision computed at the model
+        # level (see DeepseekV4Model). Forwarded to AscendDSAImpl via kwargs.
+        self.skip_topk = skip_topk
 
         ascend_device_type = get_ascend_device_type()
         k_dtype = torch.fp8 if ascend_device_type == AscendDeviceType.A5 else torch.bfloat16
@@ -151,6 +155,10 @@ class AscendDeepseekSparseAttention(MultiHeadLatentAttentionWrapper):
             attn_sink=self.attn_sink,
             eps=self.eps,
             swa_cache_layer=self.swa_cache_layer,
+            # IndexCache: pass through skip_topk + shared topk_indices_buffer
+            # so that AscendDSAImpl can decide whether to reuse cached indices.
+            skip_topk=self.skip_topk,
+            topk_indices_buffer=self.topk_indices_buffer,
         )
 
         compilation_config = get_current_vllm_config().compilation_config
