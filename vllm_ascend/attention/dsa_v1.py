@@ -1559,46 +1559,57 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_key = compress_common_attn_metadata.prefill.seq_lens
 
         num_prefill_tokens = cos.shape[0]   # 真实 (unpadded) prefill token 数
+        # ------------------------------------------------------------------
+        # 阶段 1: 在 sharded hidden_states 上做 wq_a / q_norm / wkv / kv_norm
+        # 它们本来就是逐 token 算子,不依赖 full sequence
+        # ------------------------------------------------------------------
         do_gather = _EXTRA_CTX.flash_comm_v1_enabled and (get_tp_group().world_size > 1)
-        pad_size = _EXTRA_CTX.pad_size
+        pad_size  = _EXTRA_CTX.pad_size
 
-        # ① 派发 hidden_states 的 gather
-        hs_buf, hs_handle, _ = async_tp_all_gather(hidden_states, pad_size, do_gather=do_gather)
+        # (a) 先算 qr 的 sharded 版本 —— 它是关键路径起点
+        qr_sharded = self.q_norm(self.wq_a(hidden_states))
 
-        # ② 在通信进行中, 计算流跑 wq_a / q_norm / wkv / kv_norm
-        qr = self.q_norm(self.wq_a(hidden_states))      # 用 sharded
+        # (b) 立刻派发 qr 的 all_gather  ★最先入队,体量小,马上就要用★
+        qr_buf, qr_handle, _ = async_tp_all_gather(qr_sharded, pad_size,
+                                                do_gather=do_gather)
 
-        # ③ 派发 qr 的 gather
-        qr_buf, qr_handle, _ = async_tp_all_gather(qr, pad_size, do_gather=do_gather)
+        # (c) 算 kv 的 sharded 版本（与 qr.all_gather overlap）
+        kv_sharded = self.kv_norm(self.wkv(hidden_states))
+        kv_inner   = self.nope_head_dim + self.rope_head_dim
+        kv_2d      = kv_sharded.reshape(kv_sharded.shape[0], kv_inner)
 
-        kv = self.kv_norm(self.wkv(hidden_states))      # 用 sharded
-        kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
+        # (d) 派发 kv 的 all_gather  ★小,排第二★
+        kv_buf, kv_handle, _ = async_tp_all_gather(kv_2d, pad_size,
+                                                do_gather=do_gather)
 
-        # ④ 派发 kv 的 gather (用 2D 形状)
-        kv_inner = kv.shape[-1]
-        kv_2d = kv.reshape(kv.shape[0], kv_inner)
-        kv_buf, kv_handle, _ = async_tp_all_gather(kv_2d, pad_size, do_gather=do_gather)
+        # (e) 最后派发 hidden_states 的 all_gather  ★最大,但下面有 wq_b 撑着★
+        hs_buf, hs_handle, _ = async_tp_all_gather(hidden_states, pad_size,
+                                                do_gather=do_gather)
 
-        # ⑤ 此时三个 collective 都在通信流排队/执行
-        #    计算流可以做"不依赖任何 gather 结果"的工作
-        #    (如果有的话, 比如其他无关 prep). 没有就直接 wait.
-
-        # ⑥ 等 qr, 立刻算 wq_b (大 GEMM, 与 kv 的 gather overlap)
+        # ------------------------------------------------------------------
+        # 阶段 2: 关键路径 —— wq_b 大 GEMM,与 kv / hs 的通信 overlap
+        # ------------------------------------------------------------------
         qr_full = wait_and_unpad(qr_buf, qr_handle, pad_size)
         if qr_full.shape[0] != num_prefill_tokens:
             qr_full = qr_full[:num_prefill_tokens]
         qr = qr_full
-        
-        q = self.wq_b(qr_full).unflatten(-1, (self.n_local_heads, self.head_dim))
-        q = triton_q_rms(q, self.eps)   # 这步在计算流, kv_handle 仍在通信流
 
-        # ⑦ 真正要用 kv 时再 wait
+        # 此刻通信流上还在跑 kv.all_gather + hs.all_gather
+        # 计算流跑 wq_b（最大 GEMM）+ q_rms,真正形成 overlap
+        q = self.wq_b(qr_full).unflatten(-1, (self.n_local_heads, self.head_dim))
+        q = triton_q_rms(q, self.eps)
+
+        # ------------------------------------------------------------------
+        # 阶段 3: 用到 kv 时才 wait
+        # ------------------------------------------------------------------
         kv_full_2d = wait_and_unpad(kv_buf, kv_handle, pad_size)
         if kv_full_2d.shape[0] != num_prefill_tokens:
             kv_full_2d = kv_full_2d[:num_prefill_tokens]
         kv = kv_full_2d.view(-1, 1, kv_inner)
 
-        # ⑧ hidden_states_full 在最后才 wait
+        # ------------------------------------------------------------------
+        # 阶段 4: 最晚 wait hidden_states (compressor / indexer 才用)
+        # ------------------------------------------------------------------
         hidden_states = wait_and_unpad(hs_buf, hs_handle, pad_size)
         if hidden_states.shape[0] != num_prefill_tokens:
             hidden_states = hidden_states[:num_prefill_tokens]
