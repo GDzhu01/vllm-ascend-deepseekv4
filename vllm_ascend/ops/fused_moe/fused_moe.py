@@ -80,6 +80,7 @@ class MicrobatchOverlapEvents:
         "b0_unpermute_done",
         "b1_quant_done",
         "b1_unpermute_done",
+        "swiglu_limit",
     )
 
     def __init__(self):
@@ -87,6 +88,7 @@ class MicrobatchOverlapEvents:
         self.b0_unpermute_done: torch.npu.Event | None = None
         self.b1_quant_done: torch.npu.Event | None = None
         self.b1_unpermute_done: torch.npu.Event | None = None
+        self.swiglu_limit: int = 0
 
     def to_shared_expert_events(self) -> FusedMoEEvents:
         """Map batch1 events to the shared-expert synchronization interface."""
@@ -95,6 +97,7 @@ class MicrobatchOverlapEvents:
             before_dispatch=self.b1_quant_done,
             before_gmm2=self.b1_unpermute_done,
             before_combine=self.b1_unpermute_done,
+            swiglu_limit=self.swiglu_limit,
         )
 
 
@@ -984,6 +987,7 @@ class AscendSharedFusedMoE(SharedFusedMoE, AscendFusedMoE):
         # Shared event container: batch0 produces events for batch1, and
         # batch1 produces events for shared experts.
         overlap_events = MicrobatchOverlapEvents()
+        overlap_events.swiglu_limit = self.swiglu_limit
 
         # Run the full batch0 pipeline on the main stream.
         fused_moe_results_b0 = AscendFusedMoE.forward_impl(
