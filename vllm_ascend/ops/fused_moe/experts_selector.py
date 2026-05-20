@@ -275,8 +275,8 @@ def _select_experts_with_fusion_ops(
         # Match DeepSeek V4 routing: normalize sqrtsoftplus top-k weights
         # before applying the routed scale. DSV4 non-AITER callers pass 1.0
         # here and scale the routed output later with muls_add_triton.
-        topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
-        topk_weights = topk_weights * routed_scaling_factor
+        # topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+        # topk_weights = topk_weights * routed_scaling_factor
         return topk_weights, topk_ids
     norm_type = 0 if scoring_func == "softmax" else 1
     if e_score_correction_bias is not None and e_score_correction_bias.dtype != router_logits.dtype:
