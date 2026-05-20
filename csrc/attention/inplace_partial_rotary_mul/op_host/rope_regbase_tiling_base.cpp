@@ -251,7 +251,7 @@ ge::graphStatus RopeRegBaseTilingClass::CheckRotaryModeShapeRelation(const int64
 }
 
 ge::graphStatus RopeRegBaseTilingClass::JudgeSliceInfo() {
-    OPS_LOG_E(context_, "TEST LOG, sliceStart_ =  %ld. sliceEnd_ =  %ld", sliceStart_, sliceEnd_); // TODO
+    // OPS_LOG_E(context_, "TEST LOG, sliceStart_ =  %ld. sliceEnd_ =  %ld", sliceStart_, sliceEnd_); // TODO
     if (sliceStart_ < 0 || sliceEnd_ < 0 || sliceLength_ <= 0 || sliceEnd_ > d_) {
         OPS_LOG_E(context_, "slice info fail, sliceStart_ =  %ld. sliceEnd_ =  %ld", sliceStart_, sliceEnd_);
         return ge::GRAPH_FAILED;
