@@ -30,6 +30,7 @@ from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
 from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinearMethod
 from vllm_ascend.utils import (AscendDeviceType, attention_calculation_stream,
+                               dsv4_dsa_overlap_stream,
                                get_ascend_device_type, npu_stream_switch, get_dsv4_compress_ratio,
                                extract_dsv4_layer_index,
                                olora_tp_enable)
@@ -1152,10 +1153,10 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.vllm_config = get_current_vllm_config()
 
         # 纯DP情况下，多流标志位强制设置为False
-        parallel_config = self.vllm_config.parallel_config
-        is_pure_dp = parallel_config.data_parallel_size > 1 and parallel_config.tensor_parallel_size <= 1
-        if is_pure_dp:
-            self.multistream_dsv4_dsa_overlap = False
+        # parallel_config = self.vllm_config.parallel_config
+        # is_pure_dp = parallel_config.data_parallel_size > 1 and parallel_config.tensor_parallel_size <= 1
+        # if is_pure_dp:
+        #     self.multistream_dsv4_dsa_overlap = False
 
         # indexer param
         if self.indexer is not None:
@@ -1900,7 +1901,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         (_, _, indexer_kv_state_metadata, indexer_kv_scale_metadata, _) = attn_metadata
 
         main_stream = torch.npu.current_stream()
-        aux_stream = attention_calculation_stream()
+        aux_stream = dsv4_dsa_overlap_stream()
 
         soc_version = get_ascend_device_type()
         dst_type = torch.float8_e4m3fn if soc_version in {AscendDeviceType.A5} else torch.int8
