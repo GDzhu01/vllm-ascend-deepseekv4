@@ -520,17 +520,20 @@ class NPUModelRunner(GPUModelRunner):
             num_tokens_after_padding = torch.tensor([num_tokens] * self.dp_size, device="cpu", dtype=torch.int32)
             return num_tokens, num_tokens_after_padding, with_prefill
 
-        # Sync num_tokens, with_prefill across dp ranks
+        # Sync num_tokens, with_prefill across dp ranks.
+        # Keep the synchronized metadata on CPU for the existing scheduler path,
+        # but do the collective itself on NPU to avoid CPU gloo all-reduce.
         num_tokens_tensor = torch.tensor(
-            [num_tokens if i == self.dp_rank else 0 for i in range(self.dp_size)], dtype=torch.int32, device="cpu"
+            [num_tokens if i == self.dp_rank else 0 for i in range(self.dp_size)],
+            dtype=torch.int32,
+            device=self.device,
         )
 
-        flags_tensor = torch.tensor([int(with_prefill)], dtype=torch.int32, device="cpu")
+        flags_tensor = torch.tensor([int(with_prefill)], dtype=torch.int32, device=self.device)
 
         packed_tensor = torch.cat([num_tokens_tensor, flags_tensor])
-        # use cpu_group to avoid cpu synchronization issue.
-        # it can be overlapped with main moell execution on npu.
-        dist.all_reduce(packed_tensor, group=get_dp_group().cpu_group)
+        dist.all_reduce(packed_tensor, group=get_dp_group().device_group)
+        packed_tensor = packed_tensor.cpu()
 
         # Unpack the results
         num_tokens_across_dp = packed_tensor[:-1]
@@ -1909,10 +1912,11 @@ class NPUModelRunner(GPUModelRunner):
             num_tokens_after_padding = torch.tensor([num_tokens_padded] * self.dp_size, device="cpu", dtype=torch.int32)
             return False, num_tokens_after_padding, cudagraph_mode
 
-        tensor = torch.zeros(2, self.dp_size, device="cpu", dtype=torch.int32)
+        tensor = torch.zeros(2, self.dp_size, device=self.device, dtype=torch.int32)
         tensor[0][self.dp_rank] = num_tokens_padded
         tensor[1][self.dp_rank] = cudagraph_mode
-        dist.all_reduce(tensor, group=get_dp_group().cpu_group)
+        dist.all_reduce(tensor, group=get_dp_group().device_group)
+        tensor = tensor.cpu()
 
         num_tokens_across_dp = tensor[0, :]
         max_num_tokens = int(num_tokens_across_dp.max().item())
