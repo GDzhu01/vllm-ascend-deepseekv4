@@ -76,7 +76,6 @@ def _get_comm_stream():
         _comm_stream = _dev.Stream()
     return _comm_stream
 
-
 def async_tp_all_gather(x: torch.Tensor, pad_size: int, do_gather: bool = True):
     """
     异步版 tensor_model_parallel_all_gather.
@@ -1229,6 +1228,10 @@ class AscendDSAImpl(DSAAttentionImpl):
             self.compressor_stream = torch.npu.Stream()
         else:
             self.compressor_prefetch = False
+        if os.environ.get("USE_ATTN_SP", "0").lower() in ("1", "true", "yes", "on"):
+            self.use_attn_sp = True
+        else:
+            self.use_attn_sp = False
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
@@ -1426,7 +1429,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         # 入口处先 gather。
         # ------------------------------------------------------------------
         defer_gather_in_prefill = (has_prefill and not has_decode
-                                and need_gather_q_kv)
+                                and need_gather_q_kv and self.use_attn_sp)
 
         if defer_gather_in_prefill:
             # 纯 prefill: hidden_states 仍是 SP 分片,
