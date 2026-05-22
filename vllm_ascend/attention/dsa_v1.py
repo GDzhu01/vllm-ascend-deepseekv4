@@ -381,8 +381,10 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
 
         self.speculative_config = vllm_config.speculative_config
         self.decode_threshold = 1
+        self.spec_slot_mapping = None
         if self.speculative_config:
             spec_token_num = self.speculative_config.num_speculative_tokens
+            self.spec_slot_mapping = [torch.zeros((vllm_config.scheduler_config.max_num_batched_tokens, ), dtype=torch.int32, device=self.device) for _ in range(spec_token_num)]
             self.decode_threshold += spec_token_num
             assert self.decode_threshold <= 16, f"decode_threshold exceeded \
                 npu_fused_infer_attention_score TND layout's limit of 16, \
@@ -1095,6 +1097,207 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
             start_pos=self.start_pos_decode[:self.num_decodes], # cached
             sas_metadata = self.decode_sas_metadata,
             qli_metadata=self.decode_qli_metadata)
+        return decode_metadata
+
+    def build_for_drafting(self,
+        draft_step: int,
+        common_attn_metadata: AscendCommonAttentionMetadata,
+        fast_build: bool = False,
+        **kwargs,
+    ) -> AscendDSADecodeMetadata:
+        assert self.compressor_ratio <= 1, "vLLM-Ascend only support SWA-layer for Deepseek-V4 now."
+        num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = \
+            split_decodes_and_prefills(common_attn_metadata, decode_threshold=self.decode_threshold)
+        num_reqs_actual = kwargs.get("num_reqs_actual", None)
+        num_input_tokens = common_attn_metadata.num_input_tokens
+        input_positions = common_attn_metadata.positions[:num_input_tokens].long()
+        if num_prefills:
+            cos, sin = get_cos_and_sin_dsa(input_positions)
+        else:
+            cos, sin = get_cos_and_sin_dsa(input_positions, True)
+
+        slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
+        self.spec_slot_mapping[draft_step - 1][:num_input_tokens] = slot_mapping
+
+        prefill_metadata = None
+        if num_prefills > 0:
+            prefill_metadata = self.build_prefill_metadata_for_drafting(
+                draft_step=draft_step,
+                common_attn_metadata=common_attn_metadata,
+                reqs_start=num_decodes,
+                tokens_start=num_decode_tokens,
+                num_prefill_tokens=num_prefill_tokens)
+
+        decode_metadata = None
+        if num_decodes > 0:
+            decode_metadata = self.build_decode_metadata_for_drafting(
+                draft_step=draft_step,
+                common_attn_metadata=common_attn_metadata,
+                num_decodes=num_decodes,
+                num_decode_tokens=num_decode_tokens)
+
+        return self.metadata_cls(  # type: ignore
+            num_input_tokens=common_attn_metadata.num_input_tokens,
+            num_actual_tokens=common_attn_metadata.num_actual_tokens,
+            query_lens=None,
+            slot_mapping=None,
+            head_dim=self.model_config.get_head_size(),
+            num_decodes=num_decodes,
+            num_decode_tokens=num_decode_tokens,
+            num_prefills=num_prefills,
+            attn_mask=None,
+            attn_state=common_attn_metadata.attn_state,
+            prefill=prefill_metadata,
+            decode=decode_metadata,
+            query_start_loc=None,
+            block_tables=None,
+            seq_lens=None,
+            cos=cos,
+            sin=sin,
+            hadamard=None,
+        )
+
+    def build_prefill_metadata_for_drafting(self,
+        draft_step: int,
+        common_attn_metadata: AscendCommonAttentionMetadata,
+        **kwargs,
+    ) -> AscendDSAPrefillMetadata:
+        tp_size = get_tensor_model_parallel_world_size()
+        n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
+
+        reqs_start = kwargs.get("reqs_start")
+        tokens_start = kwargs.get("tokens_start")
+        num_prefill_tokens = kwargs.get("num_prefill_tokens")
+        query_start_loc = common_attn_metadata.query_start_loc
+        prefill_query_start_loc = query_start_loc[reqs_start:] - query_start_loc[reqs_start]
+        seq_lens_q = prefill_query_start_loc[1:] - prefill_query_start_loc[:-1]
+        seq_lens = common_attn_metadata.seq_lens[reqs_start:]
+
+        num_actual_tokens = common_attn_metadata.num_actual_tokens
+        input_positions = common_attn_metadata.positions[:num_actual_tokens].long()
+        prefill_input_positions = input_positions[tokens_start:]
+        cos, sin = get_cos_and_sin_dsa(prefill_input_positions)
+
+        prefill_slot_mapping = self.spec_slot_mapping[draft_step - 1][tokens_start:num_prefill_tokens]
+        block_table = common_attn_metadata.block_table_tensor[:common_attn_metadata.num_reqs]
+
+        sas_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            num_heads_q=n_local_heads,
+            num_heads_kv=1,
+            head_dim=self.model_config.get_head_size(),
+            cu_seqlens_q=prefill_query_start_loc,
+            cu_seqlens_ori_kv=prefill_query_start_loc,
+            cu_seqlens_cmp_kv=None,
+            seqused_q=self.seqused_q,
+            seqused_kv=seq_lens,
+            max_seqlen_q=seq_lens_q.max(),
+            max_seqlen_kv=seq_lens.max(),
+            batch_size=len(seq_lens),
+            cmp_ratio=1,
+            ori_mask_mode=4,  # 4:sliding window
+            ori_win_left=self.model_config.hf_config.sliding_window - 1,
+            ori_win_right=0,
+            layout_q="TND",
+            layout_kv="PA_ND",
+            has_ori_kv=True,
+            has_cmp_kv=False,
+            device=str(self.seqused_q.device))
+
+        return AscendDSAPrefillMetadata(
+            attn_mask=None,
+            query_lens=None,
+            seq_lens=seq_lens,
+            context_lens=None,
+            input_positions=None,
+            block_table=block_table[reqs_start:, ...],
+            slot_mapping=prefill_slot_mapping,
+            max_query_len=None,
+            max_seq_lens=None,
+            query_start_loc=prefill_query_start_loc,
+            sin=sin,
+            cos=cos,
+            compress_sin=None,
+            compress_cos=None,
+            start_pos=None,
+            sas_metadata=sas_metadata,
+            qli_metadata=None,
+            cu_c4_cmp_seqlen_list=None,
+            cu_c128_cmp_seqlen_list=None)
+
+    def build_decode_metadata_for_drafting(self,
+        draft_step: int,
+        common_attn_metadata: AscendCommonAttentionMetadata,
+        **kwargs,
+    ) -> AscendDSADecodeMetadata:
+        tp_size = get_tensor_model_parallel_world_size()
+        n_local_heads = self.model_config.hf_config.num_attention_heads // tp_size
+
+        num_decodes = kwargs.get("num_decodes")
+        num_decode_tokens = kwargs.get("num_decode_tokens")
+        query_start_loc = common_attn_metadata.query_start_loc[:num_decodes + 1]
+        num_reqs = common_attn_metadata.num_reqs
+        seq_lens = common_attn_metadata.seq_lens
+        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu[:num_decodes+ 1]
+        max_seqlen_q = torch.max(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]).item()
+
+        if common_attn_metadata._seq_lens_cpu is not None:
+                _seq_lens_cpu = common_attn_metadata._seq_lens_cpu
+        elif common_attn_metadata.seq_lens_cpu is not None:
+            _seq_lens_cpu = common_attn_metadata.seq_lens_cpu
+        else:
+            _seq_lens_cpu = common_attn_metadata.seq_lens.cpu()
+        max_seqlen_kv = torch.max(_seq_lens_cpu[:num_decodes]).item()
+
+        input_positions = common_attn_metadata.positions[:num_decode_tokens].long()
+        cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
+
+        slot_mapping = self.spec_slot_mapping[draft_step - 1][:num_decode_tokens]
+        block_table = common_attn_metadata.block_table_tensor
+
+        decode_sas_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+            num_heads_q=n_local_heads,
+            num_heads_kv=1,
+            head_dim=self.model_config.get_head_size(),
+            cu_seqlens_q=query_start_loc,  # cached
+            cu_seqlens_ori_kv=self.cu_seqlens_ori_kv,
+            cu_seqlens_cmp_kv=self.cu_seqlens_cmp_kv,
+            seqused_q=self.seqused_q,
+            seqused_kv=seq_lens[:num_decodes],  # cached
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_kv=max_seqlen_kv,
+            batch_size=len(seq_lens[:num_decodes]),  # cached
+            cmp_ratio=1,
+            ori_mask_mode=4,
+            cmp_mask_mode=3,
+            ori_win_left=self.model_config.hf_config.sliding_window - 1,
+            ori_win_right=0,
+            layout_q="TND",
+            layout_kv="PA_ND",
+            has_ori_kv=True,
+            has_cmp_kv=False,
+            device=str(self.seqused_q.device))
+
+        decode_metadata = AscendDSADecodeMetadata(
+            input_positions=None,
+            block_table=block_table[:num_decodes, ...],
+            slot_mapping=slot_mapping,
+            seq_lens=seq_lens[:num_decodes],  # cached
+            seq_lens_list=None,
+            max_seq_lens=None,
+            max_seqlen_kv=None,
+            max_seqlen_q=None,
+            attn_mask=None,
+            query_start_loc=query_start_loc,  # cached
+            query_start_loc_cpu=None,
+            sin=sin[:num_decode_tokens, ...],
+            cos=cos[:num_decode_tokens, ...],
+            compress_sin=None,
+            compress_cos=None,
+            cp_seq_len=None,
+            batch_seq_mask=None,
+            start_pos=None,  # cached
+            sas_metadata=decode_sas_metadata,
+            qli_metadata=None)
         return decode_metadata
 
     def get_block_table_size(

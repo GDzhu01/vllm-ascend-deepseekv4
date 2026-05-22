@@ -368,13 +368,6 @@ class SpecDecodeBaseProposer(EagleProposer):
         # when update. So we can use the shallow copy.
         return copy.copy(attn_metadata)
 
-    def _freeze_draft_step_attn_metadata(self, attn_metadata):
-        decode_metadata = getattr(attn_metadata, "decode", None)
-        if decode_metadata is not None:
-            if decode_metadata.sas_metadata is not None:
-                decode_metadata.sas_metadata = decode_metadata.sas_metadata.clone()
-        return attn_metadata
-
     @torch.inference_mode()
     def dummy_run(
         self,
@@ -611,7 +604,6 @@ class SpecDecodeBaseProposer(EagleProposer):
                     decode_ratio_to_sas_metadata=dict(),
                     common_ratio_to_sas_metadata=dict())
         attn_metadata = builder.build(0, common_attn_metadata, self.runner.get_model(), **extra_attn_metadata_args)
-        attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
 
         if self.uses_mrope:
             used_update_positions = self.mrope_positions[:, token_indices_to_sample]
@@ -695,7 +687,6 @@ class SpecDecodeBaseProposer(EagleProposer):
                                 mtp_slot_mapping,
                                 attn_group=attn_group,
                             )
-                            attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
                             for layer_name in self.attn_layer_names:
                                 per_layer_attn_metadata[layer_name] = [attn_metadata]
                         multi_steps_attn_metadata.append(per_layer_attn_metadata)
@@ -715,7 +706,6 @@ class SpecDecodeBaseProposer(EagleProposer):
                             aclgraph_runtime_mode,
                             attn_group=attn_group,
                         )
-                        attn_metadata = self._freeze_draft_step_attn_metadata(attn_metadata)
                         for layer_name in self.attn_layer_names:
                             per_layer_attn_metadata[layer_name] = [attn_metadata]
                     multi_steps_attn_metadata.append(per_layer_attn_metadata)
@@ -1262,7 +1252,7 @@ class SpecDecodeBaseProposer(EagleProposer):
             # However, in vllm-ascend, the above value can be multiple of `kernel_block_size`,
             # which is not correct for computing `slot_mapping` below.
             block_size = self.kernel_block_size
-            if not isinstance(block_size, int):
+            if not isinstance(block_size, int) or self.use_compress:
                 block_size = 128
 
             # Compute the slot mapping.
@@ -1291,12 +1281,20 @@ class SpecDecodeBaseProposer(EagleProposer):
                     prefill_ratio_to_sas_metadata=dict(),
                     decode_ratio_to_sas_metadata=dict(),
                     common_ratio_to_sas_metadata=dict())
-        attn_metadata = attn_metadata_builder.build(
-            0,
-            common_attn_metadata,
-            self.runner.get_model(),
-            **extra_attn_metadata_args,
-        )
+
+        if self.use_compress:
+            attn_metadata = attn_metadata_builder.build_for_drafting(
+                draft_step,
+                common_attn_metadata,
+                **extra_attn_metadata_args,
+                )
+        else:
+            attn_metadata = attn_metadata_builder.build(
+                0,
+                common_attn_metadata,
+                self.runner.get_model(),
+                **extra_attn_metadata_args,
+                )
 
         if self.pcp_size * self.dcp_size > 1:
             if self.vllm_config.model_config.use_mla:
