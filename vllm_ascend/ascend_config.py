@@ -90,6 +90,9 @@ class AscendConfig:
         self.enable_cpu_binding = additional_config.get("enable_cpu_binding", True)
         self.multistream_dsa_preprocess = additional_config.get(
             "multistream_dsa_preprocess", False)
+        self.multistream_dsv4_dsa_overlap = additional_config.get(
+            "multistream_dsv4_dsa_overlap", False)
+        self.dsa_dual_stream = additional_config.get("dsa_dual_stream", False)
 
         self.pd_tp_ratio = 1
         self.pd_head_ratio = 1

@@ -33,8 +33,12 @@ from vllm.utils.torch_utils import direct_register_custom_op
 from vllm.v1.attention.backends.mla.sparse_swa import SVFSWACache
 from vllm_ascend.utils import (
     AscendDeviceType,
+    dsv4_dsa_overlap_stream,
     get_ascend_device_type,
+    npu_stream_switch,
 )
+
+import torch_npu
 
 from vllm_ascend.models.layer.attention.layer import DSAAttention
 
@@ -191,7 +195,39 @@ def dsa_forward(
         attn_metadata = forward_context.attn_metadata
 
     if attn_metadata is None:
-        # Profiling run.
+        # Profiling run — lightweight sub-stream warmup (1 token).
+        # When multistream is enabled, the aux stream runs ops during forward
+        # that have never been exercised during profiling. This warmup ensures
+        # all aux-stream op patterns are captured for ACL graph compatibility.
+        impl = self.dsa_attn.impl
+        if hasattr(impl, 'multistream_dsv4_dsa_overlap') and impl.multistream_dsv4_dsa_overlap:
+            dummy = torch.zeros(1, hidden_states.shape[-1],
+                                dtype=hidden_states.dtype,
+                                device=hidden_states.device)
+            aux_stream = dsv4_dsa_overlap_stream()
+            e_warmup = torch.npu.current_stream().record_event()
+            with npu_stream_switch(aux_stream, enabled=True):
+                torch.npu.current_stream().wait_event(e_warmup)
+                # Part1 aux: kv_quant (npu_dynamic_quant)
+                soc_version = get_ascend_device_type()
+                dst_type = torch.float8_e4m3fn if soc_version == AscendDeviceType.A5 else torch.int8
+                kv_dummy, kv_scale_dummy = torch_npu.npu_dynamic_quant(dummy, dst_type=dst_type)
+                # Part1 aux: scatter_k_cache (npu_scatter_nd_update_v2)
+                # In profiling stage, create dummy tensors to ensure ACL graph captures scatter operator.
+                if self.compress_ratio == 4 and self.indexer is not None:
+                    slot_mapping_dummy = torch.zeros(1, dtype=torch.int64, device=hidden_states.device)
+                    # Create dummy tensors for scatter warmup
+                    dummy_shape = (1, 1, 1, kv_dummy.shape[-1])  # [num_blocks, block_size, num_heads, head_dim]
+                    indexer_k_cache = torch.zeros(dummy_shape, dtype=kv_dummy.dtype, device=hidden_states.device)
+                    indexer_scale_cache = torch.zeros(dummy_shape, dtype=torch.float16, device=hidden_states.device)
+
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_k_cache, slot_mapping_dummy, kv_dummy)
+                    # Part3 aux: scatter_scale_cache (npu_scatter_nd_update_v2)
+                    kv_scale_dummy = kv_scale_dummy.to(torch.float16).unsqueeze(-1)
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_scale_cache, slot_mapping_dummy, kv_scale_dummy)
+            torch.npu.current_stream().wait_stream(aux_stream)
         output.fill_(0)
         return
 
