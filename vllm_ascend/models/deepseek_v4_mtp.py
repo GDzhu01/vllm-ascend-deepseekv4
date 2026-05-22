@@ -122,21 +122,25 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         inputs_embeds = torch.where(
             positions.unsqueeze(-1) == 0, 0, inputs_embeds)
         inputs_embeds = self.enorm(inputs_embeds)
+        
+        # Target stashes pre-hc_head residual as flat (T, hc_mult * D);
+        # reshape to (T, hc_mult, D) — the training-time layout.
+        previous_hidden_states = previous_hidden_states.view(
+            -1, self.hc_mult, self.config.hidden_size
+        )
         previous_hidden_states = self.hnorm(previous_hidden_states)
 
-        hidden_states = (self.e_proj(inputs_embeds) +
+        hidden_states = (self.e_proj(inputs_embeds).unsqueeze(-2) +
                          self.h_proj(previous_hidden_states))
-
-        hidden_states = hidden_states.unsqueeze(1).repeat(1, self.hc_mult, 1)
 
         hidden_states, residual = self.mtp_block(positions=positions,
                                                  hidden_states=hidden_states,
                                                  residual=None)
 
-        hidden_states = self.hc_head(hidden_states, self.hc_head_fn,
-                                     self.hc_head_scale, self.hc_head_base)
-
-        return hidden_states
+        # Return the flat pre-hc_head residual so it can be re-fed as the
+        # next spec step's `previous_hidden_states` when
+        # num_speculative_tokens > 1. hc_head is deferred to compute_logits.
+        return hidden_states.flatten(1)
 
     def hc_head(self, x: torch.Tensor, hc_fn: torch.Tensor,
                 hc_scale: torch.Tensor, hc_base: torch.Tensor):
@@ -201,6 +205,17 @@ class DeepSeekMultiTokenPredictor(nn.Module):
     ) -> torch.Tensor:
         current_step_idx = spec_step_idx % self.num_mtp_layers
         mtp_layer = self.layers[str(current_step_idx)]
+        # MTP forward returns the pre-hc_head residual (T, hc_mult * D); apply
+        # hc_head here so logits are computed from the dense hidden state.
+        hidden_states = hidden_states.view(
+            -1, mtp_layer.hc_mult, mtp_layer.config.hidden_size
+        )
+        hidden_states = mtp_layer.hc_head(
+            hidden_states,
+            mtp_layer.hc_head_fn,
+            mtp_layer.hc_head_scale,
+            mtp_layer.hc_head_base
+        )
         logits = self.logits_processor(mtp_layer.shared_head.head,
                                        mtp_layer.shared_head(hidden_states))
         return logits

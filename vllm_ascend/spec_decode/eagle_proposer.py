@@ -101,6 +101,18 @@ class SpecDecodeBaseProposer(EagleProposer):
 
         self.enable_shared_expert_dp = shared_expert_dp_enabled()
 
+        # DeepSeek V4 MTP consumes the target's pre-hc_head residual stream,
+        # shape (T, hc_mult * hidden_size). Expand the hidden_states buffer
+        # so target_hidden_states fits; detect DeepseekV4 via draft hf_config.
+        draft_hf_config = self.draft_model_config.hf_config
+        if hasattr(draft_hf_config, "compress_ratios") and hasattr(
+            draft_hf_config, "hc_mult"
+        ):
+            self.hidden_size = self.hidden_size * draft_hf_config.hc_mult
+            self.hidden_states = torch.zeros(
+                (self.max_num_tokens, self.hidden_size), dtype=self.dtype, device=device
+            )
+
         self.pcp_size = self.runner.pcp_size
         self.dcp_size = self.runner.dcp_size
         self.pcp_rank = self.runner.pcp_rank
