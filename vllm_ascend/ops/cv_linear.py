@@ -1,10 +1,5 @@
 #
-# CVLinearWrapper - 将 Linear 层拆分为 quantize(Vector) + matmul(Cube)
-#
-# 支持条件: forward 时无 TP 通信操作的 Linear 层
-#   - AscendReplicatedLinear: custom_op=CustomReplicatedOp 或 None，无通信
-#   - AscendColumnParallelLinear: 仅 gather_output=False 时可拆分（如 wq_b）
-#   - 其他情况自动回退到完整 forward
+# CVLinearWrapper - Splits a Linear layer into quantize(Vector) + matmul(Cube)
 #
 import torch
 import torch_npu
@@ -14,42 +9,42 @@ from vllm_ascend.quantization.methods.w8a8_dynamic import AscendW8A8DynamicLinea
 
 class CVLinearWrapper:
     """
-    将 Linear 层拆分为 quantize(Vector) + matmul(Cube)
+    Splits a Linear layer into quantize(Vector) + matmul(Cube).
 
-    自动检测 TP 通信操作：
-    - 无通信 (ReplicatedLinear): W8A8 拆分为独立 quantize + matmul
-    - 有通信 (ColumnParallelLinear 含 custom_op): 自动回退到完整 forward
+    Automatically detects TP communication operations:
+    - No communication (ReplicatedLinear): W8A8 is split into independent quantize + matmul
+    - Has communication (ColumnParallelLinear with custom_op): automatically falls back to full forward
 
-    使用示例：
+    Usage example:
         wrapper = CVLinearWrapper(linear)
 
-        # Step 1: 量化 (Vector)
+        # Step 1: Quantize (Vector)
         q_quant, q_scale = wrapper.quantize(x)
 
-        # Step 2: 矩阵乘 (Cube)
+        # Step 2: Matrix multiply (Cube)
         result = wrapper.matmul(q_quant, q_scale)
     """
 
     def __init__(self, linear):
         self.linear = linear
 
-        # 检测是否有 TP 通信操作
+        # Detect whether TP communication operations exist
         self._has_communication = self._detect_communication(linear)
 
-        # 检测量化方案
-        # 处理两种情况：
-        # 1. linear.quant_method 直接是 AscendW8A8DynamicLinearMethod
-        # 2. linear.quant_method 是包装类，需要通过 .quant_method 获取真正的量化方法
-        self._quant_method = linear.quant_method #AscendW8A8DynamicLinearMethod
+        # Detect quantization scheme
+        # Handles two cases:
+        # 1. linear.quant_method is directly AscendW8A8DynamicLinearMethod
+        # 2. linear.quant_method is a wrapper class, requiring .quant_method to get the actual quantization method
+        self._quant_method = linear.quant_method
         self._is_w8a8_dynamic = self._detect_w8a8_dynamic(linear.quant_method)
 
     @staticmethod
     def _detect_w8a8_dynamic(quant_method):
-        """检测量化方法是否为 W8A8 Dynamic"""
-        # 情况1: quant_method 直接是 AscendW8A8DynamicLinearMethod
+        """Detect whether the quantization method is W8A8 Dynamic"""
+        # Case 1: quant_method is directly AscendW8A8DynamicLinearMethod
         if isinstance(quant_method, AscendW8A8DynamicLinearMethod):
             return True
-        # 情况2: quant_method 是包装类，需要通过 .quant_method 获取
+        # Case 2: quant_method is a wrapper class, requiring .quant_method to get the actual method
         if hasattr(quant_method, 'quant_method') and isinstance(quant_method.quant_method, AscendW8A8DynamicLinearMethod):
             return True
         return False
@@ -57,14 +52,14 @@ class CVLinearWrapper:
     @staticmethod
     def _detect_communication(linear):
         """
-        检测 Linear 层 forward 时是否有 TP 通信操作。
+        Detect whether the Linear layer has TP communication during forward.
 
-        判断依据：
-        - custom_op 为 None 或 CustomReplicatedOp：无 TP 通信
-        - 其他 custom_op（MLPColumnParallelOp 含 all_gather）：有 TP 通信
-        - ColumnParallelLinear gather_output=True：有 all-gather 通信
-        注意：ColumnParallelLinear 即使 custom_op=None，仅当 gather_output=True 时有通信。
-              wq_b 使用默认 gather_output=False，故无通信，可以拆分。
+        Criteria:
+        - custom_op is None or CustomReplicatedOp: no TP communication
+        - Other custom_op (e.g., MLPColumnParallelOp with all_gather): has TP communication
+        - ColumnParallelLinear with gather_output=True: has all-gather communication
+        Note: ColumnParallelLinear even with custom_op=None only communicates when gather_output=True.
+              wq_b uses default gather_output=False, so no communication and can be split.
         """
         custom_op = getattr(linear, 'custom_op', None)
         if custom_op is not None:
@@ -79,14 +74,14 @@ class CVLinearWrapper:
 
     def quantize(self, x: torch.Tensor):
         """
-        仅执行量化步骤 (Vector算子)
+        Execute only the quantization step (Vector operator).
 
         Args:
-            x: 输入张量
+            x: Input tensor
 
         Returns:
-            (quantized_x, pertoken_scale): 量化后的张量和缩放因子
-            对于有通信的 linear 或无需量化的方案，返回 (x, None)
+            (quantized_x, pertoken_scale): Quantized tensor and scaling factor.
+            For linear layers with communication or without quantization, returns (x, None).
         """
         if self._has_communication:
             return x, None
@@ -99,15 +94,15 @@ class CVLinearWrapper:
 
     def matmul(self, quantized_x: torch.Tensor, pertoken_scale=None, bias=None):
         """
-        仅执行矩阵乘步骤 (Cube算子)
+        Execute only the matrix multiplication step (Cube operator).
 
         Args:
-            quantized_x: 量化后的输入（有通信时直接传入原始输入）
-            pertoken_scale: W8A8_DYNAMIC 的 per-token 缩放因子
-            bias: 偏置
+            quantized_x: Quantized input (original input when communication is present)
+            pertoken_scale: Per-token scaling factor for W8A8_DYNAMIC
+            bias: Bias
 
         Returns:
-            矩阵乘结果
+            Matrix multiplication result
         """
         if self._has_communication:
             return self.linear.forward(quantized_x)
@@ -128,6 +123,7 @@ class CVLinearWrapper:
                 output_dtype=self.linear.weight_scale.dtype,
             )
 
+
             if need_unsqz:
                 output = output.unsqueeze(dim=1)
             return output
@@ -135,7 +131,7 @@ class CVLinearWrapper:
             return self.linear.quant_method.apply(self.linear, quantized_x, bias)
 
     def forward(self, x: torch.Tensor, bias=None):
-        """完整的 forward（等效于原始 Linear.forward）"""
+        """Full forward (equivalent to the original Linear.forward)"""
         q_quant, q_scale = self.quantize(x)
         return self.matmul(q_quant, q_scale, bias)
 
@@ -148,7 +144,7 @@ class CVLinearWrapper:
         self.linear.weight = value
 
     def __getattr__(self, name):
-        """将未定义的属性委托给内部的 linear 对象"""
+        """Delegate undefined attributes to the inner linear object"""
         try:
             return super().__getattr__(name)
         except AttributeError:

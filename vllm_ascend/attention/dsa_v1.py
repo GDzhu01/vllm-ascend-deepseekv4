@@ -1152,12 +1152,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         self.multistream_dsv4_dsa_overlap = ascend_config.multistream_dsv4_dsa_overlap
         self.vllm_config = get_current_vllm_config()
 
-        # 纯DP情况下，多流标志位强制设置为False
-        # parallel_config = self.vllm_config.parallel_config
-        # is_pure_dp = parallel_config.data_parallel_size > 1 and parallel_config.tensor_parallel_size <= 1
-        # if is_pure_dp:
-        #     self.multistream_dsv4_dsa_overlap = False
-
         # indexer param
         if self.indexer is not None:
             self.indexer_heads: int = self.indexer.n_heads
@@ -1282,8 +1276,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         if olora_tp_enable():
             o_proj_input = self.wo_a(o_proj_input)
         else:
-            # wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-            # o = torch.einsum("tgd,grd->tgr", o, wo_a)
             o_proj_input = torch_npu.npu_transpose_batchmatmul(
                 o_proj_input,
                 self.wo_a.weight,
@@ -1365,9 +1357,8 @@ class AscendDSAImpl(DSAAttentionImpl):
         if self.compress_ratio > 1:
             compress_topk_idxs = None
             if self.compress_ratio == 4:
-                # compress_topk_idxs = self.index_select_qli_plog_forward( # indexer处理
                 if self.multistream_dsv4_dsa_overlap:
-                    compress_topk_idxs = self.cv_indexer_select_qli(  # 多流版本
+                    compress_topk_idxs = self.cv_indexer_select_qli(  # multistream version
                         x=hidden_states,
                         qr=qr,
                         kv_cache=kv_cache,
@@ -1381,7 +1372,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                         with_prefill=True,
                     )
                 else:
-                    compress_topk_idxs = self.indexer_select_qli(  # 原始版本
+                    compress_topk_idxs = self.indexer_select_qli(  # original version
                         x=hidden_states,
                         qr=qr,
                         kv_cache=kv_cache,
@@ -1591,7 +1582,7 @@ class AscendDSAImpl(DSAAttentionImpl):
             if self.compress_ratio == 4:
                 # use multistream.
                 if self.multistream_dsv4_dsa_overlap:
-                    compress_topk_idxs = self.cv_indexer_select_qli(  # 多流版本
+                    compress_topk_idxs = self.cv_indexer_select_qli(  # multistream version
                         x=hidden_states,
                         qr=qr,
                         kv_cache=kv_cache,
@@ -1606,7 +1597,7 @@ class AscendDSAImpl(DSAAttentionImpl):
                         qr_pertoken_scale=qr_pertoken_scale,
                     )
                 else:
-                    compress_topk_idxs = self.indexer_select_qli(  # 原始版本
+                    compress_topk_idxs = self.indexer_select_qli(  # original version
                         x=hidden_states,
                         qr=qr,
                         kv_cache=kv_cache,
@@ -1808,14 +1799,6 @@ class AscendDSAImpl(DSAAttentionImpl):
         if with_prefill:
             assert indexer_kv_scale_metadata.prefill is not None
             if kv is not None:
-
-                # if torch.distributed.get_rank() == 0:
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compress_kv_cache=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv is_contiguous: {compress_kv_cache.is_contiguous()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv stride: {compress_kv_cache.stride()=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressor_attn_metadata.decode.slot_mapping.unsqueeze(-1)=}")
-                #     print(f"C{self.compress_ratio} Attention decode write kv: {compressed_kv=}")
-
                 torch.ops._C_ascend.npu_scatter_nd_update_v2(
                     indexer_k_cache,
                     indexer_kv_scale_metadata.prefill.slot_mapping,
@@ -1887,14 +1870,15 @@ class AscendDSAImpl(DSAAttentionImpl):
         qr_pertoken_scale: torch.Tensor = None,
     ):
         """
-        多流版本：4块分片，主流与从流交替提交实现V/C引擎并行
+        Multistream version: 4-block segmentation, main stream and aux stream
+        alternate submission to achieve V/C engine parallel
 
-        核心策略：
-        - Part0: 主流预计算 qr_quant[V] + compressor[C/混合] + kv_hadamard[V]
+        Core strategy:
+        - Part0: Main pre-compute qr_quant[V] + compressor[C/mixed] + kv_hadamard[V]
         - Part1: Main matmul[C] ∥ Aux kv_quant[V] + scatter_k_cache[AIV]
-        - Part2: Main rope[V] (串行)
+        - Part2: Main rope[V] (serial)
         - Part3: Main q_hadamard[C] ∥ Aux scatter_scale_cache[AIV]
-        - Part4: 主流串行 weights + q_quant + indexer
+        - Part4: Main serial weights + q_quant + indexer
         """
         (_, _, _, indexer_state_cache, indexer_k_cache, indexer_scale_cache) = kv_cache
         # sorted keys: [attn, compressor.state_cache, indexer.compressor.state_cache, indexer.k_cache, swa_cache]
