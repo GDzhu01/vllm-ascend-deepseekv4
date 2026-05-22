@@ -21,8 +21,7 @@ import torch
 
 from vllm_ascend.distributed import parallel_state
 from vllm_ascend.ops.vocab_parallel_embedding import (
-    AscendLogitsProcessor, AscendParallelLMHead, AscendVocabParallelEmbedding,
-    _lmhead_tp_debug_enabled)
+    AscendLogitsProcessor, AscendParallelLMHead, AscendVocabParallelEmbedding)
 
 VOCAB_PARALLEL_EMBEDDING_TEST_NUM_RANDOM_SEEDS = 128
 
@@ -313,10 +312,3 @@ class TestAscendLogitsProcessor(unittest.TestCase):
         lmhead.quant_method.apply.assert_called_once_with(lmhead, hidden_state, bias=None)
         gather_logits.assert_called_once_with(local_logits)
         self.assertTrue(torch.equal(logits, local_logits[..., :processor.org_vocab_size]))
-
-    def test_lmhead_tp_debug_supports_non_vllm_env_name(self):
-        with patch.dict("os.environ", {"ASCEND_LMHEAD_TP_DEBUG": "1"}, clear=True):
-            self.assertTrue(_lmhead_tp_debug_enabled())
-
-        with patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(_lmhead_tp_debug_enabled())

@@ -73,7 +73,7 @@ from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
 from vllm_ascend.ops.vocab_parallel_embedding import (
-    AscendLogitsProcessor, AscendParallelLMHead, _log_lmhead_tp)
+    AscendLogitsProcessor, AscendParallelLMHead)
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
 logger = init_logger(__name__)
@@ -1101,14 +1101,6 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 config.hidden_size,
                 quant_config=quant_config,
                 prefix=maybe_prefix(prefix, "lm_head"),
-            )
-            _log_lmhead_tp(
-                "[lmhead_tp] DeepSeekV4 main lm_head type=%s use_lmhead_tp=%s "
-                "comm_size=%s weight_shape=%s",
-                type(self.lm_head).__name__,
-                getattr(self.lm_head, "use_lmhead_tp", False),
-                getattr(getattr(self.lm_head, "comm_group", None), "world_size", None),
-                tuple(self.lm_head.weight.shape) if hasattr(self.lm_head, "weight") else None,
             )
         else:
             self.lm_head = PPMissingLayer()
