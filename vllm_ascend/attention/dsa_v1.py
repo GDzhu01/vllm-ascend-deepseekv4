@@ -2039,6 +2039,12 @@ class AscendDSAImpl(DSAAttentionImpl):
                 layout_kv="PA_ND")[0]
         return attn_output
 
+    @staticmethod
+    def _is_w8a8_dynamic_linear(linear: torch.nn.Module) -> bool:
+        return (not isinstance(linear.quant_method, AscendUnquantizedLinearMethod)
+                and isinstance(linear.quant_method.quant_method,
+                               AscendW8A8DynamicLinearMethod))
+
     def _forward_decode(
             self,
             layer_name,
@@ -2069,25 +2075,112 @@ class AscendDSAImpl(DSAAttentionImpl):
         actual_seq_lengths_query = compress_common_attn_metadata.decode.query_start_loc
         actual_seq_lengths_key = compress_common_attn_metadata.decode.seq_lens
 
-        wait_hidden_state_cal_event = torch.npu.current_stream().record_event() \
+        q_stream = torch.npu.current_stream()
+        kv_stream = attention_calculation_stream() \
             if self.multistream_dsa_preprocess else None
+
+        wait_hidden_state_cal_event = q_stream.record_event() \
+            if self.multistream_dsa_preprocess else None
+        kv_preprocess_done_event = None
+        kv_preprocessed_on_attention_stream = False
+        wait_q_preprocess_event = None
+        wait_kv_matmul_event = None
 
         # q
         if (not isinstance(self.wq_b.quant_method, AscendUnquantizedLinearMethod)) and \
                 isinstance(self.wq_b.quant_method.quant_method, AscendW8A8DynamicLinearMethod):
-            q_a = self.wq_a(hidden_states)
-            qr, qr_pertoken_scale = torch.ops._C_ascend.npu_rms_norm_dynamic_quant(
-                q_a, self.q_norm.weight, epsilon=self.eps)
-            q = torch_npu.npu_quant_matmul(
-                qr,
-                self.wq_b.weight,
-                self.wq_b.weight_scale,
-                pertoken_scale=qr_pertoken_scale,
-                bias=self.wq_b.bias,
-                output_dtype=hidden_states.dtype,
-            ).unflatten(-1, (self.n_local_heads, self.head_dim))
+            if (self.multistream_dsa_preprocess
+                    and self._is_w8a8_dynamic_linear(self.wq_a)
+                    and self._is_w8a8_dynamic_linear(self.wkv)):
+                q_quantized_x, q_pertoken_scale = torch_npu.npu_dynamic_quant(
+                    hidden_states)
+                q_pertoken_scale = q_pertoken_scale[
+                    :q_quantized_x.shape[0]].contiguous()
+                q_dynamic_quant_done_event = q_stream.record_event()
+
+                assert kv_stream is not None
+                with npu_stream_switch(kv_stream):
+                    kv_stream.wait_event(q_dynamic_quant_done_event)
+                    kv_quantized_x, kv_pertoken_scale = torch_npu.npu_dynamic_quant(
+                        hidden_states)
+                    kv_pertoken_scale = kv_pertoken_scale[
+                        :kv_quantized_x.shape[0]].contiguous()
+
+                q_a = torch_npu.npu_quant_matmul(
+                    q_quantized_x,
+                    self.wq_a.weight,
+                    self.wq_a.weight_scale,
+                    pertoken_scale=q_pertoken_scale,
+                    bias=getattr(self.wq_a, "bias", None),
+                    output_dtype=hidden_states.dtype,
+                )
+
+                q_a_done_event = q_stream.record_event()
+                with npu_stream_switch(kv_stream):
+                    kv_stream.wait_event(q_a_done_event)
+                    kv = torch_npu.npu_quant_matmul(
+                        kv_quantized_x,
+                        self.wkv.weight,
+                        self.wkv.weight_scale,
+                        pertoken_scale=kv_pertoken_scale,
+                        bias=getattr(self.wkv, "bias", None),
+                        output_dtype=hidden_states.dtype,
+                    )
+                    wait_kv_matmul_event = kv_stream.record_event()
+                    kv_preprocessed_on_attention_stream = True
+
+                qr, qr_pertoken_scale = torch.ops._C_ascend.npu_rms_norm_dynamic_quant(
+                    q_a, self.q_norm.weight, epsilon=self.eps)
+                qr_pertoken_scale = qr_pertoken_scale[
+                    :qr.shape[0]].contiguous()
+
+                q_stream.wait_event(wait_kv_matmul_event)
+                q = torch_npu.npu_quant_matmul(
+                    qr,
+                    self.wq_b.weight,
+                    self.wq_b.weight_scale,
+                    pertoken_scale=qr_pertoken_scale,
+                    bias=self.wq_b.bias,
+                    output_dtype=hidden_states.dtype,
+                ).unflatten(-1, (self.n_local_heads, self.head_dim))
+
+                with npu_stream_switch(kv_stream):
+                    kv = self.kv_norm(kv)
+                    assert self.rope_head_dim is not None
+                    kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
+
+                    torch.ops._C_ascend.inplace_partial_rotary_mul(
+                        kv.unsqueeze(1),
+                        cos,
+                        sin,
+                        rotary_mode="interleave",
+                        partial_slice=[self.nope_head_dim, self.head_dim],
+                    )
+
+                    _scatter_nd_update_asc(
+                        swa_cache.view(-1, kv.shape[-1]),
+                        swa_metadata.decode.slot_mapping.unsqueeze(-1), kv)
+                    kv_preprocess_done_event = kv_stream.record_event()
+            else:
+                q_a = self.wq_a(hidden_states)
+                wait_q_preprocess_event = q_stream.record_event() \
+                    if self.multistream_dsa_preprocess else None
+                qr, qr_pertoken_scale = torch.ops._C_ascend.npu_rms_norm_dynamic_quant(
+                    q_a, self.q_norm.weight, epsilon=self.eps)
+                qr_pertoken_scale = qr_pertoken_scale[
+                    :qr.shape[0]].contiguous()
+                q = torch_npu.npu_quant_matmul(
+                    qr,
+                    self.wq_b.weight,
+                    self.wq_b.weight_scale,
+                    pertoken_scale=qr_pertoken_scale,
+                    bias=self.wq_b.bias,
+                    output_dtype=hidden_states.dtype,
+                ).unflatten(-1, (self.n_local_heads, self.head_dim))
         else:
             qr = q = self.q_norm(self.wq_a(hidden_states))
+            wait_q_preprocess_event = q_stream.record_event() \
+                if self.multistream_dsa_preprocess else None
             q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
             qr_pertoken_scale = None
         if self.compressor_prefetch:
@@ -2102,36 +2195,39 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
-        with npu_stream_switch(attention_calculation_stream(),
+        with npu_stream_switch(kv_stream,
                                enabled=self.multistream_dsa_preprocess):
-            if wait_hidden_state_cal_event:
-                torch.npu.current_stream().wait_event(
-                    wait_hidden_state_cal_event)
+            if not kv_preprocessed_on_attention_stream and (
+                    wait_q_preprocess_event or wait_hidden_state_cal_event):
+                assert kv_stream is not None
+                kv_stream.wait_event(
+                    wait_q_preprocess_event or wait_hidden_state_cal_event)
 
             # win kv & tok_dis
-            kv = self.wkv(hidden_states)
-            kv = self.kv_norm(kv)
-            assert self.rope_head_dim is not None
-            kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
+            if not kv_preprocessed_on_attention_stream:
+                kv = self.wkv(hidden_states)
+                kv = self.kv_norm(kv)
+                assert self.rope_head_dim is not None
+                kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
 
-            torch.ops._C_ascend.inplace_partial_rotary_mul(
-                kv.unsqueeze(1),
-                cos,
-                sin,
-                rotary_mode="interleave",
-                partial_slice=[self.nope_head_dim, self.head_dim],
-            )
+                torch.ops._C_ascend.inplace_partial_rotary_mul(
+                    kv.unsqueeze(1),
+                    cos,
+                    sin,
+                    rotary_mode="interleave",
+                    partial_slice=[self.nope_head_dim, self.head_dim],
+                )
 
-            # swa exec kv
-            _scatter_nd_update_asc(
-                swa_cache.view(-1, kv.shape[-1]),
-                swa_metadata.decode.slot_mapping.unsqueeze(-1), kv)
+                # swa exec kv
+                _scatter_nd_update_asc(
+                    swa_cache.view(-1, kv.shape[-1]),
+                    swa_metadata.decode.slot_mapping.unsqueeze(-1), kv)
 
-            wait_attention_cal_event = torch.npu.current_stream().record_event() \
-                if self.multistream_dsa_preprocess else None
+                kv_preprocess_done_event = kv_stream.record_event() \
+                    if self.multistream_dsa_preprocess else None
 
-        if wait_attention_cal_event:
-            torch.npu.current_stream().wait_event(wait_attention_cal_event)
+        if kv_preprocess_done_event:
+            q_stream.wait_event(kv_preprocess_done_event)
 
         if self.compress_ratio > 1:
             compress_cos = compress_common_attn_metadata.decode.compress_cos[layer_name]
