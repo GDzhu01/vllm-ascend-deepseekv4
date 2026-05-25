@@ -1941,6 +1941,9 @@ class AscendDSAImpl(DSAAttentionImpl):
 
             coff = 2 if self.compressor_overlap else 1
 
+            # 等待 prefetch 完成（如果启用了 prefetch）
+            if self.compressor_prefetch:
+                torch.npu.current_stream().wait_stream(self.compressor_stream)
             # compressor
             compressed_kv, _, _, _, _ = torch.ops._C_ascend.compressor(
                 hidden_states,
