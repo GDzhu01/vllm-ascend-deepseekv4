@@ -39,6 +39,7 @@ from vllm_ascend.utils import (
     npu_stream_switch,
     olora_tp_enable,
     oproj_tp_enable,
+    prefetch_stream,
 )
 from vllm_ascend.worker.npu_input_batch import NPUInputBatch
 import os
@@ -1429,7 +1430,7 @@ class AscendDSAImpl(DSAAttentionImpl):
         
         if os.environ.get("USE_COMPRESSOR_PREFETCH", "0").lower() in ("1", "true", "yes", "on"):
             self.compressor_prefetch = True
-            self.compressor_stream = torch.npu.Stream()
+            self.compressor_stream = prefetch_stream()
         else:
             self.compressor_prefetch = False
         if os.environ.get("USE_ATTN_SP", "0").lower() in ("1", "true", "yes", "on"):
@@ -1888,6 +1889,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
 
+        # 在 RoPE / wkv / scatter 之前记录事件，供 compressor_stream 使用
+        if self.compressor_prefetch:
+            main_stream_done_event = torch.npu.current_stream().record_event()
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             kv.unsqueeze(1),
             cos,
@@ -1904,20 +1908,20 @@ class AscendDSAImpl(DSAAttentionImpl):
         compress_cos = compress_common_attn_metadata.prefill.compress_cos[layer_name]
         compress_sin = compress_common_attn_metadata.prefill.compress_sin[layer_name]
 
-        if self.compressor_prefetch and self.compress_ratio > 1:
-            # 用 qr 作为 dependency,prefetch 与后续 compressor 并行
+        if self.compressor_prefetch and self.compress_ratio > 1 and self.compress_ratio != 4:
+            # 用 qr（或 q）作为 dependency,prefetch 与后续 RoPE / wkv / scatter 并行
             with torch.npu.stream(self.compressor_stream):
+                self.compressor_stream.wait_event(main_stream_done_event)
                 torch_npu.npu_prefetch(
                     self.compressor_wkv.weight,
-                    qr,
+                    qr,                                      # 锚点:在 qr 产出后开始预取
                     self.compressor_wkv.weight.numel() *
                     self.compressor_wkv.weight.element_size(),
-                    0,
+                    0,                                       # offset
                 )
-                torch_npu.npu_prefetch(
-                    self.compressor_wgate.weight, qr,
-                    self.compressor_wgate.weight.numel() *
-                    self.compressor_wgate.weight.element_size())
+                torch_npu.npu_prefetch(self.compressor_wgate.weight, qr,
+                                self.compressor_wgate.weight.numel() *
+                                self.compressor_wgate.weight.element_size())
 
         if self.compress_ratio > 1:
             compress_topk_idxs = None
@@ -2083,7 +2087,8 @@ class AscendDSAImpl(DSAAttentionImpl):
             qr = q = self.q_norm(self.wq_a(hidden_states))
             q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
             qr_pertoken_scale = None
-
+        if self.compressor_prefetch:
+            main_stream_done_event = torch.npu.current_stream().record_event()
         q = triton_q_rms(q, self.eps)
 
         torch.ops._C_ascend.inplace_partial_rotary_mul(
@@ -2146,25 +2151,28 @@ class AscendDSAImpl(DSAAttentionImpl):
                     actual_seq_lengths_key=actual_seq_lengths_key,
                     with_prefill=False,
                     qr_pertoken_scale=qr_pertoken_scale)
-            else:
-                if self.compressor_prefetch:
-                    # ratio == 128 等不走 indexer_select_qli 的分支:
-                    # 在此处为紧接其后的主 compressor 发 prefetch。
-                    # 此时 wkv / swa scatter 已结束(已 wait_event),L2 干净;
-                    # 后续只剩 dict 查询 + coff 赋值等轻量操作,不会再冲刷 L2,
-                    # 能保证权重在 compressor kernel 启动时驻留在 L2 中。
-                    w_cwkv  = self.compressor_wkv.weight
-                    w_cgate = self.compressor_wgate.weight
-                    w_cnorm = self.compressor_norm.weight
-                    torch_npu.npu_prefetch(w_cwkv,  hidden_states,
-                                        w_cwkv.numel()  * w_cwkv.element_size())
-                    torch_npu.npu_prefetch(w_cgate, hidden_states,
-                                        w_cgate.numel() * w_cgate.element_size())
-                    torch_npu.npu_prefetch(w_cnorm, hidden_states,
-                                        w_cnorm.numel() * w_cnorm.element_size())
+
+        
+            if self.compressor_prefetch and self.compress_ratio > 1 and self.compress_ratio != 4:
+                # 用 qr（或 q）作为 dependency,prefetch 与后续 RoPE / wkv / scatter 并行
+                with torch.npu.stream(self.compressor_stream):
+                    self.compressor_stream.wait_event(main_stream_done_event)
+                    torch_npu.npu_prefetch(
+                        self.compressor_wkv.weight,
+                        qr,                                      # 锚点:在 qr 产出后开始预取
+                        self.compressor_wkv.weight.numel() *
+                        self.compressor_wkv.weight.element_size(),
+                        0,                                       # offset
+                    )
+                    torch_npu.npu_prefetch(self.compressor_wgate.weight, qr,
+                                    self.compressor_wgate.weight.numel() *
+                                    self.compressor_wgate.weight.element_size())
 
             coff = 2 if self.compressor_overlap else 1
 
+            # 等待 prefetch 完成（如果启用了 prefetch）
+            if self.compressor_prefetch:
+                torch.npu.current_stream().wait_stream(self.compressor_stream)
             # compressor
             compressed_kv, _, _, _, _ = torch.ops._C_ascend.compressor(
                 hidden_states,
@@ -2293,13 +2301,14 @@ class AscendDSAImpl(DSAAttentionImpl):
             # 依赖锚点用 q(已产出,确保合法);搬运起点由本行位置决定。
             # ap e/ norm 很小,放不放都行;这里一起搬,代价可忽略。
             # ================================================================
-            w_cwkv  = self.indexcom_wkv.weight
-            w_cgate = self.indexcom_wgate.weight
-            w_cnorm = self.indexcom_norm.weight
-            torch_npu.npu_prefetch(w_cwkv,  q, w_cwkv.numel()  * w_cwkv.element_size())
-            torch_npu.npu_prefetch(w_cgate, q, w_cgate.numel() * w_cgate.element_size())
-            torch_npu.npu_prefetch(w_cnorm, q, w_cnorm.numel() * w_cnorm.element_size())
-
+            # 记录 q 完成事件，供 compressor_stream 使用
+            q_ready_event = torch.npu.current_stream().record_event()
+            with torch.npu.stream(self.compressor_stream):
+                self.compressor_stream.wait_event(q_ready_event)
+                torch_npu.npu_prefetch(self.indexcom_wkv.weight,  q, self.indexcom_wkv.weight.numel()  * self.indexcom_wkv.weight.element_size())
+                torch_npu.npu_prefetch(self.indexcom_wgate.weight, q, self.indexcom_wgate.weight.numel() * self.indexcom_wgate.weight.element_size())
+                torch_npu.npu_prefetch(self.indexcom_norm.weight, q, self.indexcom_norm.weight.numel() * self.indexcom_norm.weight.element_size())
+    
         torch.ops._C_ascend.inplace_partial_rotary_mul(
             q.unsqueeze(1),
             cos,
@@ -2325,6 +2334,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             score_block_table = indexer_kv_score_state_metadata.decode.block_table
             start_pos = indexer_kv_scale_metadata.decode.start_pos
 
+        # 等待 prefetch 完成（如果启用了 prefetch）
+        if self.compressor_prefetch:
+            torch.npu.current_stream().wait_stream(self.compressor_stream)
         kv, _, _, _, _ = torch.ops._C_ascend.compressor(
             x,
             self.indexcom_wkv.weight,
@@ -2409,7 +2421,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             kvlens = indexer_kv_scale_metadata.decode.seq_lens
             block_table = indexer_kv_scale_metadata.decode.block_table
             qli_metadata = indexer_kv_scale_metadata.decode.qli_metadata
-
+        if self.compressor_prefetch:
+            main_stream_done_event = torch.npu.current_stream().record_event()
+        
         topk_idxs, _ = torch.ops._C_ascend.npu_quant_lightning_indexer(
             query=q,
             key=indexer_kv_cache,
@@ -2430,4 +2444,18 @@ class AscendDSAImpl(DSAAttentionImpl):
             next_tokens=(1 << 63) - 1,
             cmp_ratio=4,
             return_value=False)
+        if self.compressor_prefetch:
+            # 用 qr（或 q）作为 dependency,prefetch 与后续 RoPE / wkv / scatter 并行
+            with torch.npu.stream(self.compressor_stream):
+                self.compressor_stream.wait_event(main_stream_done_event)
+                torch_npu.npu_prefetch(
+                    self.compressor_wkv.weight,
+                    qr,                                      # 锚点:在 qr 产出后开始预取
+                    self.compressor_wkv.weight.numel() *
+                    self.compressor_wkv.weight.element_size(),
+                    0,                                       # offset
+                )
+                torch_npu.npu_prefetch(self.compressor_wgate.weight, qr,
+                                self.compressor_wgate.weight.numel() *
+                                self.compressor_wgate.weight.element_size())
         return topk_idxs
