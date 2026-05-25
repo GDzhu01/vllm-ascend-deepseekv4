@@ -50,10 +50,8 @@ from vllm.model_executor.layers.linear import (ColumnParallelLinear,
                                                MergedColumnParallelLinear,
                                                ReplicatedLinear,
                                                RowParallelLinear)
-from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
-from vllm.model_executor.layers.vocab_parallel_embedding import (
-    ParallelLMHead, VocabParallelEmbedding)
+from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader, maybe_remap_kv_scale_name)
 from vllm.model_executor.models.interfaces import (MixtureOfExperts,
@@ -74,6 +72,8 @@ from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
+from vllm_ascend.ops.vocab_parallel_embedding import (
+    AscendLogitsProcessor, AscendParallelLMHead)
 from vllm_ascend.transformers_utils.configs.deepseek_v4 import DeepseekV4Config
 
 logger = init_logger(__name__)
@@ -1096,7 +1096,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
         self.model = self.model_cls(vllm_config=vllm_config,
                                     prefix=maybe_prefix(prefix, "model"))
         if get_pp_group().is_last_rank:
-            self.lm_head = ParallelLMHead(
+            self.lm_head = AscendParallelLMHead(
                 config.vocab_size,
                 config.hidden_size,
                 quant_config=quant_config,
@@ -1104,7 +1104,7 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
             )
         else:
             self.lm_head = PPMissingLayer()
-        self.logits_processor = LogitsProcessor(config.vocab_size)
+        self.logits_processor = AscendLogitsProcessor(config.vocab_size)
         self.make_empty_intermediate_tensors = (
             self.model.make_empty_intermediate_tensors)
         # Set MoE hyperparameters

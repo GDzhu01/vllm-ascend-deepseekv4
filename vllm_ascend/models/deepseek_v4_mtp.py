@@ -26,7 +26,6 @@ from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
 from vllm_ascend.ascend_config import get_ascend_config
-
 from .deepseek_v4 import (DeepseekV2DecoderLayer, DeepseekV2MixtureOfExperts,
                           DeepseekV4MoE, get_spec_layer_idx_from_weight_name)
 

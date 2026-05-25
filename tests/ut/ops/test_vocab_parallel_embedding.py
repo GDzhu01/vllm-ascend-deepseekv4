@@ -204,6 +204,35 @@ class TestCustomVocabParallelEmbedding(unittest.TestCase):
                     output = layer.forward(input_)
                 self.assertEqual(output.shape, expected_shape)
 
+    def test_lmhead_tp_only_selects_main_lm_head_prefix(self):
+        lmhead_group = MagicMock()
+        lmhead_group.world_size = 8
+        lmhead_group.rank_in_group = 0
+
+        tp_group = MagicMock()
+        tp_group.world_size = 2
+        tp_group.rank_in_group = 0
+
+        with patch("vllm_ascend.ops.vocab_parallel_embedding.lmhead_tp_enable", return_value=True), \
+            patch("vllm_ascend.ops.vocab_parallel_embedding.embedding_tp_enable", return_value=False), \
+            patch("vllm_ascend.ops.vocab_parallel_embedding.get_lmhead_tp_group", return_value=lmhead_group), \
+            patch("vllm_ascend.ops.vocab_parallel_embedding.get_tp_group", return_value=tp_group):
+            main_head = AscendParallelLMHead(
+                num_embeddings=64,
+                embedding_dim=self.embedding_dim,
+                padding_size=self.padding_size,
+                prefix="lm_head")
+            mtp_head = AscendParallelLMHead(
+                num_embeddings=64,
+                embedding_dim=self.embedding_dim,
+                padding_size=self.padding_size,
+                prefix="mtp.0.head")
+
+        self.assertIs(main_head.comm_group, lmhead_group)
+        self.assertTrue(main_head.use_lmhead_tp)
+        self.assertIs(mtp_head.comm_group, tp_group)
+        self.assertFalse(mtp_head.use_lmhead_tp)
+
 
 class TestAscendLogitsProcessor(unittest.TestCase):
 
@@ -267,3 +296,19 @@ class TestAscendLogitsProcessor(unittest.TestCase):
         hidden_state = torch.randn(1, self.org_num_embeddings)
         processor._get_logits(hidden_state, lmhead)
         self.mock_quant_method.apply.assert_called_once()
+
+    def test_get_logits_uses_normal_path_for_non_lmhead_tp_head(self):
+        processor = AscendLogitsProcessor(vocab_size=self.vocab_size)
+        hidden_state = torch.randn(1, self.embedding_dim)
+        local_logits = torch.randn(1, self.vocab_size)
+
+        lmhead = MagicMock()
+        lmhead.use_lmhead_tp = False
+        lmhead.quant_method.apply = MagicMock(return_value=local_logits)
+
+        with patch.object(processor, "_gather_logits", return_value=local_logits) as gather_logits:
+            logits = processor._get_logits(hidden_state, lmhead)
+
+        lmhead.quant_method.apply.assert_called_once_with(lmhead, hidden_state, bias=None)
+        gather_logits.assert_called_once_with(local_logits)
+        self.assertTrue(torch.equal(logits, local_logits[..., :processor.org_vocab_size]))
