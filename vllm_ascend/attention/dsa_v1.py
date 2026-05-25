@@ -1183,7 +1183,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         prefill_slot_mapping = self.spec_slot_mapping[draft_step - 1][tokens_start:num_prefill_tokens]
         block_table = common_attn_metadata.block_table_tensor[:common_attn_metadata.num_reqs]
 
-        sas_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+        sas_metadata = torch.ops.custom.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
@@ -1256,7 +1256,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         slot_mapping = self.spec_slot_mapping[draft_step - 1][:num_decode_tokens]
         block_table = common_attn_metadata.block_table_tensor
 
-        decode_sas_metadata = torch.ops._C_ascend.npu_sparse_attn_sharedkv_metadata(
+        decode_sas_metadata = torch.ops.custom.npu_sparse_attn_sharedkv_metadata(
             num_heads_q=n_local_heads,
             num_heads_kv=1,
             head_dim=self.model_config.get_head_size(),
