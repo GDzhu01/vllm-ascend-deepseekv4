@@ -42,6 +42,7 @@ from vllm.distributed import (get_ep_group, get_pp_group,
                               get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size,
                               tensor_model_parallel_all_gather)
+from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
@@ -71,6 +72,7 @@ from vllm_ascend.utils import (
 )
 
 from vllm_ascend.ascend_config import get_ascend_config
+from vllm_ascend.ascend_forward_context import _EXTRA_CTX
 from vllm_ascend.ops.dsa import AscendDeepseekSparseAttention, DSAModules
 from vllm_ascend.ops.rope_dsv4 import ComplexExpRotaryEmbedding
 from vllm_ascend.ops.triton.mul_add import muls_add_triton
@@ -862,7 +864,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor,
                hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        if self.is_custom_hc_pre_enabled:
+        if self.is_custom_hc_pre_enabled and x.shape[0] <= 256:
             return torch.ops.custom.npu_hc_pre(
                 x, hc_fn, hc_scale, hc_base,
                 hc_mult=self.hc_mult,
@@ -974,6 +976,18 @@ class DeepseekV4Model(nn.Module):
             torch.empty(hc_mult, dtype=torch.float32))
         self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
 
+        self.hc_dim = self.hc_mult * config.hidden_size
+
+        # Pre-hc_head residual stream buffer for the MTP draft. Stable
+        # address (outside the cudagraph pool) so the copy_ in forward()
+        # refreshes it correctly across captured shapes.
+        self._mtp_hidden_buffer = torch.empty(
+            vllm_config.scheduler_config.max_num_batched_tokens,
+            self.hc_dim,
+            dtype=vllm_config.model_config.dtype,
+            device=self.device,
+        )
+
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
@@ -1023,6 +1037,20 @@ class DeepseekV4Model(nn.Module):
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual = layer(positions, hidden_states, residual,
                                             llama_4_scaling)
+
+        # All-gather across TP ranks when FlashComm/SP is enabled so the
+        # draft model receives the full sequence instead of a per-rank shard.
+        h_states_flat = hidden_states.flatten(1)
+        if _EXTRA_CTX.flash_comm_v1_enabled:
+            h_states_flat = tensor_model_parallel_all_gather(h_states_flat, dim=0)
+            pad_size = _EXTRA_CTX.pad_size
+            if pad_size > 0:
+                h_states_flat = h_states_flat[:-pad_size]
+
+        # Stash pre-hc_head residual for the MTP draft (captured copy_).
+        num_tokens = h_states_flat.shape[0]
+        self._mtp_hidden_buffer[:num_tokens].copy_(h_states_flat)
+
         hidden_states = self.hc_head(hidden_states, self.hc_head_fn,
                                      self.hc_head_scale, self.hc_head_base)
         if not get_pp_group().is_last_rank:
@@ -1398,3 +1426,9 @@ class AscendDeepseekV4ForCausalLM(nn.Module, SupportsPP,
                 loaded_params.add(name)
 
         return loaded_params
+
+    def get_mtp_target_hidden_states(self) -> torch.Tensor | None:
+        """Pre-hc_head residual stream buffer (max_num_batched_tokens,
+        hc_mult * hidden_size) for the MTP draft model. Populated by
+        forward(); valid after each target step."""
+        return getattr(self.model, "_mtp_hidden_buffer", None)

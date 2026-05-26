@@ -1019,6 +1019,16 @@ class NPUModelRunner(GPUModelRunner):
                 valid_sampled_token_ids, sampling_metadata, spec_decode_metadata, sample_hidden_states
             )
         elif self.speculative_config.use_eagle() or self.speculative_config.uses_draft_model():
+            # Let the target override the hidden state fed to the drafter
+            # (e.g. DeepSeek V4 MTP needs the pre-hc_head residual). Safe to
+            # rebind here: hidden_states was already consumed for sampling
+            # above and is not used again in this branch.
+            alt = getattr(
+                self.get_model(), "get_mtp_target_hidden_states", lambda: None
+            )()
+            if alt is not None:
+                hidden_states = alt
+
             common_attn_metadata = spec_decode_common_attn_metadata
             sampled_token_ids = valid_sampled_token_ids
 
