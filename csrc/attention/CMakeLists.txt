@@ -9,9 +9,18 @@
 # -----------------------------------------------------------------------------------------------------------
 
 set(OPTEST_NAME optest_${PKG_NAME})
+set(VLLM_ASCEND_DISABLED_ATTENTION_OPS
+    sparse_attn_sharedkv
+    sparse_attn_sharedkv_metadata
+)
 
 file(GLOB CURRENT_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
 foreach(SUB_DIR ${CURRENT_DIRS})
+    if ("${SUB_DIR}" IN_LIST VLLM_ASCEND_DISABLED_ATTENTION_OPS)
+        message(STATUS "Skip disabled attention op: ${SUB_DIR}")
+        continue()
+    endif()
+    
     if (DEFINED ASCEND_OP_NAME AND NOT "${ASCEND_OP_NAME}" STREQUAL "")
         if (NOT "${ASCEND_OP_NAME}" STREQUAL "all" AND NOT "${ASCEND_OP_NAME}" STREQUAL "ALL")
             if (NOT ${SUB_DIR} IN_LIST ASCEND_OP_NAME)
