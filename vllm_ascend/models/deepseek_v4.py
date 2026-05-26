@@ -864,7 +864,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     def hc_pre(self, x: torch.Tensor, hc_fn: torch.Tensor,
                hc_scale: torch.Tensor, hc_base: torch.Tensor):
-        if self.is_custom_hc_pre_enabled and x.shape[0] <= 256:
+        if self.is_custom_hc_pre_enabled:
             return torch.ops.custom.npu_hc_pre(
                 x, hc_fn, hc_scale, hc_base,
                 hc_mult=self.hc_mult,
