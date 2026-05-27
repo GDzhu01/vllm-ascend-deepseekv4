@@ -1047,7 +1047,9 @@ def get_hccl_config_for_pg_options(group_name: str) -> dict | None:
     # based on HCCL_BUFFSIZE configuration. Using pg_options with mc2 group would
     # result in memory misalignment problems.
     if group_name and "mc2" in group_name:
-        return None
+        return {"hccl_op_expansion_mode":3}
+    if group_name and "ep" in group_name:
+        return {"hccl_op_expansion_mode":2, "hccl_buffer_size": 512}
     hccl_config_map = {
         "dp": {"hccl_buffer_size": calculate_dp_buffer_size()},
         "dynamic_eplb": {"hccl_buffer_size": _DYNAMIC_EPLB_BUFFER_SIZE},
