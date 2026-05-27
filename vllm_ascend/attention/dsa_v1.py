@@ -1823,50 +1823,9 @@ class AscendDSAImpl(DSAAttentionImpl):
             hidden_states = wait_and_unpad(hs_buf, hs_handle, pad_size)
             if hidden_states.shape[0] != num_prefill_tokens:
                 hidden_states = hidden_states[:num_prefill_tokens]
-
-        def gather_without_overlap():
-            nonlocal hidden_states, q, kv, qr
-            # ---- 优化1: 先派发 hidden_states 的 gather (它后续才被用) ----
-            # 让它在通信流上和下面的 wq_a / q_norm / wkv / kv_norm overlap
-            hidden_states_full = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                hidden_states, need_gather_q_kv)
-            # ---- 阶段1: SP 分片上的本地计算 (用 sharded hidden_states) ----
-            qr = self.q_norm(self.wq_a(hidden_states))   # [T_local, q_lora_rank]
-            # ---- 优化1续: 派发 qr 的 gather, 与下面 kv 的本地计算 overlap ----
-            qr = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                qr, need_gather_q_kv)
-            kv = self.wkv(hidden_states)
-            kv = self.kv_norm(kv)
-            assert self.rope_head_dim is not None
-            kv = kv.view(-1, 1, self.nope_head_dim + self.rope_head_dim)
-            # ---- 阶段2: kv gather (统一 2D, 避免 unpad 走错分支) ----
-            kv_inner = kv.shape[-1]
-            kv_2d = kv.reshape(kv.shape[0], kv_inner)
-            kv_2d = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(
-                kv_2d, need_gather_q_kv)
-            kv = kv_2d.view(-1, 1, kv_inner)
-            # ---- unpad 兜底: 注意是对 hidden_states_full 切, 不是 hidden_states ----
-            if qr.shape[0] != num_prefill_tokens:
-                qr                 = qr[:num_prefill_tokens]
-                kv                 = kv[:num_prefill_tokens]
-                hidden_states_full = hidden_states_full[:num_prefill_tokens]
-            # 用 full 替换 sharded, 后续阶段3全部基于 full sequence
-            hidden_states = hidden_states_full
-            # ---- 优化2: 用 full-seq qr 本地算 q (省掉 q 的 all_gather) ----
-            q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.head_dim))
-            q = triton_q_rms(q, self.eps)
-
-            # 调试期断言
-            assert q.shape[0] == cos.shape[0], (
-                f"size mismatch: q={q.shape}, cos={cos.shape}, "
-                f"kv={kv.shape}, hidden={hidden_states.shape}"
-            )
         
         if defer_gather:
-            if self.compress_ratio == 4 and need_gather_q_kv:
-                gather_with_overlap()
-            else:
-                gather_without_overlap()
+            gather_with_overlap()
         else:
             # 非 SP 路径: 与原始实现等价, 不做任何 gather
             qr = self.q_norm(self.wq_a(hidden_states))
