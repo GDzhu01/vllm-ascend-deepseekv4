@@ -1113,10 +1113,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         num_reqs_actual = kwargs.get("num_reqs_actual", None)
         num_input_tokens = common_attn_metadata.num_input_tokens
         input_positions = common_attn_metadata.positions[:num_input_tokens].long()
-        if num_prefills:
-            cos, sin = get_cos_and_sin_dsa(input_positions)
-        else:
-            cos, sin = get_cos_and_sin_dsa(input_positions, True)
+        cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=False)
 
         slot_mapping = common_attn_metadata.slot_mapping[:num_input_tokens]
         self.spec_slot_mapping[draft_step - 1][:num_input_tokens] = slot_mapping
@@ -1251,7 +1248,7 @@ class AscendDSAMetadataBuilder(AttentionMetadataBuilder[AscendDSAMetadata]):
         max_seqlen_kv = torch.max(_seq_lens_cpu[:num_decodes]).item()
 
         input_positions = common_attn_metadata.positions[:num_decode_tokens].long()
-        cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=True)
+        cos, sin = get_cos_and_sin_dsa(input_positions, use_cache=False)
 
         slot_mapping = self.spec_slot_mapping[draft_step - 1][:num_decode_tokens]
         block_table = common_attn_metadata.block_table_tensor
