@@ -326,6 +326,7 @@ class DeepseekV4MoE(nn.Module):
         self.gate = ReplicatedLinear(config.hidden_size,
                                      config.n_routed_experts,
                                      bias=False,
+                                     params_dtype=torch.float32,
                                      quant_config=None,
                                      prefix=f"{prefix}.gate")
 
