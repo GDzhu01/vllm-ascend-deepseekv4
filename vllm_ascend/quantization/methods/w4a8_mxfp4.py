@@ -113,12 +113,27 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
     """FusedMoe method for Ascend W4A8_DYNAMIC.
     """
     quant_type: QuantType = QuantType.MXFP4
+    DSV4_PRO_ROUTED_NUM_EXPERTS = 384
 
     def __init__(self):
         self.ep_group = get_ep_group()
 
         vllm_config = get_current_vllm_config()
         self.group_size = vllm_config.quant_config.quant_description.get("group_size", 32)
+        scheduler_config = getattr(vllm_config, "scheduler_config", None)
+        self.max_num_batched_tokens = getattr(
+            scheduler_config, "max_num_batched_tokens", None)
+        if self.max_num_batched_tokens is None:
+            raise RuntimeError(
+                "max_num_batched_tokens is required to precompute the force "
+                "load balance random_matrix.")
+        self.random_matrix = torch.rand(
+            self.max_num_batched_tokens,
+            self.DSV4_PRO_ROUTED_NUM_EXPERTS,
+            device="npu")
+        print(
+            f"force load balance random_matrix shape: {tuple(self.random_matrix.shape)}"
+        )
         ascend_config = get_ascend_config()
         self.use_aclgraph = (
             vllm_config.compilation_config.mode == CompilationMode.VLLM_COMPILE
@@ -130,6 +145,24 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
     def update_addtional_quant_config(self, addtional_quant_config: dict):
         self.additional_quant_config = addtional_quant_config
 
+    def _build_force_load_balance_topk_ids(
+            self,
+            topk_ids: torch.Tensor,
+            routed_num_experts: int) -> torch.Tensor:
+        max_num_batched_tokens = int(self.max_num_batched_tokens)
+        if topk_ids.size(0) > max_num_batched_tokens:
+            raise RuntimeError(
+                "The current token count exceeds max_num_batched_tokens: "
+                f"{topk_ids.size(0)} > {self.max_num_batched_tokens}.")
+        if routed_num_experts > self.random_matrix.size(1):
+            raise RuntimeError(
+                "The routed expert count exceeds precomputed random_matrix "
+                f"width: {routed_num_experts} > {self.random_matrix.size(1)}.")
+
+        random_matrix = self.random_matrix[:topk_ids.size(0), :
+                                           routed_num_experts]
+        return torch.argsort(random_matrix, dim=1)[:, :topk_ids.size(1)].to(
+            topk_ids.dtype)
 
     @staticmethod
     def get_weight(num_experts: int, intermediate_size_per_partition: int,
@@ -194,8 +227,9 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
         mc2_mask: torch.Tensor | None = None,
         tid2eid=None
     ) -> torch.Tensor:
+        routed_num_experts = global_num_experts - global_redundant_expert_num
         assert router_logits.shape[
-                   1] == global_num_experts - global_redundant_expert_num, "Number of global experts mismatch (excluding redundancy)"
+                   1] == routed_num_experts, "Number of global experts mismatch (excluding redundancy)"
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
             router_logits=router_logits,
@@ -213,11 +247,9 @@ class AscendW4A8MXFPDynamicFusedMoEMethod:
         # this is a naive implementation for experts load balance so as
         # to avoid accumulating too much tokens on a single rank.
         # currently it is only activated when doing profile runs.
-        if enable_force_load_balance:
-            random_matrix = torch.rand(
-                topk_ids.size(0), global_num_experts - global_redundant_expert_num, device=topk_ids.device
-            )
-            topk_ids = torch.argsort(random_matrix, dim=1)[:, : topk_ids.size(1)].to(topk_ids.dtype)
+        if True:
+            topk_ids = self._build_force_load_balance_topk_ids(
+                topk_ids, routed_num_experts)
 
         topk_weights = topk_weights.to(x.dtype)
 
