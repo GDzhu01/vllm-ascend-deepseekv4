@@ -2464,9 +2464,29 @@ class NPUModelRunner(GPUModelRunner):
             if profile_seq_lens is not None:
                 seq_lens = profile_seq_lens
             else:
+                # When DSA aux-stream is enabled, the FULL aclgraph captured
+                # the SAS / QLI metadata `npu_sparse_attn_sharedkv_metadata`,
+                # `npu_quant_lightning_indexer_metadata` against this
+                # `seq_lens` value. If `execute_dummy_batch` replays with a
+                # different `seq_lens` (= max_query_len), the kernel reads
+                # back metadata whose internal page-table / workspace layout
+                # no longer matches the captured launch params, tripping
+                # `MTE DDR address out of range` on the aux-stream
+                # `DynamicQuant_*` chain. Force dummy replays under
+                # `multistream_dsa_preprocess` to use the SAME oversize
+                # seq_len as capture so the regenerated metadata in
+                # `self.decode_sas_metadata` / `self.decode_qli_metadata`
+                # matches what the captured kernels were built for.
+                _dsa_dummy_replay = (
+                    self.ascend_config.multistream_dsa_preprocess
+                    and not is_profile
+                    and not is_graph_capturing
+                    and cudagraph_runtime_mode == CUDAGraphMode.FULL
+                )
                 seq_lens = (
                     SEQ_LEN_WITH_MAX_PA_WORKSPACE
-                    if is_graph_capturing and using_paged_attention(num_tokens, self.vllm_config)
+                    if (is_graph_capturing or _dsa_dummy_replay)
+                    and using_paged_attention(num_tokens, self.vllm_config)
                     else max_query_len
                 )  # type: ignore[assignment]
             self.seq_lens.np[:num_reqs_padded] = seq_lens
@@ -2487,20 +2507,18 @@ class NPUModelRunner(GPUModelRunner):
                 self.positions.copy_to_gpu()
 
             # ---- DSA multistream dummy safety reset ----
-            # Background: when `multistream_dsa_preprocess=True`, the FULL
-            # ACL graph captures aux-stream ops (npu_dynamic_quant,
-            # scatter_nd_update_v2, ...) that take the persistent
-            # `input_batch.block_table` / `slot_mapping` slice addresses as
-            # inputs. Replay re-reads those slice ADDRESSES (stable) but the
-            # CONTENT may have been overwritten by prior real requests (or by
-            # KV-transfer writes on D ranks), pointing at freed / out-of-range
-            # KV slots, which manifests as `MTE DDR address out of range`
-            # during dummy replay (e.g. `DynamicQuant_bf16_c1_high_performance_2`).
-            # Capture happens when these buffers are freshly zero-initialized,
-            # so restoring the active dummy slice to zeros makes replay read
-            # the same safe sentinel values it saw during capture. KV slot 0
-            # is always allocated, so all writes from the captured kernels
-            # land in a valid place.
+            # Two-part contract for safe dummy replay under
+            # `multistream_dsa_preprocess`:
+            #   (1) seq_lens above is forced to SEQ_LEN_WITH_MAX_PA_WORKSPACE
+            #       so the regenerated SAS / QLI metadata content matches the
+            #       captured kernels' launch params (root cause of MTE).
+            #   (2) `input_batch.block_table[gid].slot_mapping` and
+            #       `block_table` active slices are zeroed so the captured
+            #       scatter_nd_update_v2 chain writes to KV slot 0 (always
+            #       allocated) instead of dereferencing stale slot ids left
+            #       over from prior real requests or KV-transfer writes.
+            # Capture happens when these buffers are zero-initialized, so a
+            # replay-time zero matches capture-time content exactly.
             if (
                 self.ascend_config.multistream_dsa_preprocess
                 and self.kv_cache_config is not None
