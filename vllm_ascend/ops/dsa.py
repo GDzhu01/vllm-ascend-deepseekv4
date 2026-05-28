@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+import torch_npu
 from torch import nn
 from vllm.v1.attention.backend import AttentionMetadata
 from vllm.config import CacheConfig, get_current_vllm_config
@@ -32,6 +33,13 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_ascend.models.layer.attention.layer import DSAAttention
+from vllm_ascend.ops.rope_dsv4 import get_cos_and_sin_dsa
+from vllm_ascend.utils import (
+    AscendDeviceType,
+    attention_calculation_stream,
+    get_ascend_device_type,
+    npu_stream_switch,
+)
 
 
 @dataclass
@@ -172,20 +180,137 @@ def dsa_forward(
         attn_metadata = forward_context.attn_metadata[self.dsa_attn.layer_name]
     else:
         attn_metadata = None
-
-    # Dummy / profile path: no real attn_metadata is available. Running the
-    # full DSA forward would dereference the persistent input_batch
-    # block_table / slot_mapping (which may carry residual entries from prior
-    # real requests on D ranks), causing MTE DDR-out-of-range faults on the
-    # aux stream when multistream_dsa_preprocess is enabled. Instead, drive
-    # the aux-stream operators once with locally-allocated zero tensors so
-    # ACL graph capture sees a legal stream graph. Mirrors the official
-    # vllm-ascend main implementation.
     if attn_metadata is None:
-        self.dsa_attn.impl.dsa_warmup_with_multistream(hidden_states)
-        # `output` is declared `mutates_args`; zero it so functionalization
-        # observes a write on the dummy path.
-        output.zero_()
+        # Profile / dummy path: no real attn_metadata is available. We must
+        # NOT run the real DSA forward here — it would dereference the
+        # persistent input_batch block_table / slot_mapping (carrying stale
+        # entries left over from prior real requests, or KV-transfer-written
+        # data on D ranks), and the aux-stream npu_dynamic_quant /
+        # scatter_nd_update_v2 chain would trip an MTE DDR-out-of-range fault.
+        #
+        # Instead, drive the SAME aux-stream operator pattern that the real
+        # forward executes (wkv/quant -> kv_norm -> rope -> SWA scatter ->
+        # indexer dynamic_quant -> indexer scatter -> weights_proj) with
+        # locally-allocated zero tensors. This is required so that:
+        #   1. profile_run can trip torch-npu's autotune / workspace sizing
+        #      machinery on the aux-stream ops with safe addresses, and
+        #   2. ACL graph capture (which traces the Python forward inside a
+        #      pool-backed context manager) sees a fully-formed stream graph
+        #      anchored at legal, stable addresses.
+        #
+        # Mirrors the official vllm-ascend `dsa_warmup_with_multistream`
+        # behavior, inlined here so we can reach `self.dsa_attn.layer_name`
+        # for cos/sin lookup.
+        impl = self.dsa_attn.impl
+        if (hasattr(impl, "multistream_dsa_preprocess")
+                and impl.multistream_dsa_preprocess):
+            dummy = torch.zeros(1,
+                                hidden_states.shape[-1],
+                                dtype=hidden_states.dtype,
+                                device=hidden_states.device)
+            aux_stream = attention_calculation_stream()
+            e_warmup = torch.npu.current_stream().record_event()
+            with npu_stream_switch(aux_stream, enabled=True):
+                torch.npu.current_stream().wait_event(e_warmup)
+                # ---- wkv (+ optional w8a8 dynamic quant) ----
+                if (hasattr(impl.wkv, "weight_scale")
+                        and impl.wkv.weight.dtype == torch.int8):
+                    kv_q_dummy, kv_s_dummy = torch_npu.npu_dynamic_quant(
+                        dummy)
+                    _ = torch_npu.npu_quant_matmul(
+                        kv_q_dummy,
+                        impl.wkv.weight,
+                        impl.wkv.weight_scale,
+                        pertoken_scale=kv_s_dummy,
+                        output_dtype=hidden_states.dtype,
+                    )
+                else:
+                    if hasattr(impl, "cv_wkv"):
+                        _ = impl.cv_wkv.quantize(dummy)
+                        _ = impl.cv_wkv.matmul(dummy, None)
+                    else:
+                        _ = impl.wkv(dummy)
+
+                # ---- kv_norm -> rope -> SWA scatter ----
+                kv_dummy = torch.zeros(
+                    1,
+                    impl.nope_head_dim + impl.rope_head_dim,
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device,
+                )
+                kv_dummy = impl.kv_norm(kv_dummy)
+                kv_dummy = kv_dummy.view(
+                    -1, 1, impl.nope_head_dim + impl.rope_head_dim)
+                rope_pos_dummy = torch.zeros(1,
+                                             dtype=torch.int64,
+                                             device=hidden_states.device)
+                cos_dummy, sin_dummy = get_cos_and_sin_dsa(rope_pos_dummy,
+                                                           use_cache=True)
+                rope_layer_name = self.dsa_attn.layer_name
+                cos_dummy = cos_dummy[rope_layer_name]
+                sin_dummy = sin_dummy[rope_layer_name]
+                torch.ops._C_ascend.inplace_partial_rotary_mul(
+                    kv_dummy.unsqueeze(1),
+                    cos_dummy,
+                    sin_dummy,
+                    rotary_mode="interleave",
+                    partial_slice=[impl.nope_head_dim, impl.head_dim],
+                )
+                # SWA scatter — `_scatter_nd_update_asc`'s custom branch
+                # requires a 2-D `var`.
+                slot_mapping_dummy_2d = torch.zeros(
+                    1, 1, dtype=torch.int64, device=hidden_states.device)
+                swa_cache_dummy = torch.zeros(
+                    1,
+                    kv_dummy.shape[-1],
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device,
+                )
+                from vllm_ascend.attention.dsa_v1 import (
+                    _scatter_nd_update_asc, )
+                _scatter_nd_update_asc(swa_cache_dummy,
+                                       slot_mapping_dummy_2d, kv_dummy)
+
+                # ---- indexer aux-stream ops (compress_ratio == 4) ----
+                soc_version = get_ascend_device_type()
+                dst_type = (torch.float8_e4m3fn
+                            if soc_version == AscendDeviceType.A5
+                            else torch.int8)
+                kv_dummy2, kv_scale_dummy = torch_npu.npu_dynamic_quant(
+                    dummy, dst_type=dst_type)
+                if self.compress_ratio == 4 and self.indexer is not None:
+                    slot_mapping_dummy_1d = torch.zeros(
+                        1, dtype=torch.int64, device=hidden_states.device)
+                    dummy_shape = (1, 1, 1, kv_dummy2.shape[-1])
+                    indexer_k_cache = torch.zeros(
+                        dummy_shape,
+                        dtype=kv_dummy2.dtype,
+                        device=hidden_states.device,
+                    )
+                    indexer_scale_cache = torch.zeros(
+                        dummy_shape,
+                        dtype=torch.float16,
+                        device=hidden_states.device,
+                    )
+                    # Use `_C_ascend.npu_scatter_nd_update_v2` (NOT
+                    # `_scatter_nd_update_asc`) — only v2 accepts a 4-D var
+                    # to match the real indexer_k_cache rank.
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_k_cache, slot_mapping_dummy_1d, kv_dummy2)
+                    kv_scale_dummy = kv_scale_dummy.to(
+                        torch.float16).unsqueeze(-1)
+                    torch.ops._C_ascend.npu_scatter_nd_update_v2(
+                        indexer_scale_cache, slot_mapping_dummy_1d,
+                        kv_scale_dummy)
+
+                    _ = impl.weights_proj(dummy)
+
+            torch.npu.current_stream().wait_stream(aux_stream)
+
+        # `output` is declared `mutates_args` on the custom op; we must
+        # write something on the dummy branch so functionalization observes
+        # the mutation contract.
+        output.fill_(0)
         return
 
     kv_cache = self.dsa_attn.kv_cache[forward_context.virtual_engine]
