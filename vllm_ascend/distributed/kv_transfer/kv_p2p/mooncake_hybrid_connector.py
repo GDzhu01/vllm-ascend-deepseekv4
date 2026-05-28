@@ -1442,33 +1442,48 @@ class MooncakeConnectorWorker:
                     ptrs.append(min(share_tensor_addr))
                     lengths.append(kv_cache_tensor.size)
         elif self.use_compress:
-            layer_group_idx = defaultdict(list)
+            # Cherry-pick from vllm-ascend main (mooncake_hybrid_connector.py
+            # register_kv_caches use_compress branch). Root-cause of the
+            # `DynamicQuant_bf16_c1_high_performance_2` MTE seen in PD-disagg +
+            # multistream_dsa_preprocess / multistream_overlap_shared_expert:
+            # the fork's original `extend(share_tensor_addr)` was registering
+            # EVERY tensor in `shared_by` as an independent base address. On the
+            # producer side the index-based remote write then walks past the
+            # legitimate KV region and corrupts the W8A8 weight_scale /
+            # per-token-scale workspace that lives in the adjacent memory pages,
+            # so any subsequent `npu_dynamic_quant` on the aux stream MTEs at
+            # `task_id=1`. Single-stream replays don't hit it because the main
+            # stream's quant op is serialized with the producer's wait_for_save.
+            # Main registers ONE `min(share_tensor_addr)` per kv_cache_tensor and
+            # uses `stride[0]` as block_len (matches what the producer expects),
+            # which keeps the registered region exactly co-extensive with the
+            # real KV memory and stops the overrun.
+            layer_group_idx = dict[str, int]()
             for i, group in enumerate(self.kv_cache_config.kv_cache_groups):
                 for layer_name in group.layer_names:
-                    layer_group_idx[layer_name].append(i)
+                    layer_group_idx[layer_name] = i
             for kv_cache_tensor in self.kv_cache_config.kv_cache_tensors:
+                if not kv_cache_tensor.shared_by:
+                    continue
                 share_tensor_addr = []
-                share_tensor_len = []
                 share_tensor_stride = []
                 cur_tensor_group_idx = []
                 for layer_name in kv_cache_tensor.shared_by:
-                    cur_tensor_group_idx.extend(layer_group_idx[layer_name])
+                    cur_tensor_group_idx.append(layer_group_idx[layer_name])
                     kv_cache_tuple = kv_caches[layer_name]
+                    if not isinstance(kv_cache_tuple, (tuple, list)):
+                        kv_cache_tuple = kv_cache_tuple
                     for single_tensor in kv_cache_tuple:
                         tensor_addr = single_tensor.data_ptr()
                         if tensor_addr in share_tensor_addr or tensor_addr in self.kv_caches_base_addr:
                             continue
                         share_tensor_addr.append(tensor_addr)
-                        tensor_total_size = single_tensor.numel() * single_tensor.element_size()
-                        assert tensor_total_size % self.num_blocks == 0, "Tensor size cannot divide by num_blocks. "
-                        tensor_block_len = tensor_total_size // self.num_blocks
-                        share_tensor_len.append(tensor_block_len)
                         share_tensor_stride.append(single_tensor.stride(0) * single_tensor.element_size())
                 cur_tensor_group_idx = sorted(list(set(cur_tensor_group_idx)))
-                self.kv_caches_base_addr.extend(share_tensor_addr)
-                self.addr_group_idx.extend([cur_tensor_group_idx for _ in range(len(share_tensor_addr))])
-                self.block_stride_per_addr.extend(share_tensor_stride)
-                self.block_len_per_addr.extend(share_tensor_len)
+                self.kv_caches_base_addr.append(min(share_tensor_addr))
+                self.addr_group_idx.append(cur_tensor_group_idx)  # type: ignore[arg-type]
+                self.block_stride_per_addr.append(share_tensor_stride[0])
+                self.block_len_per_addr.append(share_tensor_stride[0])
                 ptrs.append(min(share_tensor_addr))
                 lengths.append(kv_cache_tensor.size)
         else:
