@@ -570,11 +570,15 @@ class NPUWorker(WorkerBase):
         self.model_runner.reset_encoder_cache()
 
     def execute_dummy_batch(self) -> None:
-        self.model_runner._dummy_run(
-            num_tokens=self.model_runner.decode_token_per_req,
-            uniform_decode=True,
-            cudagraph_runtime_mode=CUDAGraphMode.NONE,
-        )
+        # Keep dummy on the dispatcher's chosen mode (FULL aclgraph on
+        # `FULL_DECODE_ONLY` setups). DO NOT hard-pin `cudagraph_runtime_mode=
+        # CUDAGraphMode.NONE` here: doing so forces this rank into eager,
+        # the DP min-reduction in `_post_process_cudagraph_mode` then drags
+        # ALL ranks into eager every step and tanks TPOT. The DSA
+        # multistream replay-safety reset (in `model_runner_v1._dummy_run`)
+        # plus `dsa_warmup_with_multistream` (in `ops/dsa.py`) handle the
+        # MTE risk so dummy can stay on the graph.
+        self.model_runner._dummy_run(num_tokens=self.model_runner.decode_token_per_req, uniform_decode=True)
 
     def _init_worker_distributed_environment(self) -> None:
         """Initialize the distributed environment."""
@@ -674,4 +678,3 @@ def parse_text_output(output) -> None:
             if line.split(":")[-1].strip() != "OK":
                 raise RuntimeError("NPU card health status is not OK")
     return
-

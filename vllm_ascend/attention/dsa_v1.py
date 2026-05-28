@@ -1443,6 +1443,104 @@ class AscendDSAImpl(DSAAttentionImpl):
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         pass
 
+    def dsa_warmup_with_multistream(self, hidden_states: torch.Tensor) -> None:
+        """Warm up the aux (attention_calculation_stream) so ACL graph capture
+        sees a fully-formed stream graph with **legal** addresses on the aux
+        stream.
+
+        Why this is needed (背景):
+          - When ``multistream_dsa_preprocess=True``, the real DSA forward
+            schedules ``wkv`` / ``kv_norm`` / ``inplace_partial_rotary_mul`` /
+            ``scatter_nd_update_v2`` / ``npu_dynamic_quant`` / ``weights_proj``
+            on the aux stream returned by ``attention_calculation_stream()``.
+          - During ``execute_dummy_batch``/``profile_run`` we do not have a
+            real ``attn_metadata`` — the persistent ``input_batch.block_table``
+            / ``slot_mapping`` GPU buffers may still hold stale entries left
+            over from prior real requests (or KV-transfer-written data on D
+            ranks). If we let the real DSA forward run with these residuals
+            inside an ACL-graph replay window, the aux-stream
+            ``npu_dynamic_quant`` / ``scatter_nd_update_v2`` will dereference
+            those stale slot ids and trip an MTE DDR-out-of-range fault.
+          - We instead drive each aux-stream op once with locally-allocated
+            ``torch.zeros(...)`` buffers, so capture records *legal*
+            addresses, and downstream replays observe a well-formed graph.
+
+        Mirrors ``dsa_warmup_with_multistream`` in vllm-ascend main
+        (`vllm_ascend/attention/dsa_v1.py`), adapted to this fork's option
+        ``multistream_dsa_preprocess`` and stream ``attention_calculation_stream``.
+        """
+        if not self.multistream_dsa_preprocess:
+            return
+
+        aux_stream = attention_calculation_stream()
+        dtype = hidden_states.dtype
+        device = hidden_states.device
+        hidden_size = hidden_states.shape[-1]
+        hidden_states_dummy = torch.zeros(
+            1, hidden_size, dtype=dtype, device=device)
+
+        e_warmup = torch.npu.current_stream().record_event()
+        with npu_stream_switch(aux_stream, enabled=True):
+            torch.npu.current_stream().wait_event(e_warmup)
+
+            # ---- Part 1: wkv (+ optional dynamic quant for w8a8 int8) ----
+            if hasattr(self.wkv, "weight_scale") and \
+                    self.wkv.weight.dtype == torch.int8:
+                kv_q_dummy, kv_s_dummy = torch_npu.npu_dynamic_quant(
+                    hidden_states_dummy)
+                _ = torch_npu.npu_quant_matmul(
+                    kv_q_dummy,
+                    self.wkv.weight,
+                    self.wkv.weight_scale,
+                    pertoken_scale=kv_s_dummy,
+                    output_dtype=dtype,
+                )
+            else:
+                _ = self.wkv(hidden_states_dummy)
+
+            assert self.rope_head_dim is not None
+            kv_dummy = torch.zeros(
+                1,
+                self.nope_head_dim + self.rope_head_dim,
+                dtype=dtype,
+                device=device,
+            )
+            _ = self.kv_norm(kv_dummy)
+
+            # ---- Part 2: indexer aux-stream ops (dynamic_quant +
+            #              scatter_nd_update + weights_proj). Only needed for
+            #              compress_ratio==4 paths that actually run them on
+            #              the aux stream.
+            if self.indexer is not None and self.compress_ratio == 4:
+                soc_version = get_ascend_device_type()
+                dst_type = (torch.float8_e4m3fn
+                            if soc_version in {AscendDeviceType.A5}
+                            else torch.int8)
+
+                kv_quant_dummy, kv_scale_dummy = torch_npu.npu_dynamic_quant(
+                    hidden_states_dummy, dst_type=dst_type)
+                if soc_version not in {AscendDeviceType.A5}:
+                    kv_scale_dummy = kv_scale_dummy.to(torch.float16)
+                kv_scale_dummy = kv_scale_dummy.unsqueeze(-1)
+
+                slot_mapping_dummy = torch.zeros(
+                    1, 1, dtype=torch.int64, device=device)
+                dummy_shape = (1, 1, 1, kv_quant_dummy.shape[-1])
+                indexer_k_cache_dummy = torch.zeros(
+                    dummy_shape, dtype=kv_quant_dummy.dtype, device=device)
+                indexer_scale_cache_dummy = torch.zeros(
+                    dummy_shape, dtype=torch.float16, device=device)
+                _scatter_nd_update_asc(
+                    indexer_k_cache_dummy, slot_mapping_dummy, kv_quant_dummy)
+                _scatter_nd_update_asc(
+                    indexer_scale_cache_dummy,
+                    slot_mapping_dummy,
+                    kv_scale_dummy,
+                )
+                _ = self.weights_proj(hidden_states_dummy)
+
+        torch.npu.current_stream().wait_stream(aux_stream)
+
     def _assert_deepseek_v4_oproj_tp(self, layer_name: str) -> None:
         hf_config = self.vllm_config.model_config.hf_text_config
         model_type = getattr(hf_config, "model_type", None)

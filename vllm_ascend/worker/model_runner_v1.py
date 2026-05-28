@@ -2485,6 +2485,38 @@ class NPUModelRunner(GPUModelRunner):
             if self.use_compress:
                 self.positions.np.fill(127)
                 self.positions.copy_to_gpu()
+
+            # ---- DSA multistream dummy safety reset ----
+            # Background: when `multistream_dsa_preprocess=True`, the FULL
+            # ACL graph captures aux-stream ops (npu_dynamic_quant,
+            # scatter_nd_update_v2, ...) that take the persistent
+            # `input_batch.block_table` / `slot_mapping` slice addresses as
+            # inputs. Replay re-reads those slice ADDRESSES (stable) but the
+            # CONTENT may have been overwritten by prior real requests (or by
+            # KV-transfer writes on D ranks), pointing at freed / out-of-range
+            # KV slots, which manifests as `MTE DDR address out of range`
+            # during dummy replay (e.g. `DynamicQuant_bf16_c1_high_performance_2`).
+            # Capture happens when these buffers are freshly zero-initialized,
+            # so restoring the active dummy slice to zeros makes replay read
+            # the same safe sentinel values it saw during capture. KV slot 0
+            # is always allocated, so all writes from the captured kernels
+            # land in a valid place.
+            if (
+                self.ascend_config.multistream_dsa_preprocess
+                and self.kv_cache_config is not None
+                and self.kv_cache_config.kv_cache_groups
+            ):
+                _reset_tokens = num_tokens_padded
+                _reset_reqs = num_reqs_padded
+                for _gid in range(len(self.kv_cache_config.kv_cache_groups)):
+                    _blk = self.input_batch.block_table[_gid]
+                    _slot = _blk.slot_mapping.gpu
+                    if _slot.numel() >= _reset_tokens:
+                        _slot[:_reset_tokens].zero_()
+                    _bt = _blk.get_device_tensor()
+                    if _bt.size(0) >= _reset_reqs:
+                        _bt[:_reset_reqs].zero_()
+
             attn_metadata, _ = self._build_attention_metadata(
                 num_tokens=num_tokens_unpadded,
                 num_tokens_padded=num_tokens_padded,

@@ -171,7 +171,23 @@ def dsa_forward(
     if forward_context.attn_metadata:
         attn_metadata = forward_context.attn_metadata[self.dsa_attn.layer_name]
     else:
-        attn_metadata = forward_context.attn_metadata
+        attn_metadata = None
+
+    # Dummy / profile path: no real attn_metadata is available. Running the
+    # full DSA forward would dereference the persistent input_batch
+    # block_table / slot_mapping (which may carry residual entries from prior
+    # real requests on D ranks), causing MTE DDR-out-of-range faults on the
+    # aux stream when multistream_dsa_preprocess is enabled. Instead, drive
+    # the aux-stream operators once with locally-allocated zero tensors so
+    # ACL graph capture sees a legal stream graph. Mirrors the official
+    # vllm-ascend main implementation.
+    if attn_metadata is None:
+        self.dsa_attn.impl.dsa_warmup_with_multistream(hidden_states)
+        # `output` is declared `mutates_args`; zero it so functionalization
+        # observes a write on the dummy path.
+        output.zero_()
+        return
+
     kv_cache = self.dsa_attn.kv_cache[forward_context.virtual_engine]
     self.dsa_attn.impl.forward(self.dsa_attn.layer_name, hidden_states,
                                kv_cache, attn_metadata, need_gather_q_kv,
