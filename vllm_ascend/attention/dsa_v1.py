@@ -118,10 +118,12 @@ def _scatter_nd_update_asc(var: torch.Tensor, indices: torch.Tensor,
     if var.numel() == 0 or indices.numel() == 0 or update.numel() == 0:
         return
 
+    indices = indices.view(-1, 1)
     update_2d = update.view(-1, update.shape[-1])
-    if update_2d.shape[0] != indices.shape[0]:
-        torch_npu.npu_scatter_nd_update_(var, indices, update)
-        return
+    if update_2d.shape[0] > indices.shape[0]:
+        update_2d = update_2d[:indices.shape[0]]
+    elif update_2d.shape[0] < indices.shape[0]:
+        indices = indices[:update_2d.shape[0]]
 
     import custom_ops
 
@@ -2462,3 +2464,4 @@ class AscendDSAImpl(DSAAttentionImpl):
                                 self.compressor_wgate.weight.numel() *
                                 self.compressor_wgate.weight.element_size())
         return topk_idxs
+
