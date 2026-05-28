@@ -570,7 +570,11 @@ class NPUWorker(WorkerBase):
         self.model_runner.reset_encoder_cache()
 
     def execute_dummy_batch(self) -> None:
-        self.model_runner._dummy_run(num_tokens=self.model_runner.decode_token_per_req, uniform_decode=True)
+        self.model_runner._dummy_run(
+            num_tokens=self.model_runner.decode_token_per_req,
+            uniform_decode=True,
+            cudagraph_runtime_mode=CUDAGraphMode.NONE,
+        )
 
     def _init_worker_distributed_environment(self) -> None:
         """Initialize the distributed environment."""
@@ -670,3 +674,4 @@ def parse_text_output(output) -> None:
             if line.split(":")[-1].strip() != "OK":
                 raise RuntimeError("NPU card health status is not OK")
     return
+
