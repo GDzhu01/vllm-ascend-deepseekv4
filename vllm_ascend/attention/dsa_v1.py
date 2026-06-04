@@ -117,14 +117,8 @@ def _scatter_nd_update_asc(var: torch.Tensor, indices: torch.Tensor,
                            update: torch.Tensor) -> None:
     if var.numel() == 0 or indices.numel() == 0 or update.numel() == 0:
         return
-
     update_2d = update.view(-1, update.shape[-1])
-    if update_2d.shape[0] != indices.shape[0]:
-        torch_npu.npu_scatter_nd_update_(var, indices, update)
-        return
-
-    import custom_ops
-
+    # torch_npu.npu_scatter_nd_update_(var, indices, update)
     torch.ops.custom.scatter_nd_update_asc(var, indices, update_2d)
 
 
