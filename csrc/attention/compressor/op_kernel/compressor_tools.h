@@ -526,6 +526,8 @@ struct Vec1SliceInfo : public SliceInfo {
     uint32_t dealedSeqCnt = 0U;
     uint32_t preDealedSeqCnt = 0U;
     uint32_t dealedTcCnt = 0U;
+    bool isFirst = true;
+    bool isLast = true;
 };
 
 struct SeqCntInfo {
@@ -726,6 +728,11 @@ __aicore__ inline Vec1SliceInfo& CompressorVec1SliceIterator<COMP>::GetSlice()
     if (sliceInfo_.tailHolderSeqCnt > 0) {
         sliceInfo_.compressTcSize = sliceInfo_.dealTcSize - 1; // 最后一个压缩块不满时，其不需要压缩
     }
+
+    sliceInfo_.isFirst = isFirst_;
+    sliceInfo_.isLast =
+        sliceInfo_.bSeqUsed > sliceInfo_.sIdx &&
+        CeilDivT(sliceInfo_.headHolderSeqCnt + sliceInfo_.bSeqUsed - sliceInfo_.sIdx, cmpRatio) >= needDealTcSize_;
 
     return sliceInfo_;
 }
