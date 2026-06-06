@@ -727,93 +727,121 @@ template <typename COMP>
 __aicore__ inline void CompressorBlockVectorPerf<COMP>::SaveState(const LocalTensor<T> kvLocal, const LocalTensor<T> scoreLocal,
     const Vec1SliceInfo &sliceInfo, uint32_t dStartIdx, uint32_t dDealSize)
 {
-    if constexpr (COMP::coff == COFF::OVERLAP) {
-        uint32_t coff = static_cast<uint32_t>(COMP::coff);
-        // 存右边
-        if (sliceInfo.sIdx + sliceInfo.validSeqCnt == sliceInfo.bSeqUsed) {
-            uint32_t copySeqCnt = constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt;
-            if (sliceInfo.validSeqCnt < copySeqCnt) {
-                    copySeqCnt = sliceInfo.validSeqCnt;
-            } else {
-                if (sliceInfo.tailHolderSeqCnt > 0) {
-                    if (sliceInfo.validSeqCnt - copySeqCnt > constInfo_.cmpRatio) {
-                        copySeqCnt += constInfo_.cmpRatio;
-                    } else {
-                        copySeqCnt += sliceInfo.validSeqCnt - copySeqCnt;
-                    }
-                }
-            }
-            uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
-            uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
-            uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * coff * dDealSize;
-            // printf("headHolderSeqCnt=%d, validSeqCnt=%d, copySeqCnt=%d, tailHolderSeqCnt=%d\n", sliceInfo.headHolderSeqCnt, sliceInfo.validSeqCnt, copySeqCnt, sliceInfo.tailHolderSeqCnt);
-            // printf("--srcStride=%d--\n", (srcBaseOffset + dDealSize));
-            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
-            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
-        } else if (sliceInfo.sIdx + sliceInfo.validSeqCnt + constInfo_.cmpRatio > sliceInfo.bSeqUsed) {
-            uint32_t copySeqCnt = constInfo_.cmpRatio;
-            if (copySeqCnt > sliceInfo.validSeqCnt) {
-                copySeqCnt = sliceInfo.validSeqCnt;
-            }
-            uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
-            uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
-            uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * coff * dDealSize;
-            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
-            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
-        }
-
-        // 存左边
-        if (sliceInfo.dealTcSize == 1) {
-            // 左边尾块和首块是同一块
-            if (sliceInfo.sIdx == 0) {
-                SaveLeftFirst(kvLocal, scoreLocal, sliceInfo, dStartIdx, dDealSize);
-            } else {
-                if (sliceInfo.tailHolderSeqCnt > 0) {
-                    // 左边为本batch数据
-                    uint32_t copySeqCnt = constInfo_.cmpRatio;
-                    if (sliceInfo.sIdx < copySeqCnt) {
-                        copySeqCnt = sliceInfo.sIdx;
-                    }
-                    uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
-                    uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
-                    uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt + sliceInfo.tailHolderSeqCnt - copySeqCnt) * coff * dDealSize;
-                    WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-                    WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-                }
-            }
-        } else {
-            // 存左边第一块
-            if (sliceInfo.sIdx == 0) {
-                SaveLeftFirst(kvLocal, scoreLocal, sliceInfo, dStartIdx, dDealSize);
-            }
-
-            // 存左边最后一块
-            if (sliceInfo.tailHolderSeqCnt > 0) {
-                // 左边为本batch数据
-                uint32_t copySeqCnt = constInfo_.cmpRatio;
-                if (sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt) < copySeqCnt) {
-                    copySeqCnt = sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
-                }
-                uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
-                uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
-                uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt + sliceInfo.tailHolderSeqCnt - copySeqCnt) * coff * dDealSize;
-                WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-                WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-            }
-        }
-    } else {
-        if (sliceInfo.tailHolderSeqCnt > 0) { // 仅尾块不满时需要存到state上
-            uint32_t copySeqCnt = constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt;
-            if (copySeqCnt > sliceInfo.validSeqCnt) {
-                copySeqCnt = sliceInfo.validSeqCnt;
-            }
-            uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * dDealSize;
-            uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
-            uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
-            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
-        }
+    uint32_t coff = static_cast<uint32_t>(COMP::coff);
+    {
+        uint32_t startSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx;
+        uint32_t endSeqIdx = startSeqIdx + sliceInfo.validSeqCnt;
+        uint64_t srcBaseOffset = sliceInfo.headHolderSeqCnt * coff * dDealSize + (coff - 1) * dDealSize;
+        // printf("11111----startSeqIdx[%u]--endSeqIdx[%u]\n",startSeqIdx,endSeqIdx);
+        WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + (coff - 1) * constInfo_.headDim, dDealSize);
+        WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + (coff - 1) * constInfo_.headDim, dDealSize);
     }
+    if constexpr (COMP::coff == COFF::OVERLAP) {
+        uint32_t startSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx;
+        uint32_t endSeqIdx = startSeqIdx + sliceInfo.validSeqCnt;
+        if (sliceInfo.isLast) {
+            endSeqIdx -= sliceInfo.lastTcSeqCnt;
+        }
+        // printf("22222----startSeqIdx[%u]--endSeqIdx[%u]\n",startSeqIdx,endSeqIdx);
+        uint64_t srcBaseOffset = (constInfo_.cmpRatio + sliceInfo.headHolderSeqCnt) * coff * dDealSize;
+        WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+        WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+        if (sliceInfo.preSIdx < sliceInfo.preBSeqUsed) {
+            uint32_t startSeqIdx = sliceInfo.preBStartPos + sliceInfo.preSIdx;
+            uint32_t endSeqIdx = min(sliceInfo.preBStartPos + sliceInfo.preBSeqUsed, startSeqIdx + sliceInfo.preValidSeqCnt);
+            uint64_t srcBaseOffset = sliceInfo.preHeadHolderSeqCnt * coff * dDealSize;
+            // printf("333333----startSeqIdx[%u]--endSeqIdx[%u]\n",startSeqIdx,endSeqIdx);
+            WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.preBIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+            WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.preBIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);    
+        }
+    }  
+    // if constexpr (COMP::coff == COFF::OVERLAP) {
+    //     uint32_t coff = static_cast<uint32_t>(COMP::coff);
+    //     // 存右边
+    //     if (sliceInfo.sIdx + sliceInfo.validSeqCnt == sliceInfo.bSeqUsed) {
+    //         uint32_t copySeqCnt = constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt;
+    //         if (sliceInfo.validSeqCnt < copySeqCnt) {
+    //                 copySeqCnt = sliceInfo.validSeqCnt;
+    //         } else {
+    //             if (sliceInfo.tailHolderSeqCnt > 0) {
+    //                 if (sliceInfo.validSeqCnt - copySeqCnt > constInfo_.cmpRatio) {
+    //                     copySeqCnt += constInfo_.cmpRatio;
+    //                 } else {
+    //                     copySeqCnt += sliceInfo.validSeqCnt - copySeqCnt;
+    //                 }
+    //             }
+    //         }
+    //         uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
+    //         uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
+    //         uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * coff * dDealSize;
+    //         // printf("headHolderSeqCnt=%d, validSeqCnt=%d, copySeqCnt=%d, tailHolderSeqCnt=%d\n", sliceInfo.headHolderSeqCnt, sliceInfo.validSeqCnt, copySeqCnt, sliceInfo.tailHolderSeqCnt);
+    //         // printf("--srcStride=%d--\n", (srcBaseOffset + dDealSize));
+    //         WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+    //         WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+    //     } else if (sliceInfo.sIdx + sliceInfo.validSeqCnt + constInfo_.cmpRatio > sliceInfo.bSeqUsed) {
+    //         uint32_t copySeqCnt = constInfo_.cmpRatio;
+    //         if (copySeqCnt > sliceInfo.validSeqCnt) {
+    //             copySeqCnt = sliceInfo.validSeqCnt;
+    //         }
+    //         uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
+    //         uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
+    //         uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * coff * dDealSize;
+    //         WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+    //         WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset + dDealSize], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx + constInfo_.headDim, dDealSize);
+    //     }
+
+    //     // 存左边
+    //     if (sliceInfo.dealTcSize == 1) {
+    //         // 左边尾块和首块是同一块
+    //         if (sliceInfo.sIdx == 0) {
+    //             SaveLeftFirst(kvLocal, scoreLocal, sliceInfo, dStartIdx, dDealSize);
+    //         } else {
+    //             if (sliceInfo.tailHolderSeqCnt > 0) {
+    //                 // 左边为本batch数据
+    //                 uint32_t copySeqCnt = constInfo_.cmpRatio;
+    //                 if (sliceInfo.sIdx < copySeqCnt) {
+    //                     copySeqCnt = sliceInfo.sIdx;
+    //                 }
+    //                 uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
+    //                 uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
+    //                 uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt + sliceInfo.tailHolderSeqCnt - copySeqCnt) * coff * dDealSize;
+    //                 WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //                 WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //             }
+    //         }
+    //     } else {
+    //         // 存左边第一块
+    //         if (sliceInfo.sIdx == 0) {
+    //             SaveLeftFirst(kvLocal, scoreLocal, sliceInfo, dStartIdx, dDealSize);
+    //         }
+
+    //         // 存左边最后一块
+    //         if (sliceInfo.tailHolderSeqCnt > 0) {
+    //             // 左边为本batch数据
+    //             uint32_t copySeqCnt = constInfo_.cmpRatio;
+    //             if (sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt) < copySeqCnt) {
+    //                 copySeqCnt = sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
+    //             }
+    //             uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt - (constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt);
+    //             uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
+    //             uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt + sliceInfo.tailHolderSeqCnt - copySeqCnt) * coff * dDealSize;
+    //             WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //             WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //         }
+    //     }
+    // } else {
+    //     if (sliceInfo.tailHolderSeqCnt > 0) { // 仅尾块不满时需要存到state上
+    //         uint32_t copySeqCnt = constInfo_.cmpRatio - sliceInfo.tailHolderSeqCnt;
+    //         if (copySeqCnt > sliceInfo.validSeqCnt) {
+    //             copySeqCnt = sliceInfo.validSeqCnt;
+    //         }
+    //         uint64_t srcBaseOffset = (sliceInfo.headHolderSeqCnt + sliceInfo.validSeqCnt - copySeqCnt) * dDealSize;
+    //         uint64_t endSeqIdx = sliceInfo.bStartPos + sliceInfo.sIdx + sliceInfo.validSeqCnt;
+    //         uint64_t startSeqIdx = endSeqIdx - copySeqCnt;
+    //         WriteToCacheState(kvStateGm_, kvBlockTableGm_, kvLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //         WriteToCacheState(scoreStateGm_, scoreBlockTableGm_, scoreLocal[srcBaseOffset], sliceInfo.bIdx, startSeqIdx, endSeqIdx, dStartIdx, dDealSize);
+    //     }
+    // }
 }
 
 template <typename COMP>
